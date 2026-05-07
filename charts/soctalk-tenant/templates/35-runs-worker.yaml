@@ -1,0 +1,119 @@
+{{- if .Values.runsWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soctalk-runs-worker
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+    app.kubernetes.io/name: soctalk-runs-worker
+spec:
+  replicas: {{ .Values.runsWorker.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-runs-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "soctalk-tenant.labels" . | nindent 8 }}
+        app.kubernetes.io/name: soctalk-runs-worker
+    spec:
+      serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: worker
+          image: "{{ .Values.runsWorker.image.repository }}:{{ .Values.runsWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.runsWorker.image.pullPolicy | default "IfNotPresent" }}
+          command: ["python", "-m", "soctalk.runs_worker.main"]
+          env:
+            - name: SOCTALK_TENANT_ID
+              value: {{ .Values.tenant.id | quote }}
+            - name: SOCTALK_TENANT_SLUG
+              value: {{ .Values.tenant.slug | quote }}
+            - name: SOCTALK_API_URL
+              value: {{ if .Values.soctalkSystem.url -}}
+                {{ .Values.soctalkSystem.url | quote }}
+              {{- else -}}
+                "http://{{ .Values.adapter.api.serviceHost }}:{{ .Values.adapter.api.servicePort }}"
+              {{- end }}
+            - name: WORKER_TOKEN_PATH
+              value: /run/secrets/runs-worker/token
+            {{- /*
+                ``llm.provider`` accepts ``openai-compatible`` (the
+                install-side enum), but the runs-worker's
+                ``load_config()`` only knows ``openai`` and
+                ``anthropic`` and reads the matching env var. Map
+                ``openai-compatible`` → ``openai`` here and mount the
+                key as ``OPENAI_API_KEY`` for openai providers, or
+                ``ANTHROPIC_API_KEY`` for anthropic.
+            */}}
+            {{- $provRaw := .Values.llm.provider | default "anthropic" }}
+            {{- $prov := ternary "openai" $provRaw (eq $provRaw "openai-compatible") }}
+            - name: SOCTALK_LLM_PROVIDER
+              value: {{ $prov | quote }}
+            - name: SOCTALK_FAST_MODEL
+              value: {{ .Values.runsWorker.fastModel | default .Values.llm.model | quote }}
+            - name: SOCTALK_REASONING_MODEL
+              value: {{ .Values.runsWorker.reasoningModel | default .Values.llm.model | quote }}
+            {{- /*
+                Base-URL handling — only emit the provider-specific
+                env var when the operator-configured ``llm.baseUrl``
+                actually applies to this provider:
+
+                - For ``openai`` we only emit when it differs from the
+                  SDK default (``https://api.openai.com/v1``); pinning
+                  the default is a no-op and leaks into the env.
+                - For ``anthropic`` we only emit when the URL is
+                  Anthropic-shaped (host contains ``anthropic``) so a
+                  default-OpenAI ``baseUrl`` doesn't redirect Claude
+                  calls to OpenAI's API.
+            */}}
+            {{- $bu := .Values.llm.baseUrl | default "" }}
+            {{- if eq $prov "openai" }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.apiKeyRef.name | quote }}
+                  key: {{ .Values.llm.apiKeyRef.key | quote }}
+            {{- if and $bu (ne $bu "https://api.openai.com/v1") }}
+            - name: OPENAI_BASE_URL
+              value: {{ $bu | quote }}
+            - name: OPENAI_API_BASE
+              value: {{ $bu | quote }}
+            {{- end }}
+            {{- else }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.apiKeyRef.name | quote }}
+                  key: {{ .Values.llm.apiKeyRef.key | quote }}
+            {{- if and $bu (contains "anthropic" $bu) }}
+            - name: ANTHROPIC_BASE_URL
+              value: {{ $bu | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.runsWorker.resources.requests.cpu | quote }}
+              memory: {{ .Values.runsWorker.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.runsWorker.resources.limits.cpu | quote }}
+              memory: {{ .Values.runsWorker.resources.limits.memory | quote }}
+          volumeMounts:
+            - name: worker-token
+              mountPath: /run/secrets/runs-worker
+              readOnly: true
+      volumes:
+        - name: worker-token
+          secret:
+            secretName: {{ .Values.runsWorker.tokenSecretRef.name | quote }}
+            items:
+              - key: {{ .Values.runsWorker.tokenSecretRef.key | quote }}
+                path: token
+            defaultMode: 0440
+{{- end }}

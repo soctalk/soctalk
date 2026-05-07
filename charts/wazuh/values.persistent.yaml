@@ -1,0 +1,28 @@
+# Wazuh — persistent profile.
+#
+# Single-node topology (same as poc) but backed by a durable StorageClass.
+# Survives pod/node restarts. Not HA — see docs/v1/P2-10-wazuh-profiles.md
+# for the split rationale; HA is deferred to v1.x.
+
+storage:
+  # REQUIRED: a StorageClass that actually provisions PVCs on this cluster.
+  # Controller validates the named class exists during preflight.
+  storageClass: standard
+  managerSize: 10Gi
+  indexerSize: 30Gi
+
+resources:
+  manager:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  indexer:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 1500m
+      memory: 3Gi

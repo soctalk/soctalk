@@ -1,0 +1,60 @@
+apiVersion: v2
+name: soctalk-tenant
+description: |
+  SocTalk V1 per-tenant SOC stack: one release per end-customer, installed
+  by the SocTalk controller (NOT by human operators). Contains Wazuh +
+  TheHive + Cortex + SocTalk adapter in a dedicated namespace with strict
+  NetworkPolicy, ResourceQuota, LimitRange, per-tenant ServiceAccount,
+  per-tenant Secrets and PVCs.
+
+type: application
+
+# Chart version is independent of application versions.
+version: 0.1.0-alpha.1
+
+# Application version identifier (bumped when subchart versions change)
+appVersion: 0.1.0
+
+kubeVersion: ">=1.28.0-0"
+
+home: https://github.com/gbrigandi/soctalk
+sources:
+  - https://github.com/gbrigandi/soctalk
+
+maintainers:
+  - name: Gianluca Brigandi
+    url: https://github.com/gbrigandi
+
+keywords:
+  - siem
+  - soc
+  - wazuh
+  - thehive
+  - cortex
+  - security
+
+annotations:
+  category: Security
+  licenses: MIT
+
+# Subchart dependencies are intentionally undeclared until the chart audit
+# produces patched Wazuh/TheHive/Cortex charts under ./charts/. At that point
+# restore entries like:
+#
+#   dependencies:
+#     - name: wazuh
+#       version: "0.3.2-soctalk-v1"
+#       repository: "file://./charts/wazuh"
+#       condition: components.wazuh.enabled
+#     - name: thehive
+#       version: "5.2.0-soctalk-v1"
+#       repository: "file://./charts/thehive"
+#       condition: components.thehive.enabled
+#     - name: cortex
+#       version: "3.1.8-soctalk-v1"
+#       repository: "file://./charts/cortex"
+#       condition: components.cortex.enabled
+#
+# Adapter, RBAC, NetworkPolicy, ResourceQuota, LimitRange, and ConfigMap are
+# chart-native templates under ./templates/ and do not depend on the subcharts.
+dependencies: []

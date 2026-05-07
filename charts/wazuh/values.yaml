@@ -1,0 +1,77 @@
+# Minimal Wazuh deployment.
+#
+# This chart is scoped for dev and PoC clusters. It deploys a single-node
+# Wazuh manager plus a single-node Wazuh indexer, skipping the dashboard
+# and the ingress plumbing. TLS between components is self-signed and
+# generated inline by an init container; this is NOT safe for production.
+#
+# For production, follow the official wazuh/wazuh-kubernetes repository,
+# which separates master/worker statefulsets, sets up proper PKI, and
+# puts Traefik IngressRoutes in front of the indexer and dashboard.
+
+images:
+  manager: wazuh/wazuh-manager:4.12.0
+  indexer: wazuh/wazuh-indexer:4.12.0
+
+dashboard:
+  enabled: true
+  image: wazuh/wazuh-dashboard:4.12.0
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  # Per-tenant ingress for the Wazuh Dashboard. Off by default; the L1
+  # controller flips this on with the right hostname when the install's
+  # ingress class is present.
+  ingress:
+    enabled: false
+    className: nginx
+    hostname: ""
+    annotations: {}
+
+storage:
+  storageClass: local-path
+  managerSize: 2Gi
+  indexerSize: 2Gi
+
+resources:
+  manager:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  indexer:
+    requests:
+      cpu: 250m
+      memory: 1536Mi
+    limits:
+      cpu: 1500m
+      memory: 2560Mi
+
+service:
+  # Service port for Wazuh manager API (used by SocTalk).
+  apiPort: 55000
+  # Service port for agent registration.
+  enrollmentPort: 1515
+  # Service port for agent events.
+  eventsPort: 1514
+  # Indexer HTTPS API.
+  indexerPort: 9200
+
+credentials:
+  # Demo defaults. Override in production.
+  apiUsername: wazuh-wui
+  apiPassword: MyS3cr37P450r.*-
+  indexerUsername: admin
+  # Matches what the demo-security init seeds (admin:admin). Until we
+  # pre-stage an internal_users.yml override at install time, the
+  # indexer will accept only admin:admin, so filebeat on the manager
+  # needs to use the same value or it 401s.
+  indexerPassword: admin
+  authdPassword: change-me-authd
+  clusterKey: "c98b62a9b6169ac5f67dae55ae4a4ba4"

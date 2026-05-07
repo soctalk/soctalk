@@ -407,7 +407,7 @@ class Projector:
     async def _project_thehive_case_created(self, event: Event) -> None:
         """Project THEHIVE_CASE_CREATED event."""
         investigation = await self._get_or_create_investigation(event.aggregate_id)
-        investigation.thehive_case_id = event.data.get("case_id")
+        investigation.thehive_case_id = event.data.get("investigation_id")
         investigation.status = "escalated"
         investigation.phase = "escalation"
         investigation.updated_at = event.timestamp

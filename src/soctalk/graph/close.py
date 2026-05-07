@@ -223,9 +223,9 @@ def generate_closure_report(state: dict[str, Any]) -> str:
         lines.append("")
 
     # Add TheHive case if created
-    case_id = investigation.get("thehive_case_id")
-    if case_id:
-        lines.append(f"THEHIVE CASE CREATED: {case_id}")
+    investigation_id = investigation.get("thehive_case_id")
+    if investigation_id:
+        lines.append(f"THEHIVE CASE CREATED: {investigation_id}")
         lines.append("")
 
     lines.append("=" * 60)

@@ -1,0 +1,132 @@
+{{/*
+Pre-install hook: verify cluster prerequisites are in place.
+Bails out fast with an actionable error if CNI/cert-manager/StorageClass missing.
+See docs/v1/P0-2-chart-audit.md. §4.
+
+Gated by ``preInstallCheck.enabled`` (default true). Operators on
+non-Cilium dev clusters who don't need the production CNI/cert-manager
+guardrails can disable; the chart's plain NetworkPolicy resources
+still provide the default-deny baseline.
+*/}}
+{{- if (default dict .Values.preInstallCheck).enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-preinstall
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  check.sh: |
+    #!/bin/sh
+    set -e
+    echo "checking cluster prerequisites..."
+
+    # Check CNI supports NetworkPolicy.
+    if ! kubectl get crd ciliumnetworkpolicies.cilium.io >/dev/null 2>&1 \
+      && ! kubectl get crd globalnetworkpolicies.crd.projectcalico.org >/dev/null 2>&1; then
+      echo "ERROR: neither Cilium nor Calico CRDs found."
+      echo "       SocTalk requires an NP-enforcing CNI."
+      echo "       See docs/v1/P0-3-cni-networkpolicy.md."
+      exit 1
+    fi
+
+    # Check cert-manager.
+    if ! kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
+      echo "ERROR: cert-manager CRDs not found."
+      echo "       Install cert-manager first: https://cert-manager.io/docs/installation/"
+      exit 1
+    fi
+
+    # Check default StorageClass.
+    if ! kubectl get storageclass -o json \
+      | jq -e '.items[] | select(.metadata.annotations["storageclass.kubernetes.io/is-default-class"]=="true")' >/dev/null 2>&1; then
+      echo "WARNING: no default StorageClass found; PVCs may fail."
+      echo "         Set postgres.storage.storageClassName in values if needed."
+    fi
+
+    echo "prerequisites OK"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-preinstall-check
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}-preinstall
+      containers:
+        - name: check
+          image: {{ (default dict .Values.preInstallCheck).image | default "bitnami/kubectl:1.31" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache jq >/dev/null 2>&1 || true
+              /check/check.sh
+          volumeMounts:
+            - name: check-script
+              mountPath: /check
+      volumes:
+        - name: check-script
+          configMap:
+            name: {{ .Release.Name }}-preinstall
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-preinstall
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-preinstall
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["storageclasses", "namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-preinstall
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-9"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-preinstall
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-preinstall
+    namespace: {{ .Release.Namespace }}
+{{- end }}

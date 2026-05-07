@@ -9,13 +9,15 @@ LABEL description="SocTalk Orchestrator - Alert polling and investigation proces
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies. ``procps`` is required by the chart's
+# orchestrator readinessProbe (``pgrep -f soctalk.orchestrator``).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     jq \
     ca-certificates \
     libssl3 \
     libpq-dev \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Create MCP servers directory

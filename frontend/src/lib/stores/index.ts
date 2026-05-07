@@ -3,7 +3,56 @@
  */
 
 import { writable, derived, type Readable } from 'svelte/store';
-import type { AuthSession } from '$lib/api/client';
+import type { AuthSession, PublicScope } from '$lib/api/client';
+
+// Slug-driven landing — works for both ``<slug>.mssp.<base>`` and
+// ``<slug>.customer.<base>``. The store carries a unified
+// ``PublicScope`` regardless of kind so callers (login form, topbar,
+// branded theming) don't branch on it.
+//
+// On the MSSP cross-tenant hostname (where the URL slug equals the
+// install's MSSP slug) the store carries the MSSP identity; on a
+// per-tenant hostname it carries the tenant. Both feed the same
+// branding props. ``null`` when no slug detected (legacy hostnames).
+export const tenantContext = writable<PublicScope | null>(null);
+
+/**
+ * Extract a slug from the leftmost label of the hostname.
+ *
+ *   labz.soctalk.ai       → 'labz'
+ *   pw-kmo36q.soctalk.ai  → 'pw-kmo36q'
+ *   localhost / IPs / 1-label → null
+ *
+ * Reserved subdomains (``www``, ``api``, ``cloud``, ``mssp``,
+ * ``customer``, ``tenant``) return null. Resolution of the slug
+ * to a kind (MSSP vs tenant) happens server-side via
+ * /api/public/scope-by-slug.
+ */
+const RESERVED = new Set([
+	'www',
+	'api',
+	'cloud',
+	'mssp',
+	'customer',
+	'tenant',
+	'admin',
+	'app'
+]);
+
+export function detectSlugFromHostname(
+	hostname: string | null | undefined
+): string | null {
+	if (!hostname) return null;
+	const lower = hostname.toLowerCase();
+	// Reject IPs and bare hostnames
+	if (/^\d+\.\d+\.\d+\.\d+$/.test(lower)) return null;
+	const parts = lower.split('.');
+	if (parts.length < 2) return null;
+	const slug = parts[0];
+	if (RESERVED.has(slug)) return null;
+	if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return null;
+	return slug;
+}
 
 export const authSession = writable<AuthSession>({
 	enabled: false,
@@ -16,17 +65,58 @@ export const isAuthenticated: Readable<boolean> = derived(authSession, ($session
 	return $session.user !== null;
 });
 
+// Role helpers for the V1 RBAC model. The backend exposes ``role`` and
+// ``user_type`` on /api/auth/me; we map both into UI capability gates.
+//
+// Roles seen so far: ``mssp_admin``, ``mssp_analyst``, ``tenant_admin``,
+// ``tenant_analyst``, ``tenant_viewer``, ``customer_viewer``. We treat any
+// role containing ``admin`` or ``analyst`` as review-capable. ``viewer``
+// roles see read-only screens; ``customer_viewer`` further hides
+// MSSP-internal content (verdict reasoning, token spend) — see
+// ``isCustomerScope`` below.
 export const canReview: Readable<boolean> = derived(authSession, ($session) => {
 	if (!$session.enabled) return true;
-	const roles = $session.user?.roles ?? [];
-	return roles.includes('admin') || roles.includes('analyst');
+	const role = $session.user?.role ?? '';
+	return /admin|analyst/.test(role);
 });
 
 export const canEditSettings: Readable<boolean> = derived(authSession, ($session) => {
 	if (!$session.enabled) return true;
-	const roles = $session.user?.roles ?? [];
-	return roles.includes('admin');
+	const role = $session.user?.role ?? '';
+	return /admin/.test(role);
 });
+
+// Whether the *user* is an MSSP-type identity (mssp_admin, mssp_analyst).
+// Stable across "Open SOC" / "Clear" — pinning a tenant doesn't change
+// the user's role, only the active scope. Use this to gate UI that the
+// MSSP user always has, regardless of pin state — e.g. the "Clear" exit
+// from a tenant pin must remain reachable while pinned.
+export const isMsspUser: Readable<boolean> = derived(authSession, ($session) => {
+	const ut = $session.user?.user_type ?? '';
+	return ut === 'mssp' || ut.startsWith('mssp_');
+});
+
+// Whether the *active session scope* is cross-tenant MSSP. False while
+// the user is pinned to a single tenant via "Open SOC". Use this to
+// gate UI that only makes sense in cross-tenant context — e.g. the
+// /tenants list and "All tenants" filters that would be confusing or
+// out of scope under a tenant pin.
+export const isMsspScope: Readable<boolean> = derived(authSession, ($session) => {
+	const ut = $session.user?.user_type ?? '';
+	if (!(ut === 'mssp' || ut.startsWith('mssp_'))) return false;
+	if ($session.user?.current_tenant) return false;
+	return true;
+});
+
+export const isCustomerScope: Readable<boolean> = derived(authSession, ($session) => {
+	const role = $session.user?.role ?? '';
+	return role === 'customer_viewer';
+});
+
+export const currentTenantId: Readable<string | null> = derived(
+	authSession,
+	($session) => $session.user?.current_tenant ?? $session.user?.tenant_id ?? null
+);
 
 // Types
 export interface SSEEvent {
@@ -59,6 +149,25 @@ export const pendingReviewsCount = writable(0);
 
 // SSE event source reference
 let eventSource: EventSource | null = null;
+
+// crypto.randomUUID() is gated behind secure-context (HTTPS or localhost).
+// Lab installs run on plain HTTP via nginx-ingress, where Chrome stubs out
+// crypto.randomUUID and any caller throws TypeError. Fall back to a Math
+// generator on insecure origins — the values are only used as DOM keys
+// for toasts and SSE event coalescing, not as cryptographic identifiers.
+function safeUUID(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		try {
+			return crypto.randomUUID();
+		} catch {
+			/* fall through */
+		}
+	}
+	// RFC 4122 v4-shaped string (Math.random — not crypto-strong, fine here).
+	const hex = (n: number, l: number) => n.toString(16).padStart(l, '0');
+	const r = () => Math.floor(Math.random() * 0x10000);
+	return `${hex(r(), 4)}${hex(r(), 4)}-${hex(r(), 4)}-${hex((r() & 0x0fff) | 0x4000, 4)}-${hex((r() & 0x3fff) | 0x8000, 4)}-${hex(r(), 4)}${hex(r(), 4)}${hex(r(), 4)}`;
+}
 
 /**
  * Initialize SSE connection to the backend.
@@ -94,7 +203,7 @@ eventSource.onerror = (err) => {
 		try {
 			const data = JSON.parse(event.data);
 			const sseEvent: SSEEvent = {
-				id: data.id || crypto.randomUUID(),
+				id: data.id || safeUUID(),
 				type: data.event_type || data.type || 'unknown',
 				data: data.data || data,
 				timestamp: data.timestamp || new Date().toISOString()
@@ -130,7 +239,7 @@ export function closeSSE(): void {
  * Add a toast notification.
  */
 export function addToast(toast: Omit<Toast, 'id'>): void {
-	const id = crypto.randomUUID();
+	const id = safeUUID();
 	const newToast: Toast = { id, ...toast };
 
 	toasts.update((t) => [...t, newToast]);

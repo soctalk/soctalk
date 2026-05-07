@@ -16,24 +16,77 @@ export class ApiError extends Error {
 }
 
 export interface AuthUser {
-	username: string;
-	roles: string[];
-	source: string;
+	user_id: string;
+	email: string;
+	user_type: string;
+	role: string;
+	tenant_id: string | null;
+	current_tenant: string | null;
+	current_tenant_slug?: string | null;
+	current_tenant_display_name?: string | null;
 }
 
 export interface AuthSession {
 	enabled: boolean;
-	mode: 'none' | 'static' | 'proxy';
+	mode: 'none' | 'internal' | 'proxy';
 	user: AuthUser | null;
 }
 
 export interface LoginRequest {
-	username: string;
+	email: string;
 	password: string;
+	tenant_slug?: string | null;
+}
+
+export interface PublicTenantBranding {
+	app_name: string;
+	logo_url: string | null;
+	primary_color: string | null;
+	secondary_color: string | null;
+	favicon_url: string | null;
+}
+
+export interface PublicTenant {
+	id: string;
+	slug: string;
+	display_name: string;
+	state: string;
+	branding: PublicTenantBranding;
+}
+
+export interface PublicMssp {
+	id: string;
+	slug: string;
+	display_name: string;
+	branding: PublicTenantBranding;
+}
+
+export interface PublicScope {
+	kind: 'mssp' | 'tenant';
+	slug: string;
+	id: string;
+	display_name: string;
+	branding: PublicTenantBranding;
+	state?: string;
 }
 
 export interface LoginResponse {
 	user: AuthUser;
+	must_change: boolean;
+}
+
+// Tenant-side BYOK shape. ``has_api_key=false`` means the tenant is
+// using the MSSP shared key (no override set); the runs-worker still
+// works, just on the MSSP's bill. ``api_key_preview`` carries a
+// masked tail (e.g. ``sk-ant-…ABCD``) when an override is set —
+// no plaintext leak, but enough for the tenant to confirm WHICH key
+// is in use. Provider/model are MSSP-controlled and read-only here.
+export interface TenantLlmConfig {
+	provider: string;
+	base_url: string;
+	model: string;
+	has_api_key: boolean;
+	api_key_preview: string;
 }
 
 async function request<T>(
@@ -62,6 +115,19 @@ async function request<T>(
 		} else {
 			message = await response.text();
 		}
+		// Bootstrap admins are gated by ``must_change=true``: the auth
+		// middleware rejects non-whitelisted calls with this exact
+		// detail. If the SPA hits one of those, route the browser to
+		// /account/password so the user can clear the flag — otherwise
+		// every page would surface error toasts with no way forward.
+		if (
+			response.status === 403 &&
+			message === 'password_change_required' &&
+			typeof window !== 'undefined' &&
+			!window.location.pathname.startsWith('/account/password')
+		) {
+			window.location.assign('/account/password?must_change=1');
+		}
 		throw new ApiError(
 			response.status,
 			response.statusText,
@@ -88,6 +154,9 @@ export interface InvestigationSummary {
 	max_severity: string | null;
 	verdict_decision: string | null;
 	thehive_case_id: string | null;
+	tenant_id?: string | null;
+	tenant_slug?: string | null;
+	tenant_display_name?: string | null;
 }
 
 export interface Investigation extends InvestigationSummary {
@@ -97,6 +166,9 @@ export interface Investigation extends InvestigationSummary {
 	verdict_reasoning: string | null;
 	threat_actor: string | null;
 	tags: string[];
+	tokens_used: number | null;
+	tokens_budget: number | null;
+	disposition: string | null;
 }
 
 export interface InvestigationList {
@@ -338,7 +410,20 @@ export interface AnalyticsSummary {
 // API methods
 export const api = {
 	auth: {
-		session: () => request<AuthSession>('/auth/session'),
+		// /api/auth/me returns the current identity from the V1 backend.
+		// Wrapped in AuthSession to keep the existing UI shape stable;
+		// 401 → ``user: null``.
+		session: async (): Promise<AuthSession> => {
+			try {
+				const user = await request<AuthUser>('/auth/me');
+				return { enabled: true, mode: 'internal', user };
+			} catch (err) {
+				if (err instanceof ApiError && err.status === 401) {
+					return { enabled: true, mode: 'internal', user: null };
+				}
+				throw err;
+			}
+		},
 
 		login: (payload: LoginRequest) =>
 			request<LoginResponse>('/auth/login', {
@@ -349,7 +434,38 @@ export const api = {
 		logout: () =>
 			request<{ success: boolean }>('/auth/logout', {
 				method: 'POST'
+			}),
+
+		assumeTenant: (slug: string | null) =>
+			request<AuthUser>('/auth/assume-tenant', {
+				method: 'POST',
+				body: JSON.stringify(slug ? { slug } : {})
+			}),
+
+		// Required after a tenant_admin's first login (must_change=true on
+		// the bootstrap credential). Until cleared, the auth middleware
+		// rejects every non-whitelisted call with 403 password_change_required.
+		changePassword: (oldPassword: string, newPassword: string) =>
+			request<{ success: boolean }>('/auth/password/change', {
+				method: 'POST',
+				body: JSON.stringify({
+					old_password: oldPassword,
+					new_password: newPassword
+				})
 			})
+	},
+
+	// Public, no auth — slug-driven landing.
+	public: {
+		// Unified resolver: pass any slug from a flat
+		// ``<slug>.<base>`` hostname; backend decides MSSP vs tenant.
+		scopeBySlug: (slug: string) =>
+			request<PublicScope>(`/public/scope-by-slug/${encodeURIComponent(slug)}`),
+		// Kept for callers that already know which kind they want.
+		tenantBySlug: (slug: string) =>
+			request<PublicTenant>(`/public/tenant-by-slug/${encodeURIComponent(slug)}`),
+		msspBySlug: (slug: string) =>
+			request<PublicMssp>(`/public/mssp-by-slug/${encodeURIComponent(slug)}`)
 	},
 
 	// Investigations
@@ -555,8 +671,173 @@ export const api = {
 			request<Settings>('/settings/reset', {
 				method: 'POST'
 			})
+	},
+
+	// Tenant-side BYOK for the LLM API key. The tenant_admin pastes
+	// their own provider credential (Anthropic/OpenAI) which the
+	// runs-worker then uses for THIS tenant's investigations instead
+	// of the MSSP's shared install key. ``clearKey`` reverts to the
+	// MSSP-funded default — the L1 controller re-mirrors the
+	// install-shared key into the tenant ns so the runs-worker
+	// keeps running uninterrupted.
+	tenantLlm: {
+		get: () => request<TenantLlmConfig>('/tenant/llm'),
+		setKey: (apiKey: string) =>
+			request<TenantLlmConfig>('/tenant/llm/api-key', {
+				method: 'PUT',
+				body: JSON.stringify({ api_key: apiKey })
+			}),
+		clearKey: () =>
+			request<TenantLlmConfig>('/tenant/llm/api-key', {
+				method: 'DELETE'
+			})
+	},
+
+	// MSSP cross-tenant fleet dashboard. Only reachable when the
+	// session has no current_tenant pin (cross-tenant scope).
+	msspDashboard: {
+		pendingReviews: () =>
+			request<{ items: MsspPendingReviewRow[] }>('/mssp/dashboard/pending-reviews'),
+		openByTenant: () =>
+			request<{ items: MsspOpenByTenantRow[] }>('/mssp/dashboard/open-by-tenant'),
+		stuckInvestigations: (hours = 8) =>
+			request<{ items: MsspStuckInvestigationRow[] }>(
+				`/mssp/dashboard/stuck-investigations?hours=${hours}`
+			),
+		tenantHealth: () =>
+			request<{ items: MsspTenantHealthRow[] }>('/mssp/dashboard/tenant-health'),
+		repeatedIocs: (days = 7, limit = 50) =>
+			request<MsspRepeatedIocsResponse>(
+				`/mssp/dashboard/repeated-iocs?days=${days}&limit=${limit}`
+			)
+	},
+
+	// MSSP cross-tenant fleet analytics — trend-shaped, longitudinal.
+	// Companion to msspDashboard but answers "is the practice
+	// improving, degrading, or drifting?" not "where do I look now?".
+	msspAnalytics: {
+		trends: (days = 7) =>
+			request<MsspTrendsResponse>(`/mssp/analytics/trends?days=${days}`),
+		ranking: (
+			metric: 'ttv' | 'ttr' = 'ttv',
+			days = 30,
+			minSample = 10,
+			limit = 20
+		) =>
+			request<MsspRankingResponse>(
+				`/mssp/analytics/ranking?metric=${metric}&days=${days}` +
+					`&min_sample=${minSample}&limit=${limit}`
+			),
+		heatmap: (dimension: 'alerts' | 'cases' = 'alerts', days = 30) =>
+			request<MsspHeatmapResponse>(
+				`/mssp/analytics/heatmap?dimension=${dimension}&days=${days}`
+			)
 	}
 	};
+
+export interface MsspPendingReviewRow {
+	tenant_id: string;
+	slug: string;
+	display_name: string;
+	count: number;
+}
+
+export interface MsspOpenByTenantRow {
+	tenant_id: string;
+	slug: string;
+	display_name: string;
+	open_count: number;
+	oldest_opened_at: string | null;
+	max_severity: number | null;
+}
+
+export interface MsspStuckInvestigationRow {
+	investigation_id: string;
+	tenant_id: string;
+	slug: string;
+	display_name: string;
+	opened_at: string;
+	last_activity_at: string;
+	severity: number;
+	stuck_for_seconds: number;
+}
+
+export interface MsspTenantHealthRow {
+	tenant_id: string;
+	slug: string;
+	display_name: string;
+	state: string;
+	last_heartbeat: string | null;
+	heartbeat_age_seconds: number | null;
+	unhealthy: boolean;
+}
+
+export interface MsspRepeatedIocRow {
+	ioc_type: string;
+	ioc_value: string;
+	tenant_count: number;
+	tenants: Array<{ id: string; slug: string; display_name: string }>;
+	first_seen: string;
+	last_seen: string;
+	max_severity: number;
+}
+
+export interface MsspRepeatedIocsResponse {
+	items: MsspRepeatedIocRow[];
+	days: number;
+	threshold: number;
+}
+
+export interface MsspTrendBucket {
+	bucket: string;
+	alert_count: number;
+	closed_count: number;
+	escalated_count: number;
+	p95_ttv_seconds: number | null;
+	p95_ttr_seconds: number | null;
+}
+
+export interface MsspTrendsResponse {
+	days: number;
+	bucket_size: 'hour' | 'day';
+	buckets: MsspTrendBucket[];
+	window_p95_ttv_seconds: number | null;
+	window_p95_ttr_seconds: number | null;
+	window_alert_total: number;
+	window_closed_total: number;
+	window_escalated_total: number;
+}
+
+export interface MsspRankingRow {
+	tenant_id: string;
+	slug: string;
+	display_name: string;
+	current_p95_seconds: number;
+	previous_p95_seconds: number | null;
+	delta_seconds: number | null;
+	sample_current: number;
+	sample_previous: number;
+}
+
+export interface MsspRankingResponse {
+	metric: 'ttv' | 'ttr';
+	days: number;
+	min_sample: number;
+	fleet_median_seconds: number | null;
+	rows: MsspRankingRow[];
+}
+
+export interface MsspHeatmapCell {
+	dow: number;  // 0=Sunday..6=Saturday
+	hour: number; // 0..23
+	count: number;
+}
+
+export interface MsspHeatmapResponse {
+	dimension: 'alerts' | 'cases';
+	days: number;
+	cells: MsspHeatmapCell[];
+}
 
 // Settings - Integration configurations for MCP servers
 export interface Settings {

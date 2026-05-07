@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+data:
+  tenant.json: |
+    {
+      "tenant_id": {{ .Values.tenant.id | quote }},
+      "tenant_slug": {{ .Values.tenant.slug | quote }},
+      "display_name": {{ .Values.tenant.displayName | quote }},
+      "mssp_id": {{ .Values.tenant.msspId | quote }},
+      "install_id": {{ .Values.tenant.installId | quote }}
+    }
+  branding.json: |
+    {
+      "app_name": {{ .Values.branding.appName | quote }},
+      "logo_url": {{ .Values.branding.logoUrl | quote }},
+      "primary_color": {{ .Values.branding.primaryColor | quote }},
+      "secondary_color": {{ .Values.branding.secondaryColor | quote }},
+      "favicon": {{ .Values.branding.favicon | quote }}
+    }
+  llm.json: |
+    {
+      "provider": {{ .Values.llm.provider | quote }},
+      "base_url": {{ .Values.llm.baseUrl | quote }},
+      "model": {{ .Values.llm.model | quote }},
+      "api_key_secret_ref": {
+        {{/*
+        When the chart materializes the Secret (llm.apiKey set) it
+        lives in the release namespace by construction; override the
+        configured apiKeyRef.namespace to match, otherwise the adapter
+        would look in the caller-provided namespace (typically
+        soctalk-system) which may not exist in L2's cluster.
+        */}}
+        "namespace": {{ if .Values.llm.apiKey }}{{ .Release.Namespace | quote }}{{ else }}{{ .Values.llm.apiKeyRef.namespace | quote }}{{ end }},
+        "name": {{ .Values.llm.apiKeyRef.name | quote }},
+        "key": {{ .Values.llm.apiKeyRef.key | quote }}
+      }
+    }

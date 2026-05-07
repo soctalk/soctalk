@@ -1,0 +1,241 @@
+{{- if .Values.networkPolicies.enabled }}
+{{/*
+See docs/v1/P0-3-cni-networkpolicy.md. §4.3.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: intra-ns-allow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: {} }]
+  egress:
+    - to: [{ podSelector: {} }]
+    # DNS to kube-system
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-soctalk-system
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: ["wazuh-manager", "wazuh-indexer", "thehive", "cortex"]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: soctalk-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: orchestrator
+      ports:
+        - { port: 55000, protocol: TCP }  # Wazuh manager API
+        - { port: 9200, protocol: TCP }   # Wazuh indexer
+        - { port: 9000, protocol: TCP }   # TheHive
+        - { port: 9001, protocol: TCP }   # Cortex
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: adapter-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-adapter
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: soctalk-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - { port: 8000, protocol: TCP }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runs-worker-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-runs-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: soctalk-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - { port: 8000, protocol: TCP }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+    - ports:
+        - { port: 443, protocol: TCP }
+---
+{{/*
+Wazuh agent ingress allow: see P0-6 for the MSSP-edge SNI proxy pattern.
+The ingress-system namespace holds the L4 proxy that SNI-routes to the
+correct tenant's Wazuh manager.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wazuh-agent-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh-manager
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - { port: 1514, protocol: TCP }
+        - { port: 1515, protocol: TCP }
+---
+{{/*
+Wazuh Dashboard ingress allow. The dashboard is reached by browsers
+through the cluster's nginx-ingress, which lives in the ingress-system
+namespace.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wazuh-dashboard-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: dashboard
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - { port: 5601, protocol: TCP }
+{{- end }}
+
+{{- /*
+FQDN egress: adapter → L1 (cross-cluster L2 path).
+
+Stock NetworkPolicy has no FQDN support — it targets pods/namespaces
+or IP CIDRs. For a cross-cluster deploy where the L2 tenant's cluster
+is separate from the MSSP's SocTalk install, the adapter must be able
+to reach L1 by public hostname. CiliumNetworkPolicy + toFQDNs is the
+standard pattern.
+
+Gated by networkPolicies.fqdnEgress.enabled because:
+  - the chart must render on clusters without Cilium CRDs
+    (the CRD check fails the whole release otherwise)
+  - collapsed-tier deploys don't need FQDN egress — the existing
+    adapter-egress policy already allows the in-cluster path
+
+Operator on a non-Cilium cluster: turn this off and either install
+with --set soctalkSystem.url='' (collapsed-tier fallback) or provide
+equivalent egress via their own CNI's policy mechanism.
+*/ -}}
+{{- if and .Values.networkPolicies.enabled .Values.networkPolicies.fqdnEgress.enabled .Values.soctalkSystem.url }}
+{{- $parsed := urlParse .Values.soctalkSystem.url }}
+{{- $host := $parsed.host }}
+{{- if contains ":" $host }}{{ $host = index (splitList ":" $host) 0 }}{{ end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: adapter-fqdn-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-adapter
+  egress:
+    # Kube DNS — required to resolve the FQDN in the first place.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: UDP }
+          rules:
+            dns:
+              - matchPattern: "*"
+    # The L1 API hostname over HTTP(S).
+    - toFQDNs:
+        - matchName: {{ $host | quote }}
+      toPorts:
+        - ports:
+            - { port: "443", protocol: TCP }
+            - { port: "80",  protocol: TCP }
+{{- end }}

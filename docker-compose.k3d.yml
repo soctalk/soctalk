@@ -1,0 +1,37 @@
+services:
+  api:
+    command: ["uvicorn", "soctalk.core.api.app_v1:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      WAZUH_API_HOST: host.docker.internal
+      WAZUH_INDEXER_HOST: host.docker.internal
+      AUTH_MODE: internal
+      SOCTALK_ADAPTER_SIGNING_KEY: "dev-adapter-signing-key-change-me"
+      SOCTALK_SESSION_SIGNING_KEY: "dev-session-signing-key-change-me"
+      DATABASE_URL_APP: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      DATABASE_URL_MSSP: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
+      SOCTALK_PUBLIC_ORIGIN: http://localhost:8000
+      # L1→L2 harness wiring. The L1-emitted install_helm_release spec
+      # points at the bundled e2e-tenant-stub chart (lives inside the
+      # agent image under /charts/e2e-tenant-stub), and the
+      # wait_for_ready probe uses plain HTTP so the stub pod doesn't
+      # need a TLS bootstrap. Both default back to production values
+      # when these vars are unset.
+      SOCTALK_TENANT_CHART_REF: /charts/soctalk-tenant-minimal
+      SOCTALK_TENANT_CHART_VERSION: "0.1.0"
+      # Wazuh manager serves HTTPS on :55000 with the chart's
+      # inline self-signed cert; wait_for_ready sends verify_tls=false.
+      SOCTALK_TENANT_PROBE_SCHEME: https
+      # Where the L2 agent will reach L1. host.docker.internal resolves
+      # to the Docker Desktop host gateway — same name works from k3d
+      # cluster nodes and from docker-compose containers.
+      SOCTALK_L1_PUBLIC_URL: http://host.docker.internal:8000
+      # Agent chart coordinates returned by :issue-agent. The harness
+      # installs it into L2 from the local chart path, so the ref
+      # is only surfaced in the helm_install_hint (not consumed by L1).
+      SOCTALK_AGENT_CHART_REF: /charts/soctalk-cloud-agent
+      SOCTALK_AGENT_CHART_VERSION: "0.1.0"
+
+  orchestrator:
+    environment:
+      WAZUH_API_HOST: host.docker.internal
+      WAZUH_INDEXER_HOST: host.docker.internal

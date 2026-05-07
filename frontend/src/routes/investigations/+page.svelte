@@ -1,7 +1,14 @@
 	<script lang="ts">
 		import { onMount } from 'svelte';
 		import { api, type InvestigationSummary } from '$lib/api/client';
+		import { authSession, isMsspScope } from '$lib/stores';
 		import { formatStatus, formatPhase, formatSeverity, formatDecision } from '$lib/utils/formatters';
+
+		// Show the per-row Tenant column only when the session is in
+		// cross-tenant view — i.e. an MSSP user with no current_tenant
+		// pin. Tenant-bound or assume-tenant'd sessions hide it because
+		// every row belongs to the same tenant.
+		$: showTenantColumn = $isMsspScope && !$authSession.user?.current_tenant;
 
 		let investigations: InvestigationSummary[] = [];
 		let loading = true;
@@ -115,6 +122,9 @@
 		<table class="table table-hover">
 			<thead>
 				<tr>
+					{#if showTenantColumn}
+						<th>Tenant</th>
+					{/if}
 					<th>Title</th>
 					<th>Status</th>
 					<th>Phase</th>
@@ -129,6 +139,17 @@
 			<tbody>
 				{#each investigations as inv}
 					<tr>
+						{#if showTenantColumn}
+							<td class="text-xs">
+								{#if inv.tenant_display_name || inv.tenant_slug}
+									<span class="badge variant-soft-primary">
+										{inv.tenant_display_name || inv.tenant_slug}
+									</span>
+								{:else}
+									<span class="opacity-40">-</span>
+								{/if}
+							</td>
+						{/if}
 						<td class="max-w-xs truncate">
 							<a href="/investigations/{inv.id}" class="anchor">
 								{inv.title || 'Untitled Investigation'}
@@ -167,7 +188,7 @@
 				{/each}
 				{#if investigations.length === 0}
 					<tr>
-						<td colspan="9" class="text-center opacity-60 py-8">
+						<td colspan={showTenantColumn ? 10 : 9} class="text-center opacity-60 py-8">
 							No investigations found
 						</td>
 					</tr>

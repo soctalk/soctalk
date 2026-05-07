@@ -1,0 +1,162 @@
+{{/*
+NetworkPolicies for soctalk-system. Per docs/v1/P0-3-cni-networkpolicy.md §4.1.
+Default-deny baseline plus explicit allow rules.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-api-ingress-allow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes: [Ingress]
+  ingress:
+    # From the ingress controller (hostname match is configured at ingress level,
+    # NP restricts source namespaces).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - port: 8000
+    # From adapters in any tenant namespace.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              managed-by: soctalk
+              tenant: "true"
+      ports:
+        - port: 8000
+    # Prometheus metrics scrape from monitoring ns (if present).
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-ui-ingress-allow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["app-ui"]
+  policyTypes: [Ingress]
+  ingress:
+    # SvelteKit SSR is reached only via the ingress controller; restrict
+    # ingress to the ingress namespace at L4, with hostname enforcement
+    # left to the ingress controller's L7 routing.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-system
+      ports:
+        - port: 3000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres-intrans
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 5432
+---
+{{/*
+API egress. The api pod is the SocTalk control-plane operator: it
+must reach DNS, Postgres, the kube API server, every tenant namespace,
+and the upstream LLM provider for orchestrator-side tooling. Modeling
+that as a closed allowlist requires per-CNI gymnastics (kube-router
+in particular has trouble matching ipBlock rules against ClusterIP
+DNATed traffic); the chart keeps egress permissive for the api pod.
+Default-deny still binds the rest of the namespace, and ingress is
+strictly allow-listed.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-api-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes: [Egress]
+  egress:
+    - {}
+---
+{{/*
+Same egress grant for the UI pods (MSSP + customer UIs). SvelteKit SSR
+needs DNS + reach to the API Service.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-ui-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["app-ui"]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - port: 8000
+          protocol: TCP
+{{/*
+The legacy single-tenant orchestrator pod is retired in V1: triage
+runs in per-tenant L2 ``runs-worker`` pods that talk to L1 over the
+explicit ``/api/internal/worker/runs/*`` API. The corresponding
+CiliumNetworkPolicy was removed with the orchestrator Deployment.
+L2 worker egress is governed by the tenant chart's
+``runs-worker-egress`` NetworkPolicy.
+*/}}

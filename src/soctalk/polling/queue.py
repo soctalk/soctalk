@@ -1,4 +1,4 @@
-"""Investigation queue for managing pending investigations."""
+"""InvestigationRunState queue for managing pending investigations."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Optional
 import structlog
 
 from soctalk.models.enums import Severity
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 
 logger = structlog.get_logger()
 
@@ -28,7 +28,7 @@ class PrioritizedInvestigation:
 
     priority: int
     timestamp: datetime = field(compare=False)
-    investigation: Investigation = field(compare=False)
+    investigation: InvestigationRunState = field(compare=False)
 
 
 class InvestigationQueue:
@@ -38,7 +38,7 @@ class InvestigationQueue:
     - Priority ordering (critical severity first)
     - Async get with blocking
     - Queue size limits
-    - Investigation deduplication
+    - InvestigationRunState deduplication
     """
 
     def __init__(self, max_size: int = 100):
@@ -72,11 +72,11 @@ class InvestigationQueue:
         }
         return priority_map.get(severity, 4)
 
-    async def add(self, investigation: Investigation) -> bool:
+    async def add(self, investigation: InvestigationRunState) -> bool:
         """Add an investigation to the queue.
 
         Args:
-            investigation: Investigation to add.
+            investigation: InvestigationRunState to add.
 
         Returns:
             True if added, False if queue full or duplicate.
@@ -136,7 +136,7 @@ class InvestigationQueue:
 
         return True
 
-    async def add_batch(self, investigations: list[Investigation]) -> int:
+    async def add_batch(self, investigations: list[InvestigationRunState]) -> int:
         """Add multiple investigations to the queue.
 
         Args:
@@ -151,7 +151,7 @@ class InvestigationQueue:
                 added += 1
         return added
 
-    async def get(self, timeout: Optional[float] = None) -> Optional[Investigation]:
+    async def get(self, timeout: Optional[float] = None) -> Optional[InvestigationRunState]:
         """Get the highest priority investigation.
 
         Blocks until an investigation is available or timeout.
@@ -160,7 +160,7 @@ class InvestigationQueue:
             timeout: Maximum time to wait in seconds. None = wait forever.
 
         Returns:
-            Investigation or None if timeout.
+            InvestigationRunState or None if timeout.
         """
         async with self._not_empty:
             # Wait for items if queue is empty
@@ -189,11 +189,11 @@ class InvestigationQueue:
 
         return None
 
-    async def peek(self) -> Optional[Investigation]:
+    async def peek(self) -> Optional[InvestigationRunState]:
         """Peek at the highest priority investigation without removing it.
 
         Returns:
-            Investigation or None if queue empty.
+            InvestigationRunState or None if queue empty.
         """
         async with self._lock:
             if self._heap:

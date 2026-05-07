@@ -1,0 +1,52 @@
+# k3d cluster definition for the LOCAL SocTalk profile.
+#
+# Default deployment target is the remote lab (k3d-lab on
+# 192.168.1.28). This file declares an alternative on-Mac cluster
+# you can spin up when you want to iterate without touching shared
+# infrastructure.
+#
+# Spin up:    scripts/local-up.sh
+# Tear down:  scripts/local-down.sh
+# Use it:     export KUBECONFIG=$PWD/kubeconfig.local
+#
+# Choices baked in:
+#   - 1 server + 1 agent (matches the lab so we don't accumulate
+#     scheduling drift between profiles).
+#   - Local registry at ``soctalk-local-registry:5500`` (in-cluster
+#     hostname) and ``127.0.0.1:5500`` from the host. Off the lab's
+#     :5000 so both can run side-by-side.
+#   - Ingress publishes on host 8080/8443 — sidesteps macOS's
+#     privileged 80/443 binding rules; canonical app reachable at
+#     http://<slug>.soctalk.ai:8080/ when /etc/hosts (or the same
+#     Chrome --host-resolver-rules trick used for the lab) maps the
+#     hostname to 127.0.0.1.
+#   - Traefik disabled; canonical install expects nginx-ingress,
+#     which the up-script installs separately.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: soctalk-local
+
+servers: 1
+agents: 1
+
+options:
+  k3s:
+    extraArgs:
+      - arg: --disable=traefik
+        nodeFilters:
+          - server:*
+
+ports:
+  - port: 127.0.0.1:8080:80
+    nodeFilters:
+      - loadbalancer
+  - port: 127.0.0.1:8443:443
+    nodeFilters:
+      - loadbalancer
+
+registries:
+  create:
+    name: soctalk-local-registry
+    host: 127.0.0.1
+    hostPort: "5500"

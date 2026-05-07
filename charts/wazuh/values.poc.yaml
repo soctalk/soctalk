@@ -1,0 +1,31 @@
+# Wazuh — PoC profile.
+#
+# Ephemeral, single-node, cheapest viable footprint. Intended for demo
+# and short-lived PoC tenants. Data is lost if the pod restarts onto a
+# different node, and storage does not survive teardown.
+
+storage:
+  # Ephemeral / node-local. Relies on the `local-path` provisioner from
+  # k3s/k3d; the templates honour whatever StorageClass is supplied.
+  storageClass: local-path
+  managerSize: 1Gi
+  indexerSize: 1Gi
+
+resources:
+  manager:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  indexer:
+    requests:
+      cpu: 200m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+# Credentials: profile-defaulted demo creds. The controller overrides
+# these per tenant with minted values before applying.

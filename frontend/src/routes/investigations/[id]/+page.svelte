@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api, type Investigation, type InvestigationTimelineEvent } from '$lib/api/client';
-	import { addToast } from '$lib/stores';
+	import { addToast, isCustomerScope } from '$lib/stores';
 	import { formatStatus, formatPhase, formatSeverity, formatDecision, formatDuration, formatEventType } from '$lib/utils/formatters';
 
 	let investigation: Investigation | null = null;
@@ -486,6 +486,46 @@
 						{/if}
 					</div>
 				</div>
+			{/if}
+
+			<!-- Agent Run (LangGraph) -->
+			{#if investigation.tokens_used !== null && investigation.tokens_used !== undefined}
+				{#if !$isCustomerScope}
+					<div class="card p-4">
+						<h3 class="h4 mb-4">Agent Run</h3>
+						<div class="space-y-3">
+							<div>
+								<div class="flex justify-between text-sm mb-1">
+									<span class="opacity-60">Token Spend</span>
+									<span class="font-mono">
+										{investigation.tokens_used?.toLocaleString() ?? 0}
+										{#if investigation.tokens_budget}
+											/ {investigation.tokens_budget.toLocaleString()}
+										{/if}
+									</span>
+								</div>
+								{#if investigation.tokens_budget}
+									{@const ratio = Math.min(1, (investigation.tokens_used ?? 0) / investigation.tokens_budget)}
+									<div class="w-full h-2 bg-surface-500/30 rounded-full overflow-hidden">
+										<div
+											class="h-full rounded-full transition-all duration-300
+												{ratio > 0.8 ? 'bg-error-500' : ratio > 0.5 ? 'bg-warning-500' : 'bg-success-500'}"
+											style="width: {ratio * 100}%"
+										></div>
+									</div>
+								{/if}
+							</div>
+							{#if investigation.disposition}
+								<div class="flex items-center justify-between">
+									<span class="opacity-60 text-sm">Disposition</span>
+									<span class="badge {investigation.disposition === 'escalate' ? 'variant-filled-error' : investigation.disposition === 'close_fp' ? 'variant-filled-success' : investigation.disposition === 'halted_budget' ? 'variant-filled-warning' : 'variant-filled-surface'}">
+										{investigation.disposition.replace('_', ' ')}
+									</span>
+								</div>
+							{/if}
+						</div>
+					</div>
+				{/if}
 			{/if}
 
 			<!-- Observable Stats -->

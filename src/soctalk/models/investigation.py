@@ -1,4 +1,4 @@
-"""Investigation and finding models."""
+"""InvestigationRunState and finding models."""
 
 from __future__ import annotations
 
@@ -60,12 +60,27 @@ class Finding(BaseModel):
         return "\n".join(lines)
 
 
-class Investigation(BaseModel):
-    """A security investigation containing correlated alerts and findings."""
+class InvestigationRunState(BaseModel):
+    """In-memory state of one AI investigation run.
+
+    This is the shape passed through the LangGraph state machine during
+    a single run — alerts being correlated, observables being enriched,
+    findings accumulating. It is NOT the persistent InvestigationRunState entity
+    (that lives as a row in the ``investigations`` table, modeled by
+    ``soctalk.core.ir.models.InvestigationRunState``). The two were conflated
+    pre-v1; the rename disambiguates them.
+
+    Renaming the V0 ``InvestigationRunState`` class to ``InvestigationRunState``
+    freed the ``InvestigationRunState`` name for the persistent record. This
+    class continues to drive the legacy LangGraph runs-worker; over
+    time, the worker should consume the persistent InvestigationRunState +
+    case_run rows directly and this transient state becomes derived,
+    not authoritative.
+    """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    title: str = Field(default="Untitled Investigation", description="Investigation title")
-    description: Optional[str] = Field(default=None, description="Investigation description")
+    title: str = Field(default="Untitled InvestigationRunState", description="InvestigationRunState title")
+    description: Optional[str] = Field(default=None, description="InvestigationRunState description")
     alerts: list[Alert] = Field(default_factory=list, description="Correlated alerts")
     observables: list[Observable] = Field(
         default_factory=list, description="All observables from alerts"
@@ -73,7 +88,7 @@ class Investigation(BaseModel):
     enrichments: list[EnrichmentResult] = Field(
         default_factory=list, description="Enrichment results"
     )
-    findings: list[Finding] = Field(default_factory=list, description="Investigation findings")
+    findings: list[Finding] = Field(default_factory=list, description="InvestigationRunState findings")
     status: InvestigationStatus = Field(
         default=InvestigationStatus.PENDING, description="Current status"
     )
@@ -183,7 +198,7 @@ class Investigation(BaseModel):
             Generated title.
         """
         if not self.alerts:
-            return "Empty Investigation"
+            return "Empty InvestigationRunState"
 
         # Find the most descriptive alert (skip generic ones)
         generic_descriptions = {
@@ -285,9 +300,9 @@ class Investigation(BaseModel):
         """
         # Build description
         description_parts = [
-            "## Investigation Summary",
+            "## InvestigationRunState Summary",
             "",
-            f"**Investigation ID:** {self.id}",
+            f"**InvestigationRunState ID:** {self.id}",
             f"**Created:** {self.created_at.isoformat()}",
             "",
             "## Alerts",

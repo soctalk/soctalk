@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: soctalk-adapter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+    app.kubernetes.io/name: soctalk-adapter
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: soctalk-adapter
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soctalk-adapter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+    app.kubernetes.io/name: soctalk-adapter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-adapter
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "soctalk-tenant.labels" . | nindent 8 }}
+        app.kubernetes.io/name: soctalk-adapter
+    spec:
+      serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        # Mounted Secret files inherit fsGroup ownership; without this
+        # the adapter UID can't read the token at defaultMode=0400.
+        fsGroup: 10001
+      containers:
+        - name: adapter
+          image: "{{ .Values.adapter.image.repository }}:{{ .Values.adapter.image.tag }}"
+          imagePullPolicy: {{ .Values.adapter.image.pullPolicy | default "IfNotPresent" }}
+          {{- with .Values.adapter.image.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.adapter.image.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: SOCTALK_TENANT_ID
+              value: {{ .Values.tenant.id | quote }}
+            - name: SOCTALK_TENANT_SLUG
+              value: {{ .Values.tenant.slug | quote }}
+            {{/*
+            SOCTALK_API_URL: prefer the explicit cross-cluster URL from
+            soctalkSystem.url (set by L1 at :issue-agent time when L2
+            is a separate cluster). Fall back to in-cluster service DNS
+            for the collapsed-tier deploy where L1 lives in the same
+            cluster's soctalk-system namespace.
+            */}}
+            - name: SOCTALK_API_URL
+              value: {{ if .Values.soctalkSystem.url -}}
+                {{ .Values.soctalkSystem.url | quote }}
+              {{- else -}}
+                "http://{{ .Values.adapter.api.serviceHost }}:{{ .Values.adapter.api.servicePort }}"
+              {{- end }}
+            - name: ADAPTER_TOKEN_PATH
+              value: /run/secrets/adapter/token
+            {{- with .Values.adapter.wazuhIndexer }}
+            - name: WAZUH_INDEXER_URL
+              value: {{ .url | quote }}
+            - name: WAZUH_INDEXER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: {{ .usernameKey | default "INDEXER_USERNAME" | quote }}
+            - name: WAZUH_INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credsSecret | quote }}
+                  key: {{ .passwordKey | default "INDEXER_PASSWORD" | quote }}
+            {{- if .minSeverity }}
+            - name: SOCTALK_ADAPTER_MIN_SEVERITY
+              value: {{ .minSeverity | quote }}
+            {{- end }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.adapter.resources.requests.cpu | quote }}
+              memory: {{ .Values.adapter.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.adapter.resources.limits.cpu | quote }}
+              memory: {{ .Values.adapter.resources.limits.memory | quote }}
+          {{- if .Values.adapter.readinessProbe }}
+          readinessProbe:
+            {{- toYaml .Values.adapter.readinessProbe | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: adapter-token
+              mountPath: /run/secrets/adapter
+              readOnly: true
+      volumes:
+        - name: adapter-token
+          secret:
+            secretName: {{ .Values.adapter.tokenSecretRef.name | quote }}
+            items:
+              - key: {{ .Values.adapter.tokenSecretRef.key | quote }}
+                path: token
+            defaultMode: 0440

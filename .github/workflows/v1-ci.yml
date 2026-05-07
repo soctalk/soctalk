@@ -1,0 +1,159 @@
+name: V1 CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soctalk_admin
+          POSTGRES_PASSWORD: soctalk_admin
+          POSTGRES_DB: soctalk
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U soctalk_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install project + dev tools
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]" || pip install -e .
+          pip install pytest pytest-asyncio pip-audit import-linter ruff mypy
+
+      - name: import-linter (open-core boundary)
+        run: |
+          lint-imports --config .importlinter
+
+      - name: ruff
+        run: ruff check src tests || true  # non-fatal until baseline clean
+
+      - name: Run unit tests (skip Postgres integration)
+        env:
+          SKIP_INTEGRATION: '1'
+        run: pytest tests/v1 -v
+
+      - name: Apply V1 migration
+        env:
+          DATABASE_URL: postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk
+        run: |
+          # Phase 1 alembic migration lives in alembic/versions/v1_0001_multi_tenancy.py
+          # CI uses a temporary alembic.ini override pointed at the test Postgres.
+          alembic -x database_url="postgresql://soctalk_admin:soctalk_admin@localhost:5432/soctalk" upgrade head
+
+      - name: Run integration tests (RLS isolation)
+        env:
+          DATABASE_URL_ADMIN: postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk
+          DATABASE_URL_APP: postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk
+          DATABASE_URL_MSSP: postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk
+        run: |
+          # Migration created the roles without passwords; set them for CI.
+          psql "postgresql://soctalk_admin:soctalk_admin@localhost:5432/soctalk" \
+            -c "ALTER ROLE soctalk_app WITH PASSWORD 'soctalk_app';" \
+            -c "ALTER ROLE soctalk_mssp WITH PASSWORD 'soctalk_mssp';"
+          pytest tests/v1 -v -m integration
+
+      - name: pip-audit (advisory)
+        run: pip-audit --strict || echo "pip-audit reported issues (advisory for V1)"
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: helm lint soctalk-system
+        run: helm lint charts/soctalk-system
+
+      - name: helm lint soctalk-tenant
+        run: helm lint charts/soctalk-tenant
+
+      - name: helm template soctalk-system (smoke)
+        run: |
+          helm template soctalk-system charts/soctalk-system \
+            --set install.msspId=00000000-0000-0000-0000-000000000000 \
+            --set install.msspName=ci \
+            --set install.installId=00000000-0000-0000-0000-000000000001 \
+            --set ingress.hostnames.mssp=mssp.example.com \
+            --set ingress.hostnames.customer=customer.example.com > /tmp/system.rendered.yaml
+          wc -l /tmp/system.rendered.yaml
+
+      - name: helm template soctalk-tenant (smoke)
+        run: |
+          helm template tenant-acme charts/soctalk-tenant \
+            --set tenant.id=00000000-0000-0000-0000-000000000002 \
+            --set tenant.slug=acme \
+            --set tenant.msspId=00000000-0000-0000-0000-000000000000 \
+            --set tenant.installId=00000000-0000-0000-0000-000000000001 \
+            --set tenant.displayName=Acme \
+            --set llm.apiKeyRef.name=tenant-00000000-0000-0000-0000-000000000002-llm \
+            --set agentIngress.hostname=acme.soc.mssp.local \
+            --set networkPolicies.allowedLlmHosts[0]=api.openai.com > /tmp/tenant.rendered.yaml
+          wc -l /tmp/tenant.rendered.yaml
+
+  frontend:
+    # The split frontend apps (frontend/{mssp,customer}) were retired
+    # in favor of the role-aware canonical app at frontend/. Single
+    # job, no matrix.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: pnpm, cache-dependency-path: 'frontend/pnpm-lock.yaml' }
+      - name: Install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile || pnpm install
+      - name: Typecheck
+        working-directory: frontend
+        run: pnpm check || true
+      - name: Build
+        working-directory: frontend
+        run: pnpm build
+
+  publish-charts:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [python, helm, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with: { version: v3.14.0 }
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Package charts
+        run: |
+          helm package charts/soctalk-system -d /tmp/charts
+          helm package charts/soctalk-tenant -d /tmp/charts
+      - name: Push to GHCR
+        run: |
+          for f in /tmp/charts/*.tgz; do
+            helm push "$f" oci://ghcr.io/${{ github.repository_owner }}/charts
+          done

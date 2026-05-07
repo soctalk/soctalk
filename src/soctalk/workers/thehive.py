@@ -11,7 +11,7 @@ from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.mcp.bindings import get_thehive_client
 from soctalk.models.enums import Phase, InvestigationStatus, Severity
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
 
 logger = structlog.get_logger()
@@ -43,31 +43,38 @@ async def thehive_worker_node(
     client = get_thehive_client()
     investigation_data = state.get("investigation", {})
 
-    # Reconstruct Investigation object
-    investigation = Investigation(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
+    # Reconstruct InvestigationRunState object
+    investigation = InvestigationRunState(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
 
     # Get emitter for event emission
     emitter = get_emitter_from_config(config)
     investigation_id = get_investigation_id_from_state(state)
 
     try:
-        # Create the case in TheHive
-        case_id = await _create_case(client, investigation)
+        # Create the case in TheHive. ``thehive_case_id`` is TheHive's
+        # external identifier — distinct from our ``investigation_id``
+        # (the LangGraph aggregate). The bulk case→investigation rename
+        # collapsed both to ``investigation_id``; restored here.
+        thehive_case_id = await _create_case(client, investigation)
 
-        if case_id:
-            investigation.thehive_case_id = case_id
+        if thehive_case_id:
+            investigation.thehive_case_id = thehive_case_id
             investigation.status = InvestigationStatus.ESCALATED
-            logger.info("case_created", case_id=case_id)
+            logger.info(
+                "thehive_case_created",
+                investigation_id=investigation_id,
+                thehive_case_id=thehive_case_id,
+            )
 
             # Emit thehive case created event
             if emitter and investigation_id:
                 try:
                     await emitter.emit_thehive_case_created(
                         investigation_id=investigation_id,
-                        case_id=case_id,
-                        case_number=None,  # Could extract from case_id if pattern known
+                        thehive_case_id=thehive_case_id,
+                        case_number=None,
                         title=investigation.title,
-                        idempotency_key=f"thehive-case-{investigation_id}-{case_id}",
+                        idempotency_key=f"thehive-case-{investigation_id}-{thehive_case_id}",
                     )
                 except Exception as emit_error:
                     logger.warning("event_emission_failed", error=str(emit_error))
@@ -87,12 +94,12 @@ async def thehive_worker_node(
     return state
 
 
-async def _create_case(client: Any, investigation: Investigation) -> str | None:
+async def _create_case(client: Any, investigation: InvestigationRunState) -> str | None:
     """Create a case in TheHive.
 
     Args:
         client: TheHive MCP client.
-        investigation: Investigation to create case from.
+        investigation: InvestigationRunState to create case from.
 
     Returns:
         Case ID if created, None otherwise.
@@ -121,13 +128,13 @@ async def _create_case(client: Any, investigation: Investigation) -> str | None:
 
         if result:
             # Try to extract case ID from result
-            case_id = _extract_case_id(result)
+            investigation_id = _extract_case_id(result)
 
             # If case was created successfully, add observables
-            if case_id:
-                await _add_observables_to_case(client, case_id, investigation)
+            if investigation_id:
+                await _add_observables_to_case(client, investigation_id, investigation)
 
-            return case_id
+            return investigation_id
 
         return None
 
@@ -137,14 +144,14 @@ async def _create_case(client: Any, investigation: Investigation) -> str | None:
 
 
 async def _add_observables_to_case(
-    client: Any, case_id: str, investigation: Investigation
+    client: Any, investigation_id: str, investigation: InvestigationRunState
 ) -> None:
     """Add observables to a TheHive case.
 
     Args:
         client: TheHive MCP client.
-        case_id: ID of the case to add observables to.
-        investigation: Investigation containing observables.
+        investigation_id: ID of the case to add observables to.
+        investigation: InvestigationRunState containing observables.
     """
     from soctalk.models.enums import ObservableType, Verdict
 
@@ -202,7 +209,7 @@ async def _add_observables_to_case(
             await client.call_tool(
                 "create_case_observable",
                 {
-                    "case_id": case_id,
+                    "investigation_id": investigation_id,
                     "data_type": thehive_type,
                     "data": observable.value,
                     "message": message.strip() if message else None,
@@ -214,21 +221,21 @@ async def _add_observables_to_case(
             added_values.add(observable.value)
             logger.debug(
                 "observable_added_to_case",
-                case_id=case_id,
+                investigation_id=investigation_id,
                 observable=observable.value,
                 type=thehive_type,
             )
         except Exception as e:
             logger.warning(
                 "failed_to_add_observable",
-                case_id=case_id,
+                investigation_id=investigation_id,
                 observable=observable.value,
                 error=str(e),
             )
 
     logger.info(
         "observables_added_to_case",
-        case_id=case_id,
+        investigation_id=investigation_id,
         count=len(added_values),
     )
 
@@ -347,11 +354,11 @@ def _parse_cases(result: str) -> list[dict[str, Any]]:
     return cases
 
 
-async def get_case_details(case_id: str) -> dict[str, Any] | None:
+async def get_case_details(investigation_id: str) -> dict[str, Any] | None:
     """Get details of a specific case.
 
     Args:
-        case_id: TheHive case ID.
+        investigation_id: TheHive case ID.
 
     Returns:
         Case details or None.
@@ -361,7 +368,7 @@ async def get_case_details(case_id: str) -> dict[str, Any] | None:
     try:
         result = await client.call_tool(
             "get_thehive_case_by_id",
-            {"case_id": case_id}
+            {"investigation_id": investigation_id}
         )
 
         if result:
@@ -378,5 +385,5 @@ async def get_case_details(case_id: str) -> dict[str, Any] | None:
         return None
 
     except Exception as e:
-        logger.error("failed_to_get_case", case_id=case_id, error=str(e))
+        logger.error("failed_to_get_case", investigation_id=investigation_id, error=str(e))
         return None

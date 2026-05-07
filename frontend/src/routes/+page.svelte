@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { api, type MetricsOverview, type HourlyMetricsResponse, type InvestigationSummary } from '$lib/api/client';
-	import { recentEvents } from '$lib/stores';
+	import { recentEvents, isMsspScope, authSession } from '$lib/stores';
 	import { browser } from '$app/environment';
 	import { formatDecision, formatAction, formatDuration, formatPhase, formatStatus, formatSeverity } from '$lib/utils/formatters';
+	import MsspDashboard from '$lib/components/MsspDashboard.svelte';
 
 	let metrics: MetricsOverview | null = null;
 	let hourlyData: HourlyMetricsResponse | null = null;
@@ -140,7 +141,16 @@
 			}
 		}
 
+		// One-shot guard so the reactive trigger below fires exactly
+		// once when auth + tenant-pinned scope land. Without this we
+		// hit a race: on first mount ``$authSession.user`` is null
+		// (auth/me hasn't resolved yet), which makes
+		// ``$isMsspScope`` false, which would trigger an early load
+		// for the wrong session. Wait for ``user`` to be known.
+		let loaded = false;
+
 		async function loadDashboard() {
+			loaded = true;
 			loading = true;
 			error = null;
 			try {
@@ -166,9 +176,18 @@
 			}
 		}
 
-		onMount(() => {
+		// No onMount here — auth might still be loading. The reactive
+		// watcher below fires the load exactly when (a) auth has
+		// resolved (``user`` populated) and (b) the session resolves
+		// to tenant scope (cross-tenant MSSP scope is owned by
+		// MsspDashboard, which renders in the {#if} branch above).
+		// This also handles the drill-in flow: same-route goto from
+		// MsspAnalytics doesn't remount the page, but the store
+		// update flips ``$isMsspScope`` and this watcher fires the
+		// per-tenant load.
+		$: if ($authSession.user && !$isMsspScope && !loaded) {
 			loadDashboard();
-		});
+		}
 
 	onDestroy(() => {
 		if (chart) {
@@ -298,6 +317,16 @@
 	<title>Dashboard - SocTalk</title>
 </svelte:head>
 
+<!--
+  Two dashboards behind one route. ``isMsspScope`` is true only when an
+  MSSP user has no current_tenant pin (cross-tenant view). Pinning a
+  tenant via "Open SOC" flips it false and falls through to the legacy
+  per-tenant dashboard below — same data shape canonical SocTalk has
+  always rendered. Customer roles never reach MSSP scope.
+-->
+{#if $isMsspScope}
+	<MsspDashboard />
+{:else}
 <div class="flex items-center justify-between mb-6">
 	<h1 class="h2">Dashboard</h1>
 	<button class="btn variant-soft" on:click={loadDashboard} disabled={loading}>
@@ -560,4 +589,5 @@
 			<p class="opacity-60 text-center py-8">No events yet. Events will appear here in real-time.</p>
 		{/if}
 	</div>
+{/if}
 {/if}

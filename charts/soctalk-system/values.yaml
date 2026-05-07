@@ -1,0 +1,130 @@
+install:
+  msspId: ''
+  msspName: ''
+  msspSlug: ''
+  installId: ''
+  installLabel: pilot-prod
+  # Bootstrap MSSP admin user. Created on first install if password is
+  # set (or pulled from existingSecret with key ``password``). Idempotent
+  # on upgrade — only seeds if the email is missing from the users table.
+  bootstrapAdmin:
+    email: ''
+    displayName: 'MSSP Admin'
+    password: ''
+    existingSecret: ''
+image:
+  registry: ghcr.io/gbrigandi
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+postgres:
+  enabled: true
+  storage:
+    size: 20Gi
+    storageClassName: ''
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+  external:
+    host: ''
+    port: 5432
+    database: soctalk
+    existingSecret: ''
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  tls:
+    secretName: soctalk-tls
+    issuerRef: letsencrypt-prod
+  hostnames:
+    mssp: ''
+    customer: ''
+  # Wildcard host for slug-driven per-tenant landing. Set to e.g.
+  # ``*.soctalk.ai``; the canonical app uses
+  # ``window.location.hostname`` to detect the slug and pin the
+  # session via /api/public/tenant-by-slug. Empty disables.
+  tenantWildcard: ''
+oidc:
+  trustedHeaderUser: X-Forwarded-User
+  trustedHeaderEmail: X-Forwarded-Email
+  trustedHeaderGroups: X-Forwarded-Groups
+  trustedProxyCIDRs:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+defaults:
+  llm:
+    provider: openai-compatible
+    baseUrl: https://api.openai.com/v1
+    model: gpt-4o
+# Install-shared LLM credentials. The L1 controller mirrors this key
+# into each tenant namespace at provisioning (Secret name
+# ``tenant-llm-key``), so every L2 runs-worker resolves the LLM
+# secret in its own namespace via secretKeyRef. Production: provide
+# ``existingSecret`` pointing to a Secret with key
+# ``anthropic-api-key`` or ``openai-api-key``. Dev / lab installs:
+# pass the key inline via ``llm.apiKey``.
+llm:
+  existingSecret: ''
+  provider: openai
+  apiKey: ''
+# Per-tenant provisioning. The api pod ships with both charts bundled
+# under /app/charts/ — change these to OCI refs once the charts are
+# published.
+tenantProvisioning:
+  tenantChartRef: /app/charts/soctalk-tenant
+  tenantChartVersion: 0.1.0
+  wazuhChartPath: /app/charts/wazuh
+  adapterImageRepo: ''
+  adapterImageTag: ''
+  # runs-worker image (per-tenant L2 LangGraph worker). Same Python
+  # build as the L1 orchestrator; entrypoint flips to
+  # ``python -m soctalk.runs_worker.main``.
+  runsWorkerImageRepo: ''
+  runsWorkerImageTag: ''
+auth:
+  # Secure flag on the session cookie. Production with TLS leaves this
+  # true; HTTP-only dev installs flip to false so browsers actually
+  # return the cookie.
+  cookieSecure: true
+  # Optional comma-separated SOCTALK_PUBLIC_ORIGIN override for CSRF.
+  # When unset the chart derives it from ingress.hostnames.{mssp,customer}
+  # (no port). Set this when the browser's effective origin includes a
+  # non-standard port — e.g. a local k3d profile mapping ingress to
+  # ``127.0.0.1:8080``: ``http://labz.soctalk.ai:8080``.
+  publicOriginOverride: ''
+resources:
+  api:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: '2'
+      memory: 2Gi
+    replicas: 1
+  appUi:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+    replicas: 1
+admission:
+  engine: vap
+licensing:
+  enabled: false
+telemetry:
+  enabled: false
+rbac:
+  controller:
+    create: true
+    allowClusterNamespaceOps: true
+networkPolicy:
+  cilium: false
+preInstallCheck:
+  enabled: true

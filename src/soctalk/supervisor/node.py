@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.config import get_config
+from soctalk.graph import budget as token_budget
 from soctalk.llm import create_chat_model
 from soctalk.models.enums import Phase
 from soctalk.models.state import SecOpsState, SupervisorDecision
@@ -50,6 +51,26 @@ async def supervisor_node(
 
     app_config = get_config()
 
+    token_budget.ensure(state)
+    if token_budget.over_budget(state):
+        logger.warning(
+            "token_budget_exceeded",
+            tokens_used=state["tokens_used"],
+            tokens_budget=state["tokens_budget"],
+        )
+        state["supervisor_decision"] = SupervisorDecision(
+            next_action="CLOSE",
+            action_reasoning=(
+                f"token_budget_exceeded: used={state['tokens_used']} "
+                f"budget={state['tokens_budget']}"
+            ),
+            tp_confidence=0.0,
+            confidence_reasoning="case_run terminated by per-run token cap",
+            specific_instructions=None,
+        ).model_dump()
+        state["budget_terminated"] = True
+        return state
+
     # Increment iteration counter
     iteration = state.get("iteration_count", 0) + 1
     state["iteration_count"] = iteration
@@ -71,7 +92,7 @@ async def supervisor_node(
 
     # Call LLM for decision
     try:
-        decision = await _get_supervisor_decision(app_config, context_summary)
+        decision = await _get_supervisor_decision(app_config, context_summary, state)
         state["supervisor_decision"] = decision.model_dump()
 
         # Update phase based on decision
@@ -284,7 +305,11 @@ def _build_context_summary(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-async def _get_supervisor_decision(config: Any, context_summary: str) -> SupervisorDecision:
+async def _get_supervisor_decision(
+    config: Any,
+    context_summary: str,
+    state: dict[str, Any] | None = None,
+) -> SupervisorDecision:
     """Get decision from LLM.
 
     Args:
@@ -307,6 +332,8 @@ async def _get_supervisor_decision(config: Any, context_summary: str) -> Supervi
     ]
 
     response = await llm.ainvoke(messages)
+    if state is not None:
+        token_budget.track(state, response)
     response_text = response.content
 
     # Parse JSON response

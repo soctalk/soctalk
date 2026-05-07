@@ -1,0 +1,128 @@
+{{/*
+SocTalk control-plane RBAC: cluster-scoped namespace verbs and workload verbs
+needed to provision tenant namespaces. Per docs/v1/P0-1-security-model.md §B3.
+
+The controller needs cluster-scoped namespace verbs. The system chart installs
+an admission guard when admission.engine=vap so this ServiceAccount can only
+manage tenant-* namespaces labeled tenant=true and managed-by=soctalk, and
+mutate namespaced resources only in soctalk-system or tenant-* namespaces.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+rules:
+  # Namespace operations are cluster-scoped, with tenant-* constraints enforced
+  # by the admission policy when admission.engine=vap.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  # Workload verbs used by Helm and the tenant lifecycle controller.
+  - apiGroups: [""]
+    resources:
+      - "pods"
+      - "services"
+      - "configmaps"
+      - "secrets"
+      - "persistentvolumeclaims"
+      - "serviceaccounts"
+      - "events"
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates", "issuers"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  # StorageClass preflight: the controller calls
+  # ``StorageV1Api.read_storage_class`` before applying the persistent
+  # profile to confirm the configured class exists. Without this verb
+  # preflight 403s on RBAC-strict clusters.
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  # Helm releases are tracked via ConfigMaps / Secrets; covered above.
+  # Pod logs for health checks:
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-controller
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-controller
+    namespace: {{ .Release.Namespace }}
+---
+{{/* Narrow API pod SA retained for future split of lifecycle work into workers. */}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-api
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-api
+    namespace: {{ .Release.Namespace }}

@@ -2,10 +2,14 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api, type AuthSession } from '$lib/api/client';
-	import { addToast, authSession } from '$lib/stores';
+	import { addToast, authSession, tenantContext } from '$lib/stores';
 
-	let username = '';
-	let password = '';
+	// Dev convenience: pre-fill the bootstrap admin creds when running
+	// vite dev so you can hit Sign in immediately. Stripped from
+	// production builds — ``import.meta.env.DEV`` is constant-folded
+	// by Vite so the strings never reach a built bundle.
+	let email = import.meta.env.DEV ? 'auto1969@example.test' : '';
+	let password = import.meta.env.DEV ? 'dev-admin-pw-12345' : '';
 	let loading = true;
 	let submitting = false;
 	let mode: AuthSession['mode'] = 'none';
@@ -35,9 +39,26 @@
 	async function submit() {
 		submitting = true;
 		try {
-			const res = await api.auth.login({ username, password });
-			authSession.set({ enabled: true, mode: 'static', user: res.user });
-			await goto('/');
+			// Only pin tenant_slug when the URL is a *tenant* slug. MSSP
+			// slugs identify the install, not a tenant scope — login
+			// resolves to the user's own tenant_id (or cross-tenant for
+			// mssp_admin) without a slug pin.
+			const res = await api.auth.login({
+				email,
+				password,
+				tenant_slug:
+					$tenantContext?.kind === 'tenant' ? $tenantContext.slug : null
+			});
+			authSession.set({ enabled: true, mode: 'internal', user: res.user });
+			// Bootstrap admins land with must_change=true. Until they
+			// clear it, the auth middleware rejects every non-whitelisted
+			// API call — sending them to /account/password is the only
+			// usable surface, so don't drop them on the dashboard.
+			if (res.must_change) {
+				await goto('/account/password?must_change=1');
+			} else {
+				await goto('/');
+			}
 		} catch (e) {
 			addToast({
 				type: 'error',
@@ -68,8 +89,19 @@
 <div class="min-h-[calc(100vh-2rem)] flex items-center justify-center p-4">
 	<div class="card max-w-md w-full p-6 space-y-4">
 		<div class="space-y-1">
+			{#if $tenantContext?.branding.logo_url}
+				<img src={$tenantContext.branding.logo_url} alt="" class="h-10 mb-2" />
+			{/if}
 			<h1 class="h2">Sign in</h1>
-			<p class="text-sm opacity-70">SocTalk Control Plane</p>
+			<p class="text-sm opacity-70">
+				{$tenantContext?.branding.app_name ?? 'SocTalk Control Plane'}
+			</p>
+			{#if $tenantContext}
+				<p class="text-xs opacity-50">
+					{$tenantContext.kind === 'mssp' ? 'MSSP' : 'Tenant'}:
+					<code>{$tenantContext.slug}</code>
+				</p>
+			{/if}
 		</div>
 
 		{#if loading}
@@ -90,8 +122,8 @@
 		{:else}
 			<form class="space-y-3" on:submit|preventDefault={submit}>
 				<label class="label">
-					<span class="font-medium">Username</span>
-					<input class="input" autocomplete="username" bind:value={username} />
+					<span class="font-medium">Email</span>
+					<input type="email" class="input" autocomplete="email" bind:value={email} />
 				</label>
 				<label class="label">
 					<span class="font-medium">Password</span>

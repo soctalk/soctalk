@@ -9,7 +9,7 @@ import structlog
 from soctalk.hil.base import HILBackend, HILConnectionError
 from soctalk.hil.models import HILRequest, HILResponse, EnrichmentSummary, MISPContextSummary
 from soctalk.hil.inquiry import handle_inquiry
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 from soctalk.models.verdict import Verdict
 from soctalk.models.enums import VerdictDecision
 
@@ -21,7 +21,7 @@ class HILService:
 
     This service:
     - Manages the lifecycle of HIL backends
-    - Converts Investigation/Verdict to HILRequest
+    - Converts InvestigationRunState/Verdict to HILRequest
     - Provides a simple API for the graph nodes
     """
 
@@ -102,7 +102,7 @@ class HILService:
 
     async def request_approval(
         self,
-        investigation: Investigation,
+        investigation: InvestigationRunState,
         verdict: Optional[Verdict] = None,
         channel: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -151,12 +151,12 @@ class HILService:
 
     def _build_request(
         self,
-        investigation: Investigation,
+        investigation: InvestigationRunState,
         verdict: Optional[Verdict],
         channel: Optional[str],
         timeout: Optional[float],
     ) -> HILRequest:
-        """Build HILRequest from Investigation and Verdict."""
+        """Build HILRequest from InvestigationRunState and Verdict."""
         from soctalk.models.enums import Verdict as VerdictEnum
 
         # Count enrichment verdicts and build enrichment summaries

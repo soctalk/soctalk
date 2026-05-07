@@ -24,8 +24,12 @@ configure_wazuh() {
         exit 1
     fi
 
+    # Use hostname as agent name for unique identification when scaling
+    WAZUH_AGENT_NAME="${WAZUH_AGENT_NAME:-$(hostname)}"
+    export WAZUH_AGENT_NAME
+
     log "Wazuh Manager: ${WAZUH_MANAGER}"
-    log "Agent Name: ${WAZUH_AGENT_NAME:-mock-endpoint}"
+    log "Agent Name: ${WAZUH_AGENT_NAME}"
 
     cat > /var/ossec/etc/ossec.conf << EOF
 <ossec_config>
@@ -85,7 +89,7 @@ EOF
 # Register and start agent
 start_agent() {
     log "Registering agent with Wazuh manager..."
-    /var/ossec/bin/agent-auth -m "$WAZUH_MANAGER" -A "${WAZUH_AGENT_NAME:-mock-endpoint}" 2>&1 || {
+    /var/ossec/bin/agent-auth -m "$WAZUH_MANAGER" -A "${WAZUH_AGENT_NAME}" 2>&1 || {
         log "Registration note: agent may already exist"
     }
 

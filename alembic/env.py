@@ -7,7 +7,9 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 from sqlmodel import SQLModel
 
-# Import all models to ensure they are registered with SQLModel metadata
+# Import all models — v0 legacy (investigations/events/etc.) + v1 native IR.
+# Autogenerate walks SQLModel.metadata, so every table-bearing module must
+# be imported here or it will be silently dropped from migrations.
 from soctalk.persistence.models import (  # noqa: F401
     AnalyzerStats,
     Event,
@@ -17,6 +19,14 @@ from soctalk.persistence.models import (  # noqa: F401
     PendingReview,
     RuleStats,
 )
+
+# v1 native IR + tenancy + auth models. Imported so they're registered
+# with SQLModel.metadata — not strictly required for the current
+# raw-SQL migrations, but kept so ``alembic revision --autogenerate``
+# can see the full surface if we need it again.
+import soctalk.core.ir.models  # noqa: F401
+import soctalk.core.tenancy.models  # noqa: F401
+import soctalk.core.auth.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -78,7 +88,27 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
+    from sqlalchemy import text
+
     with connectable.connect() as connection:
+        # Some revision ids in this chain exceed alembic's default
+        # VARCHAR(32) for ``alembic_version.version_num`` (e.g.
+        # ``add_llm_settings_to_user_settings`` = 37 chars). Pre-create
+        # the version table with a wider column on empty DBs; on
+        # already-migrated DBs widen it in place. Both paths must land
+        # before alembic tries to write to the table.
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS alembic_version (
+              version_num VARCHAR(64) NOT NULL,
+              CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+            )
+        """))
+        connection.execute(text(
+            "ALTER TABLE alembic_version "
+            "ALTER COLUMN version_num TYPE VARCHAR(64)"
+        ))
+        connection.commit()
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

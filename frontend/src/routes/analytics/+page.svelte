@@ -3,6 +3,8 @@
 	import { browser } from '$app/environment';
 	import { api, type AnalyticsSummary } from '$lib/api/client';
 	import { formatDecision, formatSeverity, formatDuration, formatPercent } from '$lib/utils/formatters';
+	import { isMsspScope, authSession } from '$lib/stores';
+	import MsspAnalytics from '$lib/components/MsspAnalytics.svelte';
 
 	let analytics: AnalyticsSummary | null = null;
 	let loading = true;
@@ -20,7 +22,14 @@
 	let reviewPieChart: any = null;
 	let outcomeChart: any = null;
 
+	// One-shot guard. Without this we'd race the auth load: first
+	// mount has ``$authSession.user`` null, ``isMsspScope`` therefore
+	// false, which would trigger an early load for the wrong
+	// session. Wait for the user to be known.
+	let loaded = false;
+
 	async function loadAnalytics() {
+		loaded = true;
 		loading = true;
 		error = null;
 		try {
@@ -231,9 +240,15 @@
 		initCharts();
 	}
 
-	onMount(() => {
+	// No onMount here — auth might still be loading. Reactive watcher
+	// fires the load exactly when auth resolves AND scope resolves
+	// to tenant-pinned (cross-tenant MSSP scope is owned by
+	// MsspAnalytics in the {#if} branch above). Also handles drill-in
+	// from MsspAnalytics — same-route goto doesn't remount, but
+	// the store update flips ``$isMsspScope`` and this watcher fires.
+	$: if ($authSession.user && !$isMsspScope && !loaded) {
 		loadAnalytics();
-	});
+	}
 
 	onDestroy(() => {
 		if (confidenceChart) confidenceChart.destroy();
@@ -247,6 +262,16 @@
 	<title>Analytics - SocTalk</title>
 </svelte:head>
 
+<!--
+  Scope-aware Analytics. Cross-tenant MSSP scope (no current_tenant
+  pin, mssp_admin/analyst) gets the trend-shaped fleet view —
+  longitudinal companion to the dashboard. Anyone scoped to a single
+  tenant (MSSP user pinned via "Open SOC", or customer roles) gets
+  the legacy AI-summary analytics.
+-->
+{#if $isMsspScope}
+	<MsspAnalytics />
+{:else}
 <!-- Header with Period Selector -->
 <div class="flex items-center justify-between mb-6">
 	<h1 class="h2">AI Analytics</h1>
@@ -491,4 +516,5 @@
 			</div>
 		</div>
 	</section>
+{/if}
 {/if}

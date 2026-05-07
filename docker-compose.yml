@@ -71,21 +71,17 @@ services:
     restart: unless-stopped
 
   mock-endpoint:
-    build:
-      context: ./attack-simulator
-      dockerfile: Dockerfile
-    container_name: soctalk-mock-endpoint
-    hostname: mock-endpoint-01
+    image: soctalk-mock-endpoint:latest
     privileged: true
     environment:
       WAZUH_MANAGER: ${WAZUH_API_HOST}
-      WAZUH_AGENT_NAME: mock-endpoint-01
+      WAZUH_AGENT_NAME: ""
       ATTACK_DELAY: 10
       ATTACK_INTERVAL: 300
     env_file:
       - .env
     volumes:
-      - attack_logs:/var/log/attack-simulator
+      - ./attack-simulator/scripts/entrypoint.sh:/opt/scripts/entrypoint.sh:ro
     restart: unless-stopped
     profiles:
       - testing

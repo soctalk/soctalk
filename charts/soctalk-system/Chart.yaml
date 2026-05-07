@@ -1,0 +1,42 @@
+apiVersion: v2
+name: soctalk-system
+description: |
+  SocTalk V1 control plane: installs the MSSP-deployed SocTalk services
+  (API, MSSP UI, Customer UI, Postgres, Orchestrator) plus scoped RBAC.
+  Manages tenant-* namespaces via an in-cluster Helm SDK integration.
+
+type: application
+
+# Chart version is independent of application version.
+version: 0.1.0-alpha.1
+
+# Application version (SocTalk itself).
+appVersion: 0.1.0
+
+kubeVersion: ">=1.28.0-0"
+
+home: https://github.com/gbrigandi/soctalk
+sources:
+  - https://github.com/gbrigandi/soctalk
+
+maintainers:
+  - name: Gianluca Brigandi
+    url: https://github.com/gbrigandi
+
+keywords:
+  - siem
+  - soc
+  - security
+  - mssp
+  - wazuh
+  - thehive
+  - cortex
+  - langgraph
+  - llm
+
+annotations:
+  category: Security
+  licenses: MIT
+
+# Postgres could be externalized or kept in-chart; current default is in-chart StatefulSet.
+dependencies: []

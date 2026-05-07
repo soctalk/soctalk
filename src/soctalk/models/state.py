@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from soctalk.models.enums import Phase, HumanDecision
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 from soctalk.models.observables import Observable
 from soctalk.models.verdict import Verdict
 
@@ -44,8 +44,8 @@ class SecOpsState(BaseModel):
     """
 
     # Current investigation
-    investigation: Investigation = Field(
-        default_factory=Investigation,
+    investigation: InvestigationRunState = Field(
+        default_factory=InvestigationRunState,
         description="The current investigation being processed",
     )
 
@@ -83,7 +83,7 @@ class SecOpsState(BaseModel):
         None, description="Additional feedback from human"
     )
 
-    # Investigation guidance (from verdict if needs more info)
+    # InvestigationRunState guidance (from verdict if needs more info)
     investigation_guidance: Optional[list[str]] = Field(
         None, description="Guidance for additional investigation"
     )
@@ -138,7 +138,7 @@ class SecOpsState(BaseModel):
             Context summary string.
         """
         lines = [
-            "## Current Investigation State",
+            "## Current InvestigationRunState State",
             "",
             f"**Phase:** {self.current_phase.value}",
             f"**Iteration:** {self.iteration_count}",
@@ -201,7 +201,7 @@ class SecOpsState(BaseModel):
         return "\n".join(lines)
 
 
-def create_initial_state(investigation: Investigation) -> dict[str, Any]:
+def create_initial_state(investigation: InvestigationRunState) -> dict[str, Any]:
     """Create initial state dictionary for LangGraph.
 
     Args:

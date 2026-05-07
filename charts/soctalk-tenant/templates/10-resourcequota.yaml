@@ -1,0 +1,39 @@
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.resourceQuota.requests.cpu | quote }}
+    requests.memory: {{ .Values.resourceQuota.requests.memory | quote }}
+    limits.cpu: {{ .Values.resourceQuota.limits.cpu | quote }}
+    limits.memory: {{ .Values.resourceQuota.limits.memory | quote }}
+    persistentvolumeclaims: {{ .Values.resourceQuota.persistentVolumeClaims | quote }}
+    pods: {{ .Values.resourceQuota.pods | quote }}
+{{- end }}
+{{- if .Values.limitRange.enabled }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-limits
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: {{ .Values.limitRange.defaults.memory | quote }}
+        cpu: {{ .Values.limitRange.defaults.cpu | quote }}
+      defaultRequest:
+        memory: {{ .Values.limitRange.defaultRequests.memory | quote }}
+        cpu: {{ .Values.limitRange.defaultRequests.cpu | quote }}
+      max:
+        memory: {{ .Values.limitRange.max.memory | quote }}
+        cpu: {{ .Values.limitRange.max.cpu | quote }}
+{{- end }}

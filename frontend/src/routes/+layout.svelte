@@ -4,15 +4,28 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
-	import { initSSE, closeSSE, sseStatus, pendingReviewsCount, authSession, canReview, isAuthenticated } from '$lib/stores';
+	import {
+		initSSE,
+		closeSSE,
+		sseStatus,
+		pendingReviewsCount,
+		authSession,
+		canReview,
+		isAuthenticated,
+		isMsspScope,
+		isMsspUser,
+		tenantContext,
+		detectSlugFromHostname
+	} from '$lib/stores';
 	import Toast from '$lib/components/Toast.svelte';
 	import { AppShell, AppBar, AppRail, AppRailAnchor, AppRailTile } from '@skeletonlabs/skeleton';
 
 	// Navigation items
 	const navItems = [
 		{ href: '/', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+		{ href: '/tenants', label: 'Tenants', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4', mssp: true },
 		{ href: '/investigations', label: 'Investigations', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
-		{ href: '/review', label: 'Reviews', icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z', badge: true },
+		{ href: '/review', label: 'Reviews', icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z', badge: true, review: true },
 		{ href: '/analytics', label: 'Analytics', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
 		{ href: '/audit', label: 'Audit Log', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
 		{ href: '/settings', label: 'Settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' }
@@ -35,6 +48,20 @@
 	}
 
 	onMount(async () => {
+		// Slug-driven landing: extract leading slug from the host and
+		// let the server decide whether it's an MSSP or a tenant
+		// (single endpoint /api/public/scope-by-slug). Failures are
+		// non-fatal — fall through to generic SocTalk branding.
+		try {
+			const slug = detectSlugFromHostname(window.location.hostname);
+			if (slug) {
+				const scope = await api.public.scopeBySlug(slug);
+				tenantContext.set(scope);
+			}
+		} catch (e) {
+			if (import.meta.env.DEV) console.warn('[Slug] resolution failed:', e);
+		}
+
 		try {
 			const session = await api.auth.session();
 			authSession.set(session);
@@ -67,7 +94,27 @@
 		}
 	}
 
-	$: visibleNavItems = navItems.filter((item) => (item.href === '/review' ? $canReview : true));
+	// Scope-chip: lets MSSP users clear an active tenant pin and return
+	// to the cross-tenant view; hidden for tenant-bound users (whose
+	// scope is fixed to their home tenant). After the API switch we
+	// re-navigate to the dashboard with ``invalidateAll`` so the
+	// currently-rendered page data (loaded under the old pin) refreshes
+	// against the new cross-tenant session.
+	async function clearTenantScope() {
+		try {
+			const updated = await api.auth.assumeTenant(null);
+			authSession.update((s) => ({ ...s, user: updated }));
+			await goto('/', { invalidateAll: true });
+		} catch (e) {
+			if (import.meta.env.DEV) console.error('[Scope] clear failed:', e);
+		}
+	}
+
+	$: visibleNavItems = navItems.filter((item) => {
+		if (item.review && !$canReview) return false;
+		if (item.mssp && !$isMsspScope) return false;
+		return true;
+	});
 </script>
 
 {#if currentPath === '/login'}
@@ -171,7 +218,42 @@
 			<svelte:fragment slot="trail">
 				<div class="flex items-center gap-3">
 					{#if $authSession.enabled && $authSession.user}
-						<span class="text-sm opacity-70">{$authSession.user.username}</span>
+						<!-- Scope chip: makes "all tenants" vs "single tenant"
+						     visually unambiguous so MSSP users never confuse
+						     cross-tenant context for a single-tenant SIEM. -->
+						{#if $authSession.user.current_tenant && ($authSession.user.current_tenant_display_name || $authSession.user.current_tenant_slug)}
+							<div class="flex items-center gap-1">
+								<span class="badge variant-filled-warning text-xs">
+									Tenant:
+									{$authSession.user.current_tenant_display_name ||
+										$authSession.user.current_tenant_slug}
+								</span>
+								{#if $isMsspUser}
+									<button
+										type="button"
+										class="btn btn-sm variant-ghost-warning text-xs"
+										title="Clear tenant pin and return to cross-tenant view"
+										on:click={clearTenantScope}
+									>
+										Clear
+									</button>
+								{/if}
+							</div>
+						{:else if $isMsspScope}
+							<a
+								href="/tenants"
+								class="badge variant-soft-primary text-xs"
+								title="Cross-tenant view — pick a tenant from /tenants to scope down"
+							>
+								All tenants
+							</a>
+						{/if}
+						<div class="flex flex-col items-end">
+							<span class="text-sm opacity-90">{$authSession.user.email}</span>
+							<span class="text-xs opacity-60">
+								{$authSession.user.role}
+							</span>
+						</div>
 						<button type="button" class="btn btn-sm variant-ghost-surface" on:click={logout}>
 							Log out
 						</button>

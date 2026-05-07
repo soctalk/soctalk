@@ -1,0 +1,377 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.resources.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "soctalk-system.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: {{ .Release.Name }}-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        # Secret volumes are mounted group-readable for this non-root process.
+        fsGroup: 10001
+      initContainers:
+        # Schema migrations + per-role password sync + install bootstrap.
+        #
+        # alembic v1_0001 creates the soctalk_app/soctalk_mssp roles with no
+        # password (they pre-existed in the CI fixture). In-cluster the chart
+        # generates random passwords in the postgres-{app,mssp}-creds Secrets;
+        # we ALTER ROLE here to bind those passwords to the roles, since the
+        # DBSessionMiddleware connects with DATABASE_URL_APP at request time.
+        #
+        # The bootstrap step then upserts the install's Organization row
+        # (so /api/mssp/tenants/* can find it) and, if an admin password
+        # is provided in values.install.bootstrapAdmin, creates the first
+        # MSSP admin user idempotently.
+        - name: db-init
+          image: {{ include "soctalk-system.image" (dict "global" .Values.image "component" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-admin-creds
+                  key: url
+            - name: SOCTALK_APP_PW
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-app-creds
+                  key: password
+            - name: SOCTALK_MSSP_PW
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-mssp-creds
+                  key: password
+            - name: SOCTALK_INSTALL_MSSP_ID
+              value: {{ .Values.install.msspId | quote }}
+            - name: SOCTALK_INSTALL_MSSP_NAME
+              value: {{ .Values.install.msspName | quote }}
+            - name: SOCTALK_INSTALL_MSSP_SLUG
+              value: {{ .Values.install.msspSlug | quote }}
+            - name: SOCTALK_INSTALL_ID
+              value: {{ .Values.install.installId | quote }}
+            - name: SOCTALK_INSTALL_LABEL
+              value: {{ .Values.install.installLabel | quote }}
+            {{- $ba := default dict .Values.install.bootstrapAdmin }}
+            {{- $baSecret := default (printf "%s-bootstrap-admin" .Release.Name) $ba.existingSecret }}
+            {{- if or $ba.password $ba.existingSecret }}
+            - name: SOCTALK_BOOTSTRAP_ADMIN_DISPLAY_NAME
+              value: {{ default "MSSP Admin" $ba.displayName | quote }}
+            - name: SOCTALK_BOOTSTRAP_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $baSecret | quote }}
+                  key: email
+            - name: SOCTALK_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $baSecret | quote }}
+                  key: password
+            {{- end }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              python - <<'PY'
+              import os, time, psycopg2
+              dsn = os.environ["DATABASE_URL"].replace("+asyncpg", "")
+              for i in range(60):
+                  try:
+                      psycopg2.connect(dsn).close()
+                      break
+                  except Exception as e:
+                      print(f"postgres not ready ({e}); retry {i+1}/60", flush=True)
+                      time.sleep(2)
+              else:
+                  raise SystemExit("postgres unreachable after 120s")
+              PY
+              echo "running alembic upgrade head"
+              alembic upgrade head
+              echo "binding role passwords"
+              python - <<'PY'
+              import os, psycopg2
+              dsn = os.environ["DATABASE_URL"].replace("+asyncpg", "")
+              conn = psycopg2.connect(dsn); conn.autocommit = True
+              with conn.cursor() as c:
+                  c.execute("ALTER ROLE soctalk_app WITH PASSWORD %s", (os.environ["SOCTALK_APP_PW"],))
+                  c.execute("ALTER ROLE soctalk_mssp WITH PASSWORD %s", (os.environ["SOCTALK_MSSP_PW"],))
+              print("role passwords bound")
+              PY
+              echo "bootstrapping install rows"
+              python - <<'PY'
+              import os, re, uuid, psycopg2
+              dsn = os.environ["DATABASE_URL"].replace("+asyncpg", "")
+              mssp_id = os.environ["SOCTALK_INSTALL_MSSP_ID"]
+              mssp_name = os.environ["SOCTALK_INSTALL_MSSP_NAME"]
+              install_id = os.environ["SOCTALK_INSTALL_ID"]
+              install_label = os.environ.get("SOCTALK_INSTALL_LABEL") or None
+              # MSSP slug for slug-driven URLs (<slug>.mssp.<base>).
+              # Prefer an explicit override; fall back to slugified
+              # mssp_name; final fallback hashes the mssp_id so the
+              # install always has a unique stable slug.
+              slug = os.environ.get("SOCTALK_INSTALL_MSSP_SLUG") or ""
+              if not slug:
+                  slug = re.sub(r"[^a-z0-9-]+", "-", mssp_name.lower()).strip("-")
+              if not slug:
+                  slug = "mssp-" + mssp_id.replace("-", "")[:8]
+              conn = psycopg2.connect(dsn); conn.autocommit = True
+              with conn.cursor() as c:
+                  # Upsert the install's Organization row keyed on install_id.
+                  # SQLModel default_factory is Python-side, so we generate
+                  # the UUID here for new rows.
+                  c.execute(
+                      """
+                      INSERT INTO organizations (id, mssp_id, mssp_name, install_id, install_label, slug)
+                      VALUES (%s, %s, %s, %s, %s, %s)
+                      ON CONFLICT (install_id) DO UPDATE SET
+                          mssp_name = EXCLUDED.mssp_name,
+                          install_label = EXCLUDED.install_label,
+                          slug = COALESCE(organizations.slug, EXCLUDED.slug),
+                          updated_at = now()
+                      """,
+                      (str(uuid.uuid4()), mssp_id, mssp_name, install_id, install_label, slug),
+                  )
+                  email = os.environ.get("SOCTALK_BOOTSTRAP_ADMIN_EMAIL")
+                  password = os.environ.get("SOCTALK_BOOTSTRAP_ADMIN_PASSWORD")
+                  display = os.environ.get("SOCTALK_BOOTSTRAP_ADMIN_DISPLAY_NAME", "MSSP Admin")
+                  if email and password:
+                      from soctalk.core.auth.passwords import hash_password
+                      hashed = hash_password(password)
+                      c.execute("SELECT id FROM users WHERE email = %s", (email,))
+                      row = c.fetchone()
+                      if row is None:
+                          new_id = str(uuid.uuid4())
+                          c.execute(
+                              """
+                              INSERT INTO users
+                                (id, email, display_name, user_type, role, active)
+                              VALUES (%s, %s, %s, 'mssp', 'mssp_admin', TRUE)
+                              """,
+                              (new_id, email, display),
+                          )
+                          c.execute(
+                              """
+                              INSERT INTO password_credentials (user_id, password_hash, must_change)
+                              VALUES (%s, %s, FALSE)
+                              """,
+                              (new_id, hashed),
+                          )
+                          print(f"bootstrap_admin_created email={email}")
+                      else:
+                          user_id = row[0]
+                          # Rotation path: replace credential when secret rotates.
+                          c.execute(
+                              """
+                              INSERT INTO password_credentials (user_id, password_hash, must_change)
+                              VALUES (%s, %s, FALSE)
+                              ON CONFLICT (user_id) DO UPDATE SET
+                                  password_hash = EXCLUDED.password_hash,
+                                  must_change = FALSE,
+                                  updated_at = now()
+                              """,
+                              (user_id, hashed),
+                          )
+                          print(f"bootstrap_admin_password_reset email={email}")
+                  else:
+                      print("bootstrap_admin skipped (no email/password)")
+              PY
+      containers:
+        - name: api
+          image: {{ include "soctalk-system.image" (dict "global" .Values.image "component" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - uvicorn
+            - soctalk.core.api.app_v1:app
+            - "--host=0.0.0.0"
+            - "--port=8000"
+            - "--workers=1"
+            - "--proxy-headers"
+            - "--forwarded-allow-ips=*"
+          ports:
+            - containerPort: 8000
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: SOCTALK_INSTALL_MSSP_ID
+              value: {{ .Values.install.msspId | quote }}
+            - name: SOCTALK_INSTALL_ID
+              value: {{ .Values.install.installId | quote }}
+            - name: SOCTALK_INSTALL_LABEL
+              value: {{ .Values.install.installLabel | quote }}
+            - name: DATABASE_URL_APP
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-app-creds
+                  key: url
+            - name: DATABASE_URL_MSSP
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgres-mssp-creds
+                  key: url
+            - name: OIDC_TRUSTED_PROXY_CIDRS
+              value: {{ join "," .Values.oidc.trustedProxyCIDRs | quote }}
+            - name: OIDC_TRUSTED_HEADER_USER
+              value: {{ .Values.oidc.trustedHeaderUser | quote }}
+            - name: OIDC_TRUSTED_HEADER_EMAIL
+              value: {{ .Values.oidc.trustedHeaderEmail | quote }}
+            - name: OIDC_TRUSTED_HEADER_GROUPS
+              value: {{ .Values.oidc.trustedHeaderGroups | quote }}
+            - name: JWT_SIGNING_KEY_PATH
+              value: /run/secrets/soctalk/jwt-key
+            - name: ADAPTER_SIGNING_KEY_PATH
+              value: /run/secrets/adapter/signing_key
+            - name: SOCTALK_LLM_PROVIDER_DEFAULT
+              value: {{ .Values.defaults.llm.provider | quote }}
+            - name: SOCTALK_LLM_BASE_URL_DEFAULT
+              value: {{ .Values.defaults.llm.baseUrl | quote }}
+            - name: SOCTALK_LLM_MODEL_DEFAULT
+              value: {{ .Values.defaults.llm.model | quote }}
+            # Tenant chart refs default to the bundled local paths inside
+            # the api image. Operators with a published chart can override
+            # these via values to point at OCI refs (the chart envs flow
+            # through to ``ControllerSettings.from_env``).
+            {{- $scheme := ternary "https" "http" (ne (.Values.auth.cookieSecure | toString) "false") }}
+            {{- if eq (.Values.auth.cookieSecure | toString) "false" }}
+            - name: SOCTALK_AUTH_COOKIE_SECURE
+              value: "0"
+            {{- else }}
+            - name: SOCTALK_AUTH_COOKIE_SECURE
+              value: "1"
+            {{- end }}
+            {{- /*
+                Build the trusted-origin list. ``auth.publicOriginOverride``
+                wins when set (non-default ingress ports — local k3d on
+                :8080, port-forwarded labs, etc.) since
+                ``SOCTALK_PUBLIC_ORIGIN`` derived from Ingress hostnames
+                cannot include a port. Otherwise: MSSP host always, plus
+                customer host if configured. CSRF code parses CSV.
+            */}}
+            {{- $origins := list }}
+            {{- if .Values.auth.publicOriginOverride }}
+            {{-   $origins = splitList "," .Values.auth.publicOriginOverride }}
+            {{- else }}
+            {{-   $origins = list (printf "%s://%s" $scheme .Values.ingress.hostnames.mssp) }}
+            {{-   if and .Values.ingress.hostnames.customer (ne .Values.ingress.hostnames.customer .Values.ingress.hostnames.mssp) }}
+            {{-     $origins = append $origins (printf "%s://%s" $scheme .Values.ingress.hostnames.customer) }}
+            {{-   end }}
+            {{- end }}
+            - name: SOCTALK_PUBLIC_ORIGIN
+              value: {{ join "," $origins | quote }}
+            {{- /*
+                Install LLM Secret name. Operators who pre-provision the Secret
+                set ``llm.existingSecret``; otherwise the chart's 60-secrets.yaml
+                renders ``<release>-llm-api-key``. The provisioning controller
+                copies the key from this Secret into each tenant namespace, so
+                it must know the actual name (not a hardcoded fallback).
+            */}}
+            - name: SOCTALK_INSTALL_LLM_SECRET_NAME
+              value: {{ .Values.llm.existingSecret | default (printf "%s-llm-api-key" .Release.Name) | quote }}
+            {{- if .Values.ingress.tenantWildcard }}
+            {{- /*
+                tenantWildcard is the wildcard host pattern (e.g. ``*.soctalk.ai``).
+                Strip the leading ``*.`` to recover the base domain so CSRF accepts
+                any ``<sub>.<base>`` over the same scheme as the canonical origin —
+                covers slug-driven tenant subdomains without enumerating each tenant.
+            */}}
+            - name: SOCTALK_PUBLIC_ORIGIN_BASE
+              value: {{ trimPrefix "*." .Values.ingress.tenantWildcard | quote }}
+            {{- end }}
+            {{- if .Values.tenantProvisioning.adapterImageRepo }}
+            - name: SOCTALK_TENANT_ADAPTER_IMAGE_REPO
+              value: {{ .Values.tenantProvisioning.adapterImageRepo | quote }}
+            {{- end }}
+            {{- if .Values.tenantProvisioning.adapterImageTag }}
+            - name: SOCTALK_TENANT_ADAPTER_IMAGE_TAG
+              value: {{ .Values.tenantProvisioning.adapterImageTag | quote }}
+            {{- end }}
+            {{- if .Values.tenantProvisioning.runsWorkerImageRepo }}
+            - name: SOCTALK_TENANT_RUNS_WORKER_IMAGE_REPO
+              value: {{ .Values.tenantProvisioning.runsWorkerImageRepo | quote }}
+            {{- end }}
+            {{- if .Values.tenantProvisioning.runsWorkerImageTag }}
+            - name: SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG
+              value: {{ .Values.tenantProvisioning.runsWorkerImageTag | quote }}
+            {{- end }}
+            - name: SOCTALK_TENANT_CHART_REF
+              value: {{ .Values.tenantProvisioning.tenantChartRef | quote }}
+            - name: SOCTALK_TENANT_CHART_VERSION
+              value: {{ .Values.tenantProvisioning.tenantChartVersion | quote }}
+            - name: SOCTALK_WAZUH_CHART_PATH
+              value: {{ .Values.tenantProvisioning.wazuhChartPath | quote }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.api.requests.cpu | quote }}
+              memory: {{ .Values.resources.api.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.api.limits.cpu | quote }}
+              memory: {{ .Values.resources.api.limits.memory | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: jwt-key
+              mountPath: /run/secrets/soctalk
+              readOnly: true
+            - name: adapter-signing-key
+              mountPath: /run/secrets/adapter
+              readOnly: true
+      volumes:
+        - name: jwt-key
+          secret:
+            secretName: {{ .Release.Name }}-jwt-signing-key
+            defaultMode: 0440
+        - name: adapter-signing-key
+          secret:
+            secretName: {{ .Release.Name }}-adapter-signing-key
+            defaultMode: 0440

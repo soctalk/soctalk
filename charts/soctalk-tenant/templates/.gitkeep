@@ -1,0 +1,5 @@
+# Placeholder: template implementation lands in Phase 2.
+# Templates will render: tenant namespace with labels, NetworkPolicy (default-deny +
+# explicit allow), ResourceQuota, LimitRange, per-tenant ServiceAccount, adapter
+# Deployment + Service, ConfigMap for branding, Secret references for bootstrap creds.
+# Data plane pods come from the subcharts under ../charts/ (Wazuh, TheHive, Cortex).

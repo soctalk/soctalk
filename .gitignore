@@ -49,6 +49,17 @@ screenshots/
 # Node/Frontend (handled by frontend/.gitignore)
 node_modules/
 
+# SvelteKit / Playwright build + test artifacts. The retired
+# frontend/customer + frontend/mssp apps used to ship their own
+# .gitignore entries for these; with those packages removed, root-level
+# patterns prevent stray ``.svelte-kit/``, ``test-results/``,
+# ``playwright-report/`` from being added if someone runs ``git add -A``
+# under a retired app's leftover working tree.
+.svelte-kit/
+test-results/
+playwright-report/
+playwright/.cache/
+
 # Database
 *.db
 *.sqlite3
@@ -65,3 +76,7 @@ backups/
 # Nix
 result
 result-*
+
+# Local k3d profile (scripts/local-up.sh) writes a self-contained kubeconfig here.
+# Lab access uses the user's normal ~/.kube/config; nothing committed.
+/kubeconfig.local

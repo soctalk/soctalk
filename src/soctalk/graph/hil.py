@@ -13,7 +13,7 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
 from soctalk.models.enums import HumanDecision
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 from soctalk.models.verdict import Verdict
 from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
 
@@ -76,7 +76,7 @@ async def human_review_node(
         except Exception as emit_error:
             logger.warning("event_emission_failed", error=str(emit_error))
 
-    investigation = Investigation(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
+    investigation = InvestigationRunState(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
     verdict = Verdict(**verdict_data) if verdict_data and isinstance(verdict_data, dict) else None
 
     hil_service: Optional[HILService] = None
@@ -139,7 +139,7 @@ async def human_review_node(
 async def _handle_noninteractive_review(
     *,
     hil_backend: str,
-    investigation: Investigation,
+    investigation: InvestigationRunState,
     verdict: Verdict | None,
 ) -> tuple[HumanDecision, str | None, str | None, bool]:
     if hil_backend == "cli":
@@ -191,7 +191,7 @@ def _coerce_human_decision(value: Any) -> HumanDecision:
 
 
 async def _prompt_cli_decision(
-    investigation: Investigation,
+    investigation: InvestigationRunState,
     verdict: Verdict | None,
 ) -> tuple[HumanDecision, str | None]:
     prompt_lines = [
@@ -217,7 +217,7 @@ async def _prompt_cli_decision(
 
 async def _present_via_hil_service(
     hil_service: "HILService",
-    investigation: Investigation,
+    investigation: InvestigationRunState,
     verdict: Optional[Verdict],
     state: dict[str, Any],
 ) -> tuple[HumanDecision, Optional[str]]:
@@ -225,7 +225,7 @@ async def _present_via_hil_service(
 
     Args:
         hil_service: The HIL service to use.
-        investigation: Investigation to review.
+        investigation: InvestigationRunState to review.
         verdict: Verdict from reasoning LLM.
         state: Current LangGraph state for conversational HIL.
 

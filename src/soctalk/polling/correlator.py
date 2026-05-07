@@ -10,7 +10,7 @@ import structlog
 
 from soctalk.config import get_config
 from soctalk.models.alerts import Alert
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 
 logger = structlog.get_logger()
 
@@ -35,7 +35,7 @@ class AlertCorrelator:
         config = get_config()
         self.window_minutes = window_minutes or config.polling.correlation_window_minutes
 
-    def correlate(self, alerts: list[Alert]) -> list[Investigation]:
+    def correlate(self, alerts: list[Alert]) -> list[InvestigationRunState]:
         """Group related alerts into investigations.
 
         Args:
@@ -198,16 +198,16 @@ class AlertCorrelator:
         # Filter to alerts within window
         return [a for a in alerts if a.timestamp >= cutoff]
 
-    def _create_investigation(self, alerts: list[Alert]) -> Investigation:
+    def _create_investigation(self, alerts: list[Alert]) -> InvestigationRunState:
         """Create an investigation from correlated alerts.
 
         Args:
             alerts: Correlated alerts.
 
         Returns:
-            New Investigation object.
+            New InvestigationRunState object.
         """
-        investigation = Investigation()
+        investigation = InvestigationRunState()
 
         for alert in alerts:
             investigation.add_alert(alert)
@@ -225,7 +225,7 @@ class AlertCorrelator:
         return investigation
 
 
-def correlate_and_prioritize(alerts: list[Alert]) -> list[Investigation]:
+def correlate_and_prioritize(alerts: list[Alert]) -> list[InvestigationRunState]:
     """Convenience function to correlate and prioritize alerts.
 
     Args:

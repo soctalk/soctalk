@@ -33,8 +33,63 @@ def _column_exists(connection: sa.Connection, table_name: str, column_name: str)
     return result.fetchone() is not None
 
 
+def _table_exists(connection: sa.Connection, table_name: str) -> bool:
+    result = connection.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_name=:t"
+        ),
+        {"t": table_name},
+    )
+    return result.fetchone() is not None
+
+
 def upgrade() -> None:
     connection = op.get_bind()
+
+    # Historical migration gap: ``user_settings`` was previously created by
+    # SQLModel's metadata.create_all() at app startup rather than by a
+    # dedicated migration, so ``alembic upgrade head`` on an empty database
+    # reached this revision before the table existed and failed at the
+    # first add_column. Create the base shape here on-demand; subsequent
+    # columns land via the guarded add_column loop below.
+    if not _table_exists(connection, "user_settings"):
+        op.create_table(
+            "user_settings",
+            sa.Column("id", sa.String(length=100), primary_key=True,
+                      server_default="default"),
+            sa.Column("wazuh_enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.text("false")),
+            sa.Column("wazuh_url", sa.String(length=500), nullable=True),
+            sa.Column("wazuh_verify_ssl", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("cortex_enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.text("false")),
+            sa.Column("cortex_url", sa.String(length=500), nullable=True),
+            sa.Column("cortex_verify_ssl", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("thehive_enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.text("false")),
+            sa.Column("thehive_url", sa.String(length=500), nullable=True),
+            sa.Column("thehive_organisation", sa.String(length=255), nullable=True),
+            sa.Column("thehive_verify_ssl", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("misp_enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.text("false")),
+            sa.Column("misp_url", sa.String(length=500), nullable=True),
+            sa.Column("misp_verify_ssl", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("slack_enabled", sa.Boolean(), nullable=False,
+                      server_default=sa.text("false")),
+            sa.Column("slack_channel", sa.String(length=100), nullable=True),
+            sa.Column("slack_notify_on_escalation", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("slack_notify_on_verdict", sa.Boolean(), nullable=False,
+                      server_default=sa.text("true")),
+            sa.Column("updated_at", sa.TIMESTAMP(timezone=True), nullable=False,
+                      server_default=sa.func.now()),
+        )
+
     columns: dict[str, sa.Column] = {
         "llm_provider": sa.Column(
             "llm_provider",

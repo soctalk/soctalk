@@ -1,0 +1,99 @@
+{{- if .Values.ingress.enabled }}
+{{/*
+Both MSSP and tenant hostnames terminate at the same canonical
+``app-ui`` Service. Role-based scoping at the session layer drives
+which views render — the route table is shared.
+
+Per-tenant slug-driven hosts (``<slug>.customer.<base>``) are caught
+by an additional wildcard rule below so newly provisioned tenants
+get a working URL without a per-tenant Ingress object.
+*/}}
+{{- /* Build a deduplicated hostname list. Flat ``<slug>.<base>`` is */}}
+{{- /* one host serving both audiences; legacy ``<slug>.mssp.<base>`` */}}
+{{- /* + ``<slug>.customer.<base>`` deploys still want both. We skip */}}
+{{- /* empty values and avoid emitting a second Ingress for the same */}}
+{{- /* hostname (nginx-ingress rejects host+path duplicates). */}}
+{{- $msspHost := .Values.ingress.hostnames.mssp -}}
+{{- $customerHost := .Values.ingress.hostnames.customer -}}
+{{- $hosts := dict }}
+{{- if $msspHost }}{{- $_ := set $hosts $msspHost "mssp" }}{{- end }}
+{{- if and $customerHost (ne $customerHost $msspHost) }}{{- $_ := set $hosts $customerHost "customer" }}{{- end }}
+{{- range $host, $kind := $hosts }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $.Release.Name }}-{{ $kind }}-ui
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $kind }}-ingress
+  annotations:
+    {{- with $.Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $.Values.ingress.tls.issuerRef }}
+    cert-manager.io/cluster-issuer: {{ $.Values.ingress.tls.issuerRef | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ $.Values.ingress.className | quote }}
+  {{- if and $.Values.ingress.tls $.Values.ingress.tls.secretName $.Values.ingress.tls.issuerRef }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ $.Values.ingress.tls.secretName }}-{{ $kind }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-api
+                port: { number: 8000 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Release.Name }}-app-ui
+                port: { number: 3000 }
+{{- end }}
+{{- if .Values.ingress.tenantWildcard }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-tenant-wildcard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tenant-wildcard-ingress
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.ingress.tls.issuerRef }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.issuerRef | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  rules:
+    - host: {{ .Values.ingress.tenantWildcard | quote }}
+      http:
+        paths:
+          - path: /api/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-api
+                port: { number: 8000 }
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-app-ui
+                port: { number: 3000 }
+{{- end }}
+{{- end }}

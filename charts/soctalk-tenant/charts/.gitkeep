@@ -1,0 +1,6 @@
+# Vendored upstream subcharts land here after Phase 0 chart audit completes.
+# Expected contents (per docs/v1/P0-2-chart-audit.md):
+#   - wazuh/   (patched upstream Wazuh chart)
+#   - thehive/ (patched TheHive chart with embedded Cassandra)
+#   - cortex/  (patched Cortex chart with embedded Elasticsearch)
+# MISP is V1.5.

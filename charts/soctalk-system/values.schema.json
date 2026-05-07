@@ -1,0 +1,424 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gbrigandi/soctalk/charts/soctalk-system/values.schema.json",
+  "title": "SocTalk System Chart Values",
+  "description": "Validation schema for soctalk-system Helm chart values.",
+  "type": "object",
+  "required": [
+    "install",
+    "image",
+    "postgres",
+    "ingress",
+    "oidc",
+    "defaults",
+    "resources",
+    "admission",
+    "licensing",
+    "telemetry",
+    "rbac"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "install": {
+      "type": "object",
+      "required": [
+        "msspId",
+        "msspName",
+        "installId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "msspId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "msspName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "installId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "installLabel": {
+          "type": "string"
+        },
+        "msspSlug": {
+          "type": "string",
+          "description": "Public slug for this MSSP install. Used as the leftmost label in <slug>.<base-domain>. If empty, the chart slugifies msspName at bootstrap."
+        },
+        "bootstrapAdmin": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "required": [
+        "registry",
+        "tag"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "pullSecrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "size": {
+              "type": "string"
+            },
+            "storageClassName": {
+              "type": "string"
+            }
+          }
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "database": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretName": {
+              "type": "string"
+            },
+            "issuerRef": {
+              "type": "string"
+            }
+          }
+        },
+        "hostnames": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mssp": {
+              "type": "string"
+            },
+            "customer": {
+              "type": "string"
+            }
+          }
+        },
+        "tenantWildcard": {
+          "type": "string"
+        }
+      }
+    },
+    "oidc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trustedHeaderUser": {
+          "type": "string"
+        },
+        "trustedHeaderEmail": {
+          "type": "string"
+        },
+        "trustedHeaderGroups": {
+          "type": "string"
+        },
+        "trustedProxyCIDRs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "llm": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "enum": [
+                "openai-compatible"
+              ]
+            },
+            "baseUrl": {
+              "type": "string",
+              "format": "uri"
+            },
+            "model": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/$defs/componentResources"
+        },
+        "appUi": {
+          "$ref": "#/$defs/componentResources"
+        },
+        "orchestrator": {
+          "$ref": "#/$defs/componentResources",
+          "description": "Deprecated — the legacy SecOpsOrchestrator pod was retired (per-tenant runs-worker replaces it). Accepted in the schema so existing values files / --reuse-values upgrades from the prior chart still validate; chart templates ignore the value."
+        }
+      }
+    },
+    "admission": {
+      "type": "object",
+      "required": [
+        "engine"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "enum": [
+            "vap",
+            "none"
+          ]
+        }
+      }
+    },
+    "licensing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "allowClusterNamespaceOps": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cilium": {
+          "type": "boolean"
+        }
+      }
+    },
+    "preInstallCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": {
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "anthropic",
+            "openai"
+          ]
+        },
+        "apiKey": {
+          "type": "string"
+        }
+      }
+    },
+    "tenantProvisioning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tenantChartRef": {
+          "type": "string"
+        },
+        "tenantChartVersion": {
+          "type": "string"
+        },
+        "wazuhChartPath": {
+          "type": "string"
+        },
+        "adapterImageRepo": {
+          "type": "string"
+        },
+        "adapterImageTag": {
+          "type": "string"
+        },
+        "runsWorkerImageRepo": {
+          "type": "string"
+        },
+        "runsWorkerImageTag": {
+          "type": "string"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cookieSecure": {
+          "type": "boolean"
+        },
+        "publicOriginOverride": {
+          "type": "string",
+          "description": "Comma-separated SOCTALK_PUBLIC_ORIGIN override for CSRF. Set when the browser's origin includes a non-standard port (e.g. local k3d :8080). Empty means derive from ingress.hostnames."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "limits": {
+          "$ref": "#/$defs/resourceQuantities"
+        }
+      }
+    },
+    "componentResources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "limits": {
+          "$ref": "#/$defs/resourceQuantities"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "resourceQuantities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

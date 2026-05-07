@@ -10,8 +10,48 @@ ARTIFACTS_DIR="/tmp/attack-artifacts"
 
 mkdir -p "$(dirname "$LOG_FILE")" "$ARTIFACTS_DIR"
 
+# Emit one syslog-formatted line per TTP execution. Wazuh's stock
+# syslog decoder ignores the bracketed-timestamp format used by ``log``,
+# so without this each TTP would produce only journal/syscheck noise
+# below the high-severity threshold. ``logger`` writes via libc syslog,
+# producing ``<pri>Mon DD HH:MM:SS host tag: msg`` — a format the
+# manager decodes and matches against the SocTalk demo rules at level
+# 12 / 10. The demo Wazuh rule keys off the literal ``SOCTALK_ATTACK``
+# token; do not rename without updating ``local_rules.xml``.
+emit_alert() {
+    local ttp="$1"
+    local desc="$2"
+    local stamp
+    stamp="$(date '+%b %e %H:%M:%S')"
+    printf '%s %s soctalk-attack: SOCTALK_ATTACK %s: %s\n' \
+        "$stamp" "$(hostname -s)" "$ttp" "$desc" \
+        >> "$(dirname "$LOG_FILE")/syslog.log"
+}
+
+# Emit a TP-flavored alert with concrete IOCs the supervisor can
+# enrich (IP, SHA256) and an asset name that biases the LLM toward
+# escalation. The Wazuh rule keys off ``SOCTALK_ATTACK_TP``; ensure
+# ``local_rules.xml`` has rule 100201 matching it at level 13+.
+emit_tp_alert() {
+    local ttp="$1"
+    local desc="$2"
+    local srcip="${3:-185.220.101.42}"
+    local sha256="${4:-44d88612fea8a8f36de82e1278abb02f59554b39c3da40d9ce25d2a4b3f0a5e3}"
+    local asset="${5:-DOMAIN-CONTROLLER-01}"
+    local stamp
+    stamp="$(date '+%b %e %H:%M:%S')"
+    printf '%s %s soctalk-attack: SOCTALK_ATTACK_TP %s on %s: %s srcip=%s sha256=%s\n' \
+        "$stamp" "$(hostname -s)" "$ttp" "$asset" "$desc" "$srcip" "$sha256" \
+        >> "$(dirname "$LOG_FILE")/syslog.log"
+}
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+    if [[ "$1" =~ ^T[0-9]+(\.[0-9]+)?[[:space:]]-[[:space:]] ]]; then
+        local ttp="${1%% - *}"
+        local desc="${1#* - }"
+        emit_alert "$ttp" "$desc"
+    fi
 }
 
 # ============================================================

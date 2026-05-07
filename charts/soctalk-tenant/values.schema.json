@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gbrigandi/soctalk/charts/soctalk-tenant/values.schema.json",
+  "title": "SocTalk Tenant Chart Values",
+  "description": "Validation schema for soctalk-tenant Helm chart values (rendered by SocTalk controller from per-tenant config).",
+  "type": "object",
+  "required": ["tenant", "branding", "llm", "components", "networkPolicies", "resourceQuota", "limitRange", "agentIngress", "adapter", "runsWorker"],
+  "additionalProperties": false,
+  "properties": {
+    "tenant": {
+      "type": "object",
+      "required": ["id", "slug", "msspId", "installId"],
+      "additionalProperties": false,
+      "properties": {
+        "id":          { "type": "string", "format": "uuid" },
+        "slug":        { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 },
+        "msspId":      { "type": "string", "format": "uuid" },
+        "installId":   { "type": "string", "format": "uuid" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "branding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "appName":         { "type": "string" },
+        "logoUrl":         { "type": "string" },
+        "primaryColor":    { "type": "string", "pattern": "^#[0-9A-Fa-f]{3,8}$" },
+        "secondaryColor":  { "type": "string", "pattern": "^#[0-9A-Fa-f]{3,8}$" },
+        "favicon":         { "type": "string" }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "required": ["provider", "baseUrl", "model", "apiKeyRef"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "enum": ["openai-compatible", "anthropic"] },
+        "baseUrl":  { "type": "string", "format": "uri" },
+        "model":    { "type": "string", "minLength": 1 },
+        "apiKeyRef": {
+          "type": "object",
+          "required": ["namespace", "name", "key"],
+          "additionalProperties": false,
+          "properties": {
+            "namespace": { "type": "string" },
+            "name":      { "type": "string" },
+            "key":       { "type": "string" }
+          }
+        },
+        "apiKey": {
+          "description": "Plaintext LLM API key. When non-empty the chart creates the Secret referenced by apiKeyRef in the release namespace; when empty the Secret must be pre-provisioned (legacy in-cluster mode). Passes through the AgentJob spec — same trust boundary as the agent runtime token.",
+          "type": "string"
+        }
+      }
+    },
+    "soctalkSystem": {
+      "description": "Cross-cluster reachability block. When the tenant's cluster is separate from the MSSP's SocTalk install (L2 on its own k3s, not a namespace inside the MSSP cluster), the adapter must reach L1 over the public URL with a bearer token minted by L1 at :issue-agent time.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "Full L1 API URL the adapter POSTs heartbeats + events to (e.g. https://l1.mssp.example). When set, overrides adapter.api.serviceHost/servicePort. Empty string disables the cross-cluster path (collapsed-tier mode).",
+          "type": "string",
+          "anyOf": [
+            { "format": "uri" },
+            { "maxLength": 0 }
+          ]
+        },
+        "adapterToken": {
+          "description": "Plaintext JWT L1 minted for this tenant's adapter. Chart materializes this as the Secret named by adapter.tokenSecretRef.name.",
+          "type": "string"
+        }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wazuh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "manager":    { "$ref": "#/$defs/componentBlock" },
+            "indexer": {
+              "allOf": [
+                { "$ref": "#/$defs/componentBlock" },
+                {
+                  "type": "object",
+                  "properties": {
+                    "jvm": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": { "heap": { "type": "string" } }
+                    }
+                  }
+                }
+              ]
+            },
+            "dashboard": { "$ref": "#/$defs/componentBlock" }
+          }
+        },
+        "thehive": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":    { "type": "boolean" },
+            "resources":  { "$ref": "#/$defs/resources" },
+            "cassandra":  { "$ref": "#/$defs/componentBlock" }
+          }
+        },
+        "cortex": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":        { "type": "boolean" },
+            "resources":      { "$ref": "#/$defs/resources" },
+            "elasticsearch":  { "$ref": "#/$defs/componentBlock" },
+            "analyzers":      { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "misp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "const": false }
+          }
+        }
+      }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled":         { "type": "boolean" },
+        "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
+        "fqdnEgress": {
+          "description": "Emit a CiliumNetworkPolicy permitting adapter egress to soctalkSystem.url's FQDN. Requires Cilium CRDs.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "requests": { "$ref": "#/$defs/resourceQuantities" },
+        "limits":   { "$ref": "#/$defs/resourceQuantities" },
+        "persistentVolumeClaims": { "type": "string" },
+        "pods":                    { "type": "string" }
+      }
+    },
+    "limitRange": {
+      "type": "object",
+      "required": ["enabled"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled":         { "type": "boolean" },
+        "defaults":        { "$ref": "#/$defs/resourceQuantities" },
+        "defaultRequests": { "$ref": "#/$defs/resourceQuantities" },
+        "max":             { "$ref": "#/$defs/resourceQuantities" }
+      }
+    },
+    "agentIngress": {
+      "type": "object",
+      "required": ["hostname"],
+      "additionalProperties": false,
+      "properties": {
+        "hostname": { "type": "string", "format": "hostname" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuerRef":  { "type": "string" },
+            "secretName": { "type": "string" }
+          }
+        }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "required": ["image", "resources", "tokenSecretRef", "api"],
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "object",
+          "required": ["repository", "tag"],
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag":        { "type": "string", "minLength": 1 },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] },
+            "command":    { "type": "array", "items": { "type": "string" } },
+            "args":       { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "resources": { "$ref": "#/$defs/resources" },
+        "api": {
+          "type": "object",
+          "required": ["serviceHost", "servicePort"],
+          "additionalProperties": false,
+          "properties": {
+            "serviceHost": { "type": "string", "minLength": 1 },
+            "servicePort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        },
+        "tokenSecretRef": {
+          "type": "object",
+          "required": ["name", "key"],
+          "additionalProperties": false,
+          "properties": {
+            "name":      { "type": "string" },
+            "key":       { "type": "string" }
+          }
+        },
+        "readinessProbe": {
+          "type": ["object", "null"]
+        },
+        "wazuhIndexer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url":         { "type": "string" },
+            "credsSecret": { "type": "string" },
+            "usernameKey": { "type": "string" },
+            "passwordKey": { "type": "string" },
+            "minSeverity": { "type": "integer", "minimum": 0, "maximum": 15 }
+          }
+        }
+      }
+    },
+    "namespaceLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "runsWorker": {
+      "type": "object",
+      "required": ["enabled", "image", "resources", "tokenSecretRef"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled":  { "type": "boolean" },
+        "replicas": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "image": {
+          "type": "object",
+          "required": ["repository", "tag"],
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag":        { "type": "string", "minLength": 1 },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": { "$ref": "#/$defs/resources" },
+        "tokenSecretRef": {
+          "type": "object",
+          "required": ["name", "key"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "key":  { "type": "string" }
+          }
+        },
+        "token":          { "type": "string", "description": "Optional plaintext JWT used by the cross-cluster L2 path; chart materializes tokenSecretRef from this value when non-empty." },
+        "fastModel":      { "type": "string" },
+        "reasoningModel": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "resourceQuantities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu":    { "type": "string" },
+        "memory": { "type": "string" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": { "$ref": "#/$defs/resourceQuantities" },
+        "limits":   { "$ref": "#/$defs/resourceQuantities" }
+      }
+    },
+    "componentBlock": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled":     { "type": "boolean" },
+        "resources":   { "$ref": "#/$defs/resources" },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "size":              { "type": "string" },
+            "storageClassName":  { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

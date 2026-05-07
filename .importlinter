@@ -1,0 +1,26 @@
+; import-linter configuration for SocTalk V1 open-core boundary.
+;
+; Rule: src/soctalk/core may NOT import from src/soctalk_enterprise.
+; The inverse is allowed: enterprise modules may extend core.
+;
+; Active from day one of Phase 1 even though src/soctalk_enterprise/ is empty
+; in V1; this prevents the boundary from being violated the moment the first
+; enterprise module is added.
+;
+; Run locally:  lint-imports
+; Run in CI:    see .github/workflows or equivalent (to be added in Phase 7).
+
+[importlinter]
+root_packages =
+    soctalk
+    soctalk_enterprise
+
+[importlinter:contract:core-cannot-import-enterprise]
+name = Core package must not depend on enterprise package
+type = forbidden
+source_modules =
+    soctalk.core
+forbidden_modules =
+    soctalk_enterprise
+ignore_imports =
+    ; Add explicit exceptions here if ever needed (should be rare).

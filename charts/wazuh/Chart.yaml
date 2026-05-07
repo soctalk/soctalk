@@ -1,0 +1,15 @@
+apiVersion: v2
+name: wazuh
+description: Minimal Wazuh manager + indexer deployment for SocTalk dev clusters.
+type: application
+version: 0.1.0
+appVersion: "4.12.0"
+keywords:
+  - wazuh
+  - siem
+  - soc
+home: https://github.com/wazuh/wazuh-kubernetes
+sources:
+  - https://github.com/wazuh/wazuh-kubernetes
+maintainers:
+  - name: SocTalk

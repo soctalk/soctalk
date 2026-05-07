@@ -234,7 +234,14 @@
 				<span class="badge variant-soft text-xs">View-only</span>
 			{/if}
 		</div>
-		<div class="flex gap-2">
+		<div class="flex items-center gap-3">
+			<a
+				href="/settings/llm"
+				class="anchor text-sm"
+				title="Bring your own LLM API key — investigations bill to you instead of your MSSP"
+				>Bring your own LLM key →</a
+			>
+			<div class="flex gap-2">
 			<button
 				type="button"
 				class="btn variant-ghost-surface"
@@ -257,6 +264,7 @@
 					{/if}
 					Save Changes
 				</button>
+			</div>
 		</div>
 	</div>
 

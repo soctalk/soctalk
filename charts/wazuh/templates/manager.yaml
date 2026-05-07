@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wazuh.fullname" . }}-manager
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: {{ .Values.service.apiPort }}
+      targetPort: 55000
+      protocol: TCP
+    - name: enrollment
+      port: {{ .Values.service.enrollmentPort }}
+      targetPort: 1515
+      protocol: TCP
+    - name: events
+      port: {{ .Values.service.eventsPort }}
+      targetPort: 1514
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "wazuh.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: manager
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "wazuh.fullname" . }}-manager
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+spec:
+  serviceName: {{ include "wazuh.fullname" . }}-manager
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "wazuh.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: manager
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.labels" . | nindent 8 }}
+        app.kubernetes.io/component: manager
+    spec:
+      containers:
+        - name: manager
+          image: {{ .Values.images.manager }}
+          ports:
+            - name: api
+              containerPort: 55000
+            - name: enrollment
+              containerPort: 1515
+            - name: events
+              containerPort: 1514
+          env:
+            - name: INDEXER_URL
+              value: "https://{{ include "wazuh.fullname" . }}-indexer:{{ .Values.service.indexerPort }}"
+            - name: INDEXER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: INDEXER_USERNAME
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: INDEXER_PASSWORD
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: "none"
+            - name: SSL_VERIFICATION_MODE
+              value: "none"
+            - name: API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: WAZUH_API_USERNAME
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: WAZUH_API_PASSWORD
+          resources:
+            {{- toYaml .Values.resources.manager | nindent 12 }}
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /var/ossec/data
+          readinessProbe:
+            tcpSocket:
+              port: 1514
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: 1514
+            initialDelaySeconds: 120
+            periodSeconds: 30
+  volumeClaimTemplates:
+    - metadata:
+        name: ossec-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ .Values.storage.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.managerSize }}

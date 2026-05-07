@@ -326,18 +326,26 @@ class EventEmitter:
     async def emit_thehive_case_created(
         self,
         investigation_id: UUID,
-        case_id: str,
+        thehive_case_id: str,
         case_number: str | None,
         title: str,
         idempotency_key: str | None = None,
     ) -> None:
-        """Emit a TheHive case created event."""
+        """Emit a TheHive case created event.
+
+        ``investigation_id`` is the SocTalk-side LangGraph run ID (our
+        aggregate). ``thehive_case_id`` is TheHive's external case
+        identifier — the bulk schema rename clobbered this distinction
+        because the original parameter was named ``case_id``; restored
+        with the more explicit name here so future readers don't
+        re-conflate them.
+        """
         await self.projecting_store.append(
             aggregate_id=investigation_id,
             aggregate_type="Investigation",
             event_type=EventType.THEHIVE_CASE_CREATED,
             data={
-                "case_id": case_id,
+                "thehive_case_id": thehive_case_id,
                 "case_number": case_number,
                 "title": title,
             },

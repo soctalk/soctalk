@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.config import get_config
+from soctalk.graph import budget as token_budget
 from soctalk.llm import create_chat_model
 from soctalk.models.enums import (
     Phase,
@@ -126,7 +127,7 @@ async def verdict_node(
         context = _build_verdict_context(state)
 
         # Get verdict from reasoning LLM
-        verdict = await _get_verdict(app_config, context)
+        verdict = await _get_verdict(app_config, context, state)
 
         state["verdict"] = verdict.model_dump()
         state["current_phase"] = Phase.VERDICT.value
@@ -290,7 +291,11 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _get_verdict(config: Any, context: dict[str, Any]) -> Verdict:
+async def _get_verdict(
+    config: Any,
+    context: dict[str, Any],
+    state: dict[str, Any] | None = None,
+) -> Verdict:
     """Get verdict from reasoning LLM.
 
     Args:
@@ -314,6 +319,8 @@ async def _get_verdict(config: Any, context: dict[str, Any]) -> Verdict:
     ]
 
     response = await llm.ainvoke(messages)
+    if state is not None:
+        token_budget.track(state, response)
     response_text = response.content
 
     # Parse verdict

@@ -1,0 +1,46 @@
+{{- /*
+Override opensearch.yml so cert paths are relative to
+OPENSEARCH_PATH_CONF (/usr/share/wazuh-indexer/). The image's default
+ships with absolute paths /etc/wazuh-indexer/..., which the OpenSearch
+Java security policy does not grant read access to. Using relative
+paths keeps reads inside the allowed subtree.
+
+Node / admin DNs match what the gen-certs init container issues.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wazuh.fullname" . }}-indexer-config
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: indexer
+data:
+  opensearch.yml: |
+    cluster.name: "wazuh-cluster"
+    node.name: "indexer"
+    discovery.type: single-node
+    network.host: 0.0.0.0
+    path.data: /var/lib/wazuh-indexer
+    path.logs: /var/log/wazuh-indexer
+
+    plugins.security.ssl.http.pemcert_filepath: certs/indexer.pem
+    plugins.security.ssl.http.pemkey_filepath: certs/indexer-key.pem
+    plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+    plugins.security.ssl.transport.pemcert_filepath: certs/indexer.pem
+    plugins.security.ssl.transport.pemkey_filepath: certs/indexer-key.pem
+    plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+    plugins.security.ssl.http.enabled: true
+    plugins.security.ssl.transport.enforce_hostname_verification: false
+    plugins.security.ssl.transport.resolve_hostname: false
+
+    plugins.security.authcz.admin_dn:
+      - "CN=admin,OU=Wazuh,O=Wazuh,L=California,C=US"
+    plugins.security.nodes_dn:
+      - "CN=indexer,OU=Wazuh,O=Wazuh,L=California,C=US"
+
+    plugins.security.allow_default_init_securityindex: true
+    plugins.security.restapi.roles_enabled:
+      - "all_access"
+      - "security_rest_api_access"
+
+    compatibility.override_main_response_version: true

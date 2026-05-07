@@ -1,0 +1,74 @@
+{{/*
+Canonical app UI: a single SvelteKit deployment that serves both the
+MSSP-facing and tenant-facing hostnames. Role/scope is decided at the
+session layer (mssp_admin → cross-tenant view, tenant_* → scoped to
+their tenant, customer_viewer → customer-safe subset). The previous
+mssp-ui / customer-ui split has been retired — see 70-ingress.yaml for
+the matching hostname → app-ui routing.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-app-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-ui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: app-ui
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app-ui
+spec:
+  replicas: {{ .Values.resources.appUi.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: app-ui
+  template:
+    metadata:
+      labels:
+        {{- include "soctalk-system.labels" . | nindent 8 }}
+        app.kubernetes.io/component: app-ui
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: ui
+          image: {{ include "soctalk-system.image" (dict "global" .Values.image "component" "app-ui") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: PUBLIC_API_URL
+              value: http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.cluster.local:8000
+          resources:
+            requests:
+              cpu: {{ .Values.resources.appUi.requests.cpu | quote }}
+              memory: {{ .Values.resources.appUi.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.appUi.limits.cpu | quote }}
+              memory: {{ .Values.resources.appUi.limits.memory | quote }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5

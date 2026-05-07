@@ -1,0 +1,166 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wazuh.fullname" . }}-indexer
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: indexer
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: {{ .Values.service.indexerPort }}
+      targetPort: 9200
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "wazuh.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: indexer
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "wazuh.fullname" . }}-indexer
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: indexer
+spec:
+  serviceName: {{ include "wazuh.fullname" . }}-indexer
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "wazuh.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: indexer
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.labels" . | nindent 8 }}
+        app.kubernetes.io/component: indexer
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        # JVM mmap counts.
+        - name: sysctl-vm-max-map
+          image: busybox:1.36
+          command: ["sh", "-c", "sysctl -w vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+            runAsUser: 0
+        # Self-signed PKI into the shared emptyDir volume. Dev-only; the
+        # production path is wazuh-certs-tool.sh ahead of install plus a
+        # Secret-mounted set of certs.
+        - name: gen-certs
+          # ``alpine/openssl`` ships openssl + /bin/sh pre-baked; avoids
+          # ``apk add`` (which is blocked by the tenant namespace's
+          # default-deny egress) and avoids relying on openssl being on
+          # PATH in the wazuh-indexer image (it isn't).
+          image: alpine/openssl:latest
+          # Default entrypoint is ``openssl``; override with sh.
+          command: ["sh", "-ec"]
+          args:
+            - |
+              cd /certs
+              [ -f indexer.pem ] && exit 0
+              cat > indexer.cnf <<EOF
+              [req]
+              distinguished_name = req_dn
+              prompt = no
+              [req_dn]
+              C = US
+              L = California
+              O = Wazuh
+              OU = Wazuh
+              CN = indexer
+              [v3_req]
+              subjectAltName = DNS:{{ include "wazuh.fullname" . }}-indexer,DNS:{{ include "wazuh.fullname" . }}-indexer.{{ .Release.Namespace }}.svc,DNS:{{ include "wazuh.fullname" . }}-indexer-0,DNS:localhost,IP:127.0.0.1
+              extendedKeyUsage = serverAuth,clientAuth
+              EOF
+              openssl genpkey -algorithm RSA -out root-ca.key -pkeyopt rsa_keygen_bits:2048
+              openssl req -x509 -new -key root-ca.key -days 3650 -sha256 -out root-ca.pem -subj "/C=US/L=California/O=Wazuh/OU=Wazuh/CN=root-ca"
+              openssl genpkey -algorithm RSA -out admin-key.pem -pkeyopt rsa_keygen_bits:2048
+              openssl req -new -key admin-key.pem -out admin.csr -subj "/C=US/L=California/O=Wazuh/OU=Wazuh/CN=admin"
+              openssl x509 -req -in admin.csr -CA root-ca.pem -CAkey root-ca.key -CAcreateserial -out admin.pem -days 3650 -sha256
+              openssl genpkey -algorithm RSA -out indexer-key.pem -pkeyopt rsa_keygen_bits:2048
+              openssl req -new -key indexer-key.pem -out indexer.csr -config indexer.cnf
+              openssl x509 -req -in indexer.csr -CA root-ca.pem -CAkey root-ca.key -CAcreateserial -out indexer.pem -days 3650 -sha256 -extensions v3_req -extfile indexer.cnf
+              rm -f *.csr *.srl indexer.cnf root-ca.key
+              chmod 600 *-key.pem
+              chmod 644 *.pem
+              chown -R 1000:1000 /certs
+          volumeMounts:
+            - name: certs
+              mountPath: /certs
+      containers:
+        - name: indexer
+          image: {{ .Values.images.indexer }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            capabilities:
+              add: ["SYS_CHROOT"]
+          ports:
+            - name: https
+              containerPort: 9200
+          env:
+            - name: NODE_NAME
+              value: {{ include "wazuh.fullname" . }}-indexer-0
+            - name: cluster.name
+              value: wazuh-cluster
+            - name: cluster.initial_cluster_manager_nodes
+              value: {{ include "wazuh.fullname" . }}-indexer-0
+            - name: discovery.type
+              value: single-node
+            - name: network.host
+              value: "0.0.0.0"
+            - name: bootstrap.memory_lock
+              value: "false"
+            - name: plugins.security.allow_default_init_securityindex
+              value: "true"
+            - name: NODES_DN
+              value: "CN=indexer,OU=Wazuh,O=Wazuh,L=California,C=US"
+            - name: DISCOVERY_SERVICE
+              value: {{ include "wazuh.fullname" . }}-indexer
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "true"
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms1g -Xmx1g -XX:MaxDirectMemorySize=512m -Dlog4j2.formatMsgNoLookups=true"
+          resources:
+            {{- toYaml .Values.resources.indexer | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/wazuh-indexer
+            - name: certs
+              mountPath: /usr/share/wazuh-indexer/certs
+            - name: config
+              mountPath: /usr/share/wazuh-indexer/opensearch.yml
+              subPath: opensearch.yml
+          readinessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 90
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 240
+            periodSeconds: 30
+      volumes:
+        - name: certs
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ include "wazuh.fullname" . }}-indexer-config
+            items:
+              - key: opensearch.yml
+                path: opensearch.yml
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ .Values.storage.storageClass }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.indexerSize }}

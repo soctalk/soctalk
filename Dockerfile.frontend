@@ -1,98 +1,46 @@
 # =============================================================================
-# SocTalk Frontend - Multi-stage production build
+# SocTalk Frontend - Multi-stage production build (adapter-node)
 # =============================================================================
+#
+# The frontend uses ``@sveltejs/adapter-node`` (see frontend/svelte.config.js)
+# so the build output is a Node.js server, not a static site. Earlier
+# revisions of this Dockerfile used nginx to serve a static ``build/``
+# directory; that broke the moment the project switched adapters because
+# adapter-node emits ``index.js``/``handler.js`` rather than HTML. nginx
+# then served the build directory, hit "directory index forbidden", and
+# the chart's readiness probe stayed 0/1 forever.
+#
+# Same shape as ``soctalk-cloud/Dockerfile.frontend``.
 
-# Stage 1: Build the SvelteKit application
 FROM node:20-alpine AS builder
-
 WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Install pnpm
-RUN npm install -g pnpm
-
-# Copy package files first for better layer caching
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-
-# Install dependencies
 RUN pnpm install --frozen-lockfile
 
-# Copy source code
-COPY frontend/ .
-
-# Build the static site
+COPY frontend/ ./
 RUN pnpm build
 
-# Stage 2: Serve with nginx
-FROM nginx:alpine
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
 
-LABEL maintainer="soctalk"
-LABEL description="SocTalk Frontend - SvelteKit dashboard for SOC agent"
+# Port 3000 matches the chart's containerPort + readinessProbe
+# (charts/soctalk-system/templates/40-frontends.yaml).
+ENV PORT=3000 \
+    HOST=0.0.0.0 \
+    NODE_ENV=production
 
-# Copy built static files from builder stage
-COPY --from=builder /app/build /var/www/soctalk
+# Drop privileges. Chart's pod securityContext sets runAsUser=10001;
+# create a matching user so node can write to /app for runtime
+# tempfiles without permission errors.
+RUN addgroup -S -g 10001 svelte \
+    && adduser -S -u 10001 -G svelte svelte \
+    && chown -R svelte:svelte /app
+USER svelte
 
-# Copy nginx configuration
-COPY <<'EOF' /etc/nginx/nginx.conf
-user nginx;
-worker_processes auto;
-error_log /dev/stderr warn;
-pid /var/run/nginx.pid;
-
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-
-    access_log /dev/stdout main;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-
-    # Gzip compression
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
-
-    server {
-        listen 5173;
-        server_name localhost;
-        root /var/www/soctalk;
-
-        # SvelteKit SPA routing - try files, then fall back to index.html
-        location / {
-            try_files $uri $uri/ /index.html;
-        }
-
-        # Cache static assets
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
-            expires 1y;
-            add_header Cache-Control "public, immutable";
-        }
-
-        # Health check endpoint
-        location /health {
-            access_log off;
-            return 200 "healthy\n";
-            add_header Content-Type text/plain;
-        }
-    }
-}
-EOF
-
-# Expose port
-EXPOSE 5173
-
-# Run nginx in foreground
-CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 3000
+CMD ["node", "build"]

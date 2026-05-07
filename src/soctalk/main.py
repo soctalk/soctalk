@@ -36,7 +36,7 @@ from soctalk.settings_provider import (
     seed_settings_from_env,
 )
 from soctalk.models.enums import Phase, InvestigationStatus
-from soctalk.models.investigation import Investigation
+from soctalk.models.investigation import InvestigationRunState
 from soctalk.models.state import create_initial_state
 from soctalk.persistence import (
     init_db,
@@ -50,15 +50,20 @@ from soctalk.polling.correlator import AlertCorrelator
 from soctalk.polling.poller import AlertPoller
 from soctalk.polling.queue import InvestigationQueue
 
-# Configure Python logging to write to file
-LOG_FILE = Path(__file__).parent.parent.parent / "soctalk.log"
+# Logging configuration. The historical default wrote to a file
+# computed from ``__file__``, which under a pip-installed wheel
+# resolves to a path inside ``site-packages`` and is read-only in
+# any sane container. Container deploys want stderr-only so
+# ``kubectl logs`` works; dev workstations can opt back into a file
+# via ``SOCTALK_LOG_FILE``.
+_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+_log_file = os.getenv("SOCTALK_LOG_FILE")
+if _log_file:
+    _handlers.append(logging.FileHandler(_log_file, mode="a"))
 logging.basicConfig(
     level=getattr(logging, os.getenv("SOCTALK_LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, mode="a"),
-        logging.StreamHandler(sys.stderr),
-    ],
+    handlers=_handlers,
 )
 
 # Configure structured logging
@@ -90,7 +95,7 @@ class SecOpsOrchestrator:
     Coordinates:
     - Alert polling from Wazuh
     - Alert correlation
-    - Investigation queue management
+    - InvestigationRunState queue management
     - Graph execution for each investigation
     """
 
@@ -105,7 +110,7 @@ class SecOpsOrchestrator:
         self.slack_notifier: Optional[SlackWebhookNotifier] = None
         self._running = False
         self._stop_event = asyncio.Event()
-        self._current_investigation: Optional[Investigation] = None
+        self._current_investigation: Optional[InvestigationRunState] = None
         self._db_enabled = False
         self._integration_settings: Optional[IntegrationSettings] = None
         self._llm_settings: Optional[LLMSettings] = None
@@ -580,18 +585,18 @@ class SecOpsOrchestrator:
         added = await self.queue.add_batch(investigations)
         console.print(f"[green]Queued {added} investigation(s)[/green]")
 
-    async def _process_investigation(self, investigation: Investigation) -> None:
+    async def _process_investigation(self, investigation: InvestigationRunState) -> None:
         """Process a single investigation through the graph.
 
         Args:
-            investigation: Investigation to process.
+            investigation: InvestigationRunState to process.
         """
         self._current_investigation = investigation
 
         console.print("\n")
         console.print(
             Panel(
-                f"[bold]Processing Investigation[/bold]\n\n"
+                f"[bold]Processing InvestigationRunState[/bold]\n\n"
                 f"ID: {investigation.id}\n"
                 f"Title: {investigation.title}\n"
                 f"Alerts: {len(investigation.alerts)}\n"
@@ -630,20 +635,20 @@ class SecOpsOrchestrator:
                     interrupts=len(final_state.get("__interrupt__") or []),
                 )
                 console.print(
-                    "[yellow]Investigation paused awaiting human review (use the dashboard to decide).[/yellow]"
+                    "[yellow]InvestigationRunState paused awaiting human review (use the dashboard to decide).[/yellow]"
                 )
                 return
 
             # Log completion
             final_investigation = final_state.get("investigation", {})
             status = final_investigation.get("status", "unknown")
-            case_id = final_investigation.get("thehive_case_id")
+            investigation_id = final_investigation.get("thehive_case_id")
 
             logger.info(
                 "investigation_completed",
                 investigation_id=investigation.id,
                 status=status,
-                case_id=case_id,
+                investigation_id=investigation_id,
             )
 
             # Mark investigation as completed in queue (allows similar titles again)
@@ -661,14 +666,14 @@ class SecOpsOrchestrator:
                 investigation_id=investigation.id,
                 error=str(e),
             )
-            console.print(f"\n[red]Investigation failed: {e}[/red]")
+            console.print(f"\n[red]InvestigationRunState failed: {e}[/red]")
 
         finally:
             self._current_investigation = None
 
     async def _run_with_event_sourcing(
         self,
-        investigation: Investigation,
+        investigation: InvestigationRunState,
         initial_state: dict,
     ) -> dict:
         """Run investigation with event sourcing enabled.
@@ -782,11 +787,11 @@ class SecOpsOrchestrator:
         console.print()
 
 
-async def run_single_investigation(investigation: Investigation) -> dict:
+async def run_single_investigation(investigation: InvestigationRunState) -> dict:
     """Run a single investigation (for testing/manual use).
 
     Args:
-        investigation: Investigation to process.
+        investigation: InvestigationRunState to process.
 
     Returns:
         Final state dictionary.

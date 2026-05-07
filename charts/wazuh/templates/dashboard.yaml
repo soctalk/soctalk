@@ -1,0 +1,164 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "wazuh.fullname" . }}-dashboard-config
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+type: Opaque
+stringData:
+  opensearch_dashboards.yml: |
+    server.host: 0.0.0.0
+    server.port: 5601
+    opensearch.hosts: ["https://{{ include "wazuh.fullname" . }}-indexer:{{ .Values.service.indexerPort }}"]
+    opensearch.ssl.verificationMode: none
+    opensearch.username: {{ .Values.credentials.indexerUsername | quote }}
+    opensearch.password: {{ .Values.credentials.indexerPassword | quote }}
+    opensearch.requestHeadersAllowlist: [authorization, securitytenant]
+    opensearch_security.multitenancy.enabled: false
+    opensearch_security.readonly_mode.roles: []
+    opensearch_security.cookie.secure: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wazuh.fullname" . }}-dashboard
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 5601
+      targetPort: 5601
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: {{ include "wazuh.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: dashboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wazuh.fullname" . }}-dashboard
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "wazuh.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels:
+        {{- include "wazuh.labels" . | nindent 8 }}
+        app.kubernetes.io/component: dashboard
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        # wazuh_app_config.sh writes wazuh.yml in place; the mount must
+        # be writable, not a read-only ConfigMap.
+        - name: stage-wazuh-config
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - |
+              mkdir -p /staged
+              : > /staged/wazuh.yml
+              chmod 0660 /staged/wazuh.yml
+              chown 1000:1000 /staged/wazuh.yml
+          volumeMounts:
+            - name: wazuh-app-config
+              mountPath: /staged
+      containers:
+        - name: dashboard
+          image: {{ .Values.dashboard.image }}
+          ports:
+            - name: http
+              containerPort: 5601
+          env:
+            - name: WAZUH_API_URL
+              value: https://{{ include "wazuh.fullname" . }}-manager
+            - name: API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: WAZUH_API_USERNAME
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: WAZUH_API_PASSWORD
+            - name: DASHBOARD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: INDEXER_USERNAME
+            - name: DASHBOARD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wazuh.fullname" . }}-creds
+                  key: INDEXER_PASSWORD
+            - name: SERVER_SSL_ENABLED
+              value: "false"
+          resources:
+            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+              subPath: opensearch_dashboards.yml
+            - name: wazuh-app-config
+              mountPath: /usr/share/wazuh-dashboard/data/wazuh/config
+          readinessProbe:
+            httpGet:
+              path: /app/wazuh
+              port: 5601
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 8
+          livenessProbe:
+            tcpSocket:
+              port: 5601
+            initialDelaySeconds: 180
+            periodSeconds: 30
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "wazuh.fullname" . }}-dashboard-config
+        - name: wazuh-app-config
+          emptyDir: {}
+{{- if .Values.dashboard.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "wazuh.fullname" . }}-dashboard
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+  annotations:
+    {{- with .Values.dashboard.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.dashboard.ingress.className | quote }}
+  rules:
+    - host: {{ .Values.dashboard.ingress.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "wazuh.fullname" . }}-dashboard
+                port: { number: 5601 }
+{{- end }}
+{{- end }}

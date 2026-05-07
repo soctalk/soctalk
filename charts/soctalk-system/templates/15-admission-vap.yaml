@@ -1,0 +1,76 @@
+{{- if eq .Values.admission.engine "vap" }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ .Release.Name }}-tenant-namespace-guard
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        # CREATE/DELETE only. Helm's post-create UPDATE on namespaces
+        # (adding ``meta.helm.sh/release-*`` annotations) goes through
+        # this same SA but doesn't carry the tenant labels in the
+        # request payload — they live on the existing object. Validating
+        # at CREATE time is sufficient: the SA's RBAC limits *which*
+        # namespaces it can touch, and the CREATE check pins the
+        # required labels at the point they're set.
+        operations: ["CREATE", "DELETE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: soctalk-controller-service-account
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ .Release.Name }}-controller'"
+  validations:
+    - expression: "request.operation == 'DELETE' ? oldObject.metadata.name.startsWith('tenant-') : object.metadata.name.startsWith('tenant-')"
+      message: "SocTalk may only manage namespaces whose names start with tenant-"
+    - expression: "request.operation == 'DELETE' ? (has(oldObject.metadata.labels.tenant) && oldObject.metadata.labels.tenant == 'true') : (has(object.metadata.labels.tenant) && object.metadata.labels.tenant == 'true')"
+      message: "SocTalk-managed namespaces must carry label tenant=true"
+    - expression: "request.operation == 'DELETE' ? ('managed-by' in oldObject.metadata.labels && oldObject.metadata.labels['managed-by'] == 'soctalk') : ('managed-by' in object.metadata.labels && object.metadata.labels['managed-by'] == 'soctalk')"
+      message: "SocTalk-managed namespaces must carry label managed-by=soctalk"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ .Release.Name }}-tenant-namespace-guard
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  policyName: {{ .Release.Name }}-tenant-namespace-guard
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ .Release.Name }}-tenant-resource-guard
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["*"]
+  matchConditions:
+    - name: soctalk-controller-service-account
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ .Release.Name }}-controller'"
+    - name: namespaced-resource
+      expression: "request.namespace != ''"
+  validations:
+    - expression: "request.namespace == '{{ .Release.Namespace }}' || request.namespace.startsWith('tenant-')"
+      message: "SocTalk may only mutate namespaced resources in its system namespace or tenant-* namespaces"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ .Release.Name }}-tenant-resource-guard
+  labels:
+    {{- include "soctalk-system.labels" . | nindent 4 }}
+spec:
+  policyName: {{ .Release.Name }}-tenant-resource-guard
+  validationActions: [Deny]
+{{- end }}

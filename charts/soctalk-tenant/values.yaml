@@ -1,0 +1,209 @@
+# SocTalk V1: soctalk-tenant chart default values.
+#
+# This chart is not installed by human operators. The SocTalk controller
+# renders values from the per-tenant config row (see docs/v1/P0-8-two-chart-contract.md)
+# and applies via Helm. These defaults document the contract; most fields are
+# overridden per-tenant by the controller.
+
+# Tenant identity (REQUIRED from controller)
+tenant:
+  id: ""                # REQUIRED: tenant UUID
+  slug: ""              # REQUIRED. DNS-safe slug
+  msspId: ""            # REQUIRED. MSSP UUID (for namespace labels)
+  installId: ""         # REQUIRED: install UUID
+  displayName: ""       # display name for branding / logs
+
+# Branding (consumed by SocTalk UIs; baked into ConfigMap read by adapter)
+branding:
+  appName: "SocTalk"
+  logoUrl: ""
+  primaryColor: "#1a73e8"
+  secondaryColor: "#fbbc04"
+  favicon: ""
+
+# LLM config (per tenant; overrides install defaults)
+llm:
+  provider: "openai-compatible"
+  baseUrl: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  apiKeyRef:
+    namespace: "soctalk-system"
+    name: ""            # REQUIRED: set by controller to `tenant-<id>-llm`
+    key: "api_key"
+  # Plaintext LLM API key. When non-empty the chart creates the Secret
+  # referenced by ``apiKeyRef`` in the release namespace (cross-cluster
+  # path). When empty, the chart does NOT create a Secret and the
+  # controller must pre-provision one at ``apiKeyRef.namespace/name``
+  # (legacy in-cluster path).
+  apiKey: ""
+
+# Data plane component toggles + sizing
+components:
+  wazuh:
+    enabled: true
+    manager:
+      resources:
+        requests: { cpu: 200m, memory: 512Mi }
+        limits:   { cpu: 500m, memory: 1Gi }
+      persistence:
+        size: 20Gi
+    indexer:
+      resources:
+        requests: { cpu: 500m, memory: 2Gi }
+        limits:   { cpu: "2",  memory: 4Gi }
+      persistence:
+        size: 50Gi
+      jvm:
+        heap: "1g"
+    dashboard:
+      enabled: true
+      resources:
+        requests: { cpu: 100m, memory: 512Mi }
+        limits:   { cpu: 500m, memory: 1Gi }
+
+  thehive:
+    enabled: true
+    resources:
+      requests: { cpu: 300m, memory: 1Gi }
+      limits:   { cpu: "1",  memory: 2Gi }
+    cassandra:
+      resources:
+        requests: { cpu: 500m, memory: 2Gi }
+        limits:   { cpu: 1500m, memory: 4Gi }
+      persistence:
+        size: 30Gi
+
+  cortex:
+    enabled: true
+    resources:
+      requests: { cpu: 200m, memory: 768Mi }
+      limits:   { cpu: 800m, memory: 1536Mi }
+    elasticsearch:
+      resources:
+        requests: { cpu: 300m, memory: 1Gi }
+        limits:   { cpu: "1",  memory: 2Gi }
+      persistence:
+        size: 20Gi
+    analyzers: []       # V1 allowlist; populated by Phase 0 spike
+
+  # MISP: deferred V1.5
+  misp:
+    enabled: false
+
+# Tenant namespace policies (enabled by default; rendered into manifests)
+networkPolicies:
+  enabled: true
+  allowedLlmHosts: []   # REQUIRED: controller populates with tenant's LLM hostname
+  fqdnEgress:
+    # Emit a CiliumNetworkPolicy permitting adapter egress to
+    # soctalkSystem.url's FQDN. Required when L2 runs in a separate
+    # cluster from L1; stock NetworkPolicy has no FQDN support. Turn
+    # off on clusters without Cilium CRDs (the operator must provide
+    # equivalent egress themselves).
+    enabled: false
+
+# Resource quotas applied to the tenant namespace
+resourceQuota:
+  enabled: true
+  requests:
+    cpu: "3"
+    memory: "8Gi"
+  limits:
+    cpu: "7"
+    memory: "16Gi"
+  persistentVolumeClaims: "10"
+  pods: "50"
+
+# Per-pod defaults via LimitRange
+limitRange:
+  enabled: true
+  defaults:
+    memory: "2Gi"
+    cpu: "500m"
+  defaultRequests:
+    memory: "256Mi"
+    cpu: "100m"
+  max:
+    memory: "6Gi"
+    cpu: "2"
+
+# Wazuh agent ingress per tenant
+agentIngress:
+  hostname: ""          # REQUIRED: e.g., acme.soc.mssp.example.com
+  tls:
+    issuerRef: ""       # cert-manager ClusterIssuer name
+    secretName: "wazuh-tls"
+
+# SocTalk adapter (health reporting + Wazuh alert ingest back to L1)
+adapter:
+  image:
+    repository: "ghcr.io/gbrigandi/soctalk-adapter"
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 200m, memory: 256Mi }
+  api:
+    serviceHost: "soctalk-system-api.soctalk-system.svc.cluster.local"
+    servicePort: 8000
+  tokenSecretRef:
+    name: "adapter-token"
+    key: "token"
+  # Wazuh indexer poller config. The L1 controller renders this with the
+  # per-tenant wazuh release name; leave the block off to disable
+  # in-adapter alert forwarding (e.g. when a tenant has the upstream
+  # wazuh-dashboard handling search and the adapter is just a heartbeat
+  # surface).
+  wazuhIndexer: {}
+    # url: https://wazuh-<slug>-wazuh-indexer:9200
+    # credsSecret: wazuh-<slug>-creds
+    # usernameKey: INDEXER_USERNAME
+    # passwordKey: INDEXER_PASSWORD
+  # Probe is configurable so tests / alternative adapter impls can opt out
+  # or point at a different path. Set to null (or omit) to disable the
+  # probe — useful when running a stub image that doesn't serve health.
+  readinessProbe:
+    httpGet:
+      path: /health/ready
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+runsWorker:
+  enabled: true
+  replicas: 1
+  image:
+    repository: "ghcr.io/gbrigandi/soctalk-orchestrator"
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1, memory: 1Gi }
+  tokenSecretRef:
+    name: "runs-worker-token"
+    key: "token"
+  # Optional plaintext bearer token. When set, the chart materializes
+  # ``tokenSecretRef`` from this value (used by the cross-cluster L2
+  # agent path). Empty falls back to the operator-pre-provisioned-Secret
+  # contract (used by the same-cluster controller path, where the L1
+  # controller writes the Secret directly via client-go).
+  token: ""
+  fastModel: ""       # optional override; falls back to llm.model
+  reasoningModel: ""  # optional override; falls back to llm.model
+
+# Cross-cluster L1 reachability. Populated by L1 at :issue-agent time
+# when the tenant's L2 cluster is separate from the MSSP's SocTalk
+# install. When both fields are unset the chart falls back to the
+# collapsed-tier mode: adapter reaches L1 via in-cluster service DNS
+# (adapter.api.serviceHost/Port) and the adapter token must be
+# pre-provisioned in a Secret matching adapter.tokenSecretRef.
+soctalkSystem:
+  url: ""            # e.g. https://l1.acme-mssp.example
+  adapterToken: ""   # opaque plaintext; chart stores it as a Secret
+
+# Namespace labels applied by the controller (informational; namespace is created
+# by controller before Helm install so these labels are already set)
+namespaceLabels:
+  tenant: "true"
+  managed-by: "soctalk"
+  # mssp-id, install-id, tenant-id populated from tenant.* fields by controller
