@@ -247,8 +247,8 @@ def test_tool_registry_has_built_ins():
     from soctalk.core.ir.tools import registry
 
     names = {t.name for t in registry.list()}
-    assert "case.list_iocs" in names
-    assert "case.list_assets" in names
+    assert "investigation.list_iocs" in names
+    assert "investigation.list_assets" in names
 
 
 def test_approval_policy_defaults():

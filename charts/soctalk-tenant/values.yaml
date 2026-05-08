@@ -5,13 +5,16 @@
 # and applies via Helm. These defaults document the contract; most fields are
 # overridden per-tenant by the controller.
 
-# Tenant identity (REQUIRED from controller)
+# Tenant identity (REQUIRED from controller).
+# Placeholder defaults so `helm lint` passes the schema. The SocTalk
+# controller overrides these per tenant; obvious-fake values here are
+# rejected by the bootstrap path.
 tenant:
-  id: ""                # REQUIRED: tenant UUID
-  slug: ""              # REQUIRED. DNS-safe slug
-  msspId: ""            # REQUIRED. MSSP UUID (for namespace labels)
-  installId: ""         # REQUIRED: install UUID
-  displayName: ""       # display name for branding / logs
+  id: "00000000-0000-0000-0000-000000000000"
+  slug: "placeholder"
+  msspId: "00000000-0000-0000-0000-000000000000"
+  installId: "00000000-0000-0000-0000-000000000000"
+  displayName: ""
 
 # Branding (consumed by SocTalk UIs; baked into ConfigMap read by adapter)
 branding:
@@ -127,9 +130,10 @@ limitRange:
     memory: "6Gi"
     cpu: "2"
 
-# Wazuh agent ingress per tenant
+# Wazuh agent ingress per tenant. Placeholder default satisfies the
+# schema's hostname format; controller sets the real per-tenant FQDN.
 agentIngress:
-  hostname: ""          # REQUIRED: e.g., acme.soc.mssp.example.com
+  hostname: "placeholder.invalid"
   tls:
     issuerRef: ""       # cert-manager ClusterIssuer name
     secretName: "wazuh-tls"
@@ -177,8 +181,8 @@ runsWorker:
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits:   { cpu: 1, memory: 1Gi }
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "1", memory: "1Gi" }
   tokenSecretRef:
     name: "runs-worker-token"
     key: "token"

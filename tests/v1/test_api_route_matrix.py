@@ -68,7 +68,10 @@ class StubSession:
         self.flushed = 0
 
     async def execute(self, *_args, **_kwargs):
-        if _args and "set_config('app.current_tenant_id'" in str(_args[0]):
+        # Absorb every set_config() call (current_tenant_id, current_audience,
+        # current_user_role, etc.) so the test's queued results are only
+        # consumed by the actual SELECT/INSERT/UPDATE the handler runs.
+        if _args and "set_config(" in str(_args[0]):
             return _StubResult(scalar_value="")
         if self.next_results:
             return self.next_results.pop(0)

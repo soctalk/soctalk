@@ -67,7 +67,9 @@ def test_poc_profile_emits_tight_resource_quota():
     # Chart schema disallows unknown top-level fields, so no "profile"
     # key ends up in values; the overrides land in resourceQuota etc.
     assert "profile" not in v
-    assert v["resourceQuota"]["requests"]["memory"] == "2Gi"
+    # 4Gi covers adapter + wazuh-{manager,indexer,dashboard} at PoC limits
+    # with restart headroom; bumped from 2Gi when Wazuh joined the bundle.
+    assert v["resourceQuota"]["requests"]["memory"] == "4Gi"
     assert v["resourceQuota"]["pods"] == "20"
 
 
@@ -103,7 +105,10 @@ def test_tenant_identity_always_rendered():
     assert v["tenant"]["msspId"] == "11111111-1111-1111-1111-111111111111"
     assert v["branding"]["appName"] == "Acme SOC"
     assert v["branding"]["primaryColor"] == "#112233"
-    assert v["llm"]["apiKeyRef"]["name"] == "tenant-x-llm"
+    # apiKeyRef points at the tenant-namespace Secret (always
+    # ``tenant-llm-key``); ``llm_secret_name`` names the Secret in
+    # ``soctalk-system`` that the controller mirrors from.
+    assert v["llm"]["apiKeyRef"]["name"] == "tenant-llm-key"
 
 
 def test_llm_api_key_propagated_to_chart_values():
