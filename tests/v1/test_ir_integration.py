@@ -126,7 +126,7 @@ async def test_event_idempotency_silent_dedup(
     e1 = await append_event(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=None,
         kind=EventKind.ANALYST_MESSAGE,
         payload=payload,
@@ -136,7 +136,7 @@ async def test_event_idempotency_silent_dedup(
     e2 = await append_event(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=None,
         kind=EventKind.ANALYST_MESSAGE,
         payload=payload,
@@ -166,7 +166,7 @@ async def test_proposal_idempotency_on_duplicate(
     p1 = await create_proposal(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=run_id,
         action_type="block_ip",
         params={"ip": "1.2.3.4", "ttl_days": 30},
@@ -176,7 +176,7 @@ async def test_proposal_idempotency_on_duplicate(
     p2 = await create_proposal(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=run_id,
         action_type="block_ip",
         params={"ttl_days": 30, "ip": "1.2.3.4"},  # reordered, same semantic
@@ -248,7 +248,7 @@ async def test_reducer_replay_matches_live(
     await append_event(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=None,
         kind=EventKind.ALERT_INGESTED,
         payload={"rule_id": "5720", "severity": 8, "ai_confidence": 0.8,
@@ -258,7 +258,7 @@ async def test_reducer_replay_matches_live(
     await append_event(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=None,
         kind=EventKind.HYPOTHESIS_UPDATED,
         payload={"id": "root", "confidence": 0.9, "rationale": "more evidence"},
@@ -267,7 +267,7 @@ async def test_reducer_replay_matches_live(
     await append_event(
         mssp_session,
         tenant_id=tenant_a.tenant_id,
-        case_id=case_id,
+        investigation_id=case_id,
         run_id=None,
         kind=EventKind.DIRECTIVE_ADDED,
         payload={"id": "d1", "text": "always check SPF"},
