@@ -16,14 +16,19 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
+        # Bootstrap user is `postgres` (default). soctalk_admin is created
+        # by a setup step below with NOSUPERUSER NOBYPASSRLS so RLS tests
+        # see the role-attribute invariants the platform relies on.
+        # Postgres refuses to downgrade the bootstrap user, which is why
+        # we don't make soctalk_admin the bootstrap.
         image: postgres:16
         env:
-          POSTGRES_USER: soctalk_admin
-          POSTGRES_PASSWORD: soctalk_admin
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: soctalk
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U soctalk_admin"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -54,6 +59,19 @@ jobs:
         env:
           SKIP_INTEGRATION: '1'
         run: pytest tests/v1 -v
+
+      - name: Bootstrap soctalk_admin role
+        run: |
+          # Create soctalk_admin with the platform's required attributes
+          # (LOGIN, NOSUPERUSER implicit, NOBYPASSRLS implicit) before alembic
+          # runs as that role. Mirrors what infra (Helm pre-install Job) does
+          # in production. Postgres bootstrap user (`postgres`) keeps its
+          # superuser privilege, which we need for this CREATE ROLE.
+          PGPASSWORD=postgres psql -h localhost -U postgres -d soctalk \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE soctalk_admin LOGIN PASSWORD 'soctalk_admin';" \
+            -c "GRANT ALL ON DATABASE soctalk TO soctalk_admin;" \
+            -c "GRANT ALL ON SCHEMA public TO soctalk_admin;"
 
       - name: Apply V1 migration
         env:
