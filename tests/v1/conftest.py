@@ -200,18 +200,19 @@ async def _truncate_test_tables(session: AsyncSession) -> None:
     from sqlalchemy import text
 
     tables = [
-        # IR (v1_0003) — must TRUNCATE first because they reference
-        # tenants / cases; CASCADE will pull bridge tables along.
+        # IR (v1_0003, renamed in v1_0011) — must TRUNCATE first because
+        # they reference tenants / investigations; CASCADE pulls bridge
+        # tables along.
         "execution_log",
-        "case_outbox",
+        "investigation_outbox",
         "proposals",
-        "case_links",
-        "case_iocs",
-        "case_assets",
-        "case_events",
-        "case_facts",
-        "case_runs",
-        "cases",
+        "investigation_links",
+        "investigation_iocs",
+        "investigation_assets",
+        "investigation_events",
+        "investigation_facts",
+        "investigation_runs",
+        "investigations",
         "alerts",
         "iocs",
         "notes",
