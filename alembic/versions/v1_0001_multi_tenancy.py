@@ -94,6 +94,20 @@ def _create_roles() -> None:
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'soctalk_mssp') THEN
                 CREATE ROLE soctalk_mssp LOGIN BYPASSRLS;
             END IF;
+            -- Normalize soctalk_admin's attributes if a pre-existing role
+            -- (e.g. POSTGRES_USER=soctalk_admin in a Docker postgres image,
+            -- which creates it as SUPERUSER) drifted from the platform
+            -- invariant. RLS isolation depends on the migration owner not
+            -- being a superuser or bypassrls. Guarded so the ALTER ROLE
+            -- only fires when needed: ALTER ROLE on superuser attrs
+            -- requires SUPERUSER, which only the misconfigured-CI case has.
+            IF EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = 'soctalk_admin'
+                  AND (rolsuper OR rolbypassrls)
+            ) THEN
+                ALTER ROLE soctalk_admin NOSUPERUSER NOBYPASSRLS;
+            END IF;
         END
         $$;
     """)
