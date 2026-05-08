@@ -69,7 +69,7 @@ jobs:
           # superuser privilege, which we need for this CREATE ROLE.
           PGPASSWORD=postgres psql -h localhost -U postgres -d soctalk \
             -v ON_ERROR_STOP=1 \
-            -c "CREATE ROLE soctalk_admin LOGIN PASSWORD 'soctalk_admin';" \
+            -c "CREATE ROLE soctalk_admin LOGIN CREATEROLE PASSWORD 'soctalk_admin';" \
             -c "GRANT ALL ON DATABASE soctalk TO soctalk_admin;" \
             -c "GRANT ALL ON SCHEMA public TO soctalk_admin;"
 
