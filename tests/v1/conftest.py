@@ -153,8 +153,10 @@ async def seed_two_tenants(
     # order — not FK order. Flush each dependent layer before moving on.
     mssp_session.add_all([
         Organization(id=org_a_id, mssp_id=uuid4(), mssp_name="MSSP-A",
+                     slug="mssp-a",
                      install_id=uuid4(), install_label="test"),
         Organization(id=org_b_id, mssp_id=uuid4(), mssp_name="MSSP-B",
+                     slug="mssp-b",
                      install_id=uuid4(), install_label="test"),
     ])
     await mssp_session.flush()
