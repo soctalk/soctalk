@@ -60,16 +60,24 @@ jobs:
           SKIP_INTEGRATION: '1'
         run: pytest tests/v1 -v
 
-      - name: Bootstrap soctalk_admin role
+      - name: Bootstrap SocTalk roles
         run: |
-          # Create soctalk_admin with the platform's required attributes
-          # (LOGIN, NOSUPERUSER implicit, NOBYPASSRLS implicit) before alembic
-          # runs as that role. Mirrors what infra (Helm pre-install Job) does
-          # in production. Postgres bootstrap user (`postgres`) keeps its
-          # superuser privilege, which we need for this CREATE ROLE.
+          # Pre-create all three SocTalk roles with their correct attributes,
+          # mirroring what infra (Helm pre-install Job) does in production.
+          # The migration uses ``CREATE ROLE ... IF NOT EXISTS`` so these
+          # blocks are no-ops once the roles are present.
+          # Why bootstrap them here instead of letting the migration do it:
+          # soctalk_admin must be NOSUPERUSER NOBYPASSRLS (RLS invariant),
+          # but PG refuses to let a non-BYPASSRLS role CREATE another role
+          # with BYPASSRLS — so the migration would deadlock on
+          # ``CREATE ROLE soctalk_mssp LOGIN BYPASSRLS``. The privileged
+          # bootstrap user (``postgres``) creates the BYPASSRLS role; the
+          # migration just sees it already exists.
           PGPASSWORD=postgres psql -h localhost -U postgres -d soctalk \
             -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE soctalk_admin LOGIN CREATEROLE PASSWORD 'soctalk_admin';" \
+            -c "CREATE ROLE soctalk_app   LOGIN PASSWORD 'soctalk_app';" \
+            -c "CREATE ROLE soctalk_mssp  LOGIN BYPASSRLS PASSWORD 'soctalk_mssp';" \
             -c "GRANT ALL ON DATABASE soctalk TO soctalk_admin;" \
             -c "GRANT ALL ON SCHEMA public TO soctalk_admin;"
 
@@ -87,10 +95,8 @@ jobs:
           DATABASE_URL_APP: postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk
           DATABASE_URL_MSSP: postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk
         run: |
-          # Migration created the roles without passwords; set them for CI.
-          psql "postgresql://soctalk_admin:soctalk_admin@localhost:5432/soctalk" \
-            -c "ALTER ROLE soctalk_app WITH PASSWORD 'soctalk_app';" \
-            -c "ALTER ROLE soctalk_mssp WITH PASSWORD 'soctalk_mssp';"
+          # Roles + passwords were set in the Bootstrap step above; nothing
+          # to do here beyond running the integration suite.
           pytest tests/v1 -v -m integration
 
       - name: pip-audit (advisory)
