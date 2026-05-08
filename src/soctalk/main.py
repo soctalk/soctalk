@@ -648,7 +648,7 @@ class SecOpsOrchestrator:
                 "investigation_completed",
                 investigation_id=investigation.id,
                 status=status,
-                investigation_id=investigation_id,
+                thehive_case_id=investigation_id,
             )
 
             # Mark investigation as completed in queue (allows similar titles again)

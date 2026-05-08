@@ -1,8 +1,12 @@
 install:
-  msspId: ''
-  msspName: ''
+  # Placeholder defaults so `helm lint` passes the schema. Operators
+  # MUST override these at install time (zero-UUIDs and the placeholder
+  # name are deliberately obvious-fake; bootstrap will refuse to seed
+  # data with these values).
+  msspId: '00000000-0000-0000-0000-000000000000'
+  msspName: 'Set me at install time'
   msspSlug: ''
-  installId: ''
+  installId: '00000000-0000-0000-0000-000000000000'
   installLabel: pilot-prod
   # Bootstrap MSSP admin user. Created on first install if password is
   # set (or pulled from existingSecret with key ``password``). Idempotent
