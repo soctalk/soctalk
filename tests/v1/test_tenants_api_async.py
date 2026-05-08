@@ -80,7 +80,7 @@ async def seeded_org(
     )
     await admin_session.commit()
     org = Organization(
-        mssp_id=uuid4(), mssp_name="Legacy-API Test",
+        mssp_id=uuid4(), mssp_name="Legacy-API Test", slug="legacy-api-test",
         install_id=uuid4(), install_label="test",
     )
     mssp_session.add(org)

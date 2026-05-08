@@ -88,7 +88,7 @@ async def test_single_active_run_per_case(
     case_id = uuid4()
     await mssp_session.execute(
         text(
-            "INSERT INTO cases (id, tenant_id, short_id, title, severity) "
+            "INSERT INTO investigations (id, tenant_id, short_id, title, severity) "
             "VALUES (:id, :t, '2026-0001', 'test', 5)"
         ),
         {"id": str(case_id), "t": str(tenant_a.tenant_id)},
@@ -115,7 +115,7 @@ async def test_event_idempotency_silent_dedup(
     case_id = uuid4()
     await mssp_session.execute(
         text(
-            "INSERT INTO cases (id, tenant_id, short_id, title, severity) "
+            "INSERT INTO investigations (id, tenant_id, short_id, title, severity) "
             "VALUES (:id, :t, '2026-0002', 'test', 5)"
         ),
         {"id": str(case_id), "t": str(tenant_a.tenant_id)},
@@ -154,7 +154,7 @@ async def test_proposal_idempotency_on_duplicate(
     case_id = uuid4()
     await mssp_session.execute(
         text(
-            "INSERT INTO cases (id, tenant_id, short_id, title, severity) "
+            "INSERT INTO investigations (id, tenant_id, short_id, title, severity) "
             "VALUES (:id, :t, '2026-0003', 'test', 5)"
         ),
         {"id": str(case_id), "t": str(tenant_a.tenant_id)},
@@ -206,7 +206,7 @@ async def test_customer_audience_cannot_read_mssp_only(
     case_id = uuid4()
     await app_session.execute(
         text(
-            "INSERT INTO cases (id, tenant_id, short_id, title, severity, visibility) "
+            "INSERT INTO investigations (id, tenant_id, short_id, title, severity, visibility) "
             "VALUES (:id, :t, '2026-0004', 'mssp-only case', 5, 'mssp_only')"
         ),
         {"id": str(case_id), "t": str(tenant_a.tenant_id)},
@@ -219,7 +219,7 @@ async def test_customer_audience_cannot_read_mssp_only(
     )
     count = (
         await app_session.execute(
-            text("SELECT count(*) FROM cases WHERE id = :id"),
+            text("SELECT count(*) FROM investigations WHERE id = :id"),
             {"id": str(case_id)},
         )
     ).scalar_one()
@@ -237,7 +237,7 @@ async def test_reducer_replay_matches_live(
     case_id = uuid4()
     await mssp_session.execute(
         text(
-            "INSERT INTO cases (id, tenant_id, short_id, title, severity) "
+            "INSERT INTO investigations (id, tenant_id, short_id, title, severity) "
             "VALUES (:id, :t, '2026-0005', 'replay test', 5)"
         ),
         {"id": str(case_id), "t": str(tenant_a.tenant_id)},

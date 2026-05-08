@@ -114,7 +114,7 @@ async def e2e_tenant(
     await admin_session.commit()
 
     org = Organization(
-        mssp_id=uuid4(), mssp_name="E2E MSSP",
+        mssp_id=uuid4(), mssp_name="E2E MSSP", slug="e2e-mssp",
         install_id=uuid4(), install_label="e2e",
     )
     session.add(org)

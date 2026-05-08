@@ -86,7 +86,7 @@ async def seeded_tenant(
 
     async with mssp_sessionmaker() as session:
         org = Organization(
-            mssp_id=uuid4(), mssp_name="Worker Test",
+            mssp_id=uuid4(), mssp_name="Worker Test", slug="worker-test",
             install_id=uuid4(), install_label="test",
         )
         session.add(org)

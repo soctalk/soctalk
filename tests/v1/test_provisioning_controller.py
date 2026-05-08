@@ -180,7 +180,7 @@ async def seeded_tenant(
     await admin_session.commit()
 
     org = Organization(
-        mssp_id=uuid4(), mssp_name="Test MSSP",
+        mssp_id=uuid4(), mssp_name="Test MSSP", slug="test-mssp",
         install_id=uuid4(), install_label="test",
     )
     session.add(org)
