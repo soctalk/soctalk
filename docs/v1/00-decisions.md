@@ -55,15 +55,15 @@ User (4-role), Worker, System, SocTalk K8s ServiceAccount, Tenant adapter, Wazuh
 
 Shared database + `tenant_id` column on every tenant-scoped table. **Row-Level Security with `FORCE ROW LEVEL SECURITY`**. Three Postgres roles: `soctalk_admin` (owner, migrations), `soctalk_app` (runtime, RLS-subject), `soctalk_mssp` (`BYPASSRLS`, system-context only). See `P0-4-postgres-rls.md`.
 
-## D-10: Core code license: MIT `[DEFAULT]`
+## D-10: Core code license: Apache 2.0 `[LOCKED]`
 
-Project `pyproject.toml` already declares MIT. **Respecting existing metadata: no license change.** A formal `LICENSE` file is added at repo root mirroring this declaration.
+Relicensed from MIT to Apache 2.0 (May 2026) before external contributions land. Reason: explicit patent grant matters for enterprise/MSSP procurement legal review; Apache 2.0 is the prevailing license for cloud-native infra OSS (Kubernetes, Prometheus, OPA, Falco). `LICENSE` carries the canonical Apache text; `NOTICE` carries the attribution.
 
 Source-available (BSL-1.1) is a V1.5+ consideration if hyperscaler-cannibalization pressure emerges. Not now.
 
 ## D-11: Open-core file layout `[LOCKED]`
 
-- `src/soctalk/core/`: open-source (MIT), default runtime.
+- `src/soctalk/core/`: open-source (Apache 2.0), default runtime.
 - `src/soctalk_enterprise/`: proprietary modules, empty in V1 except CI import-boundary wiring.
 - CI enforces `core` cannot import from `soctalk_enterprise` via `import-linter` (see `.importlinter`).
 

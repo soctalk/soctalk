@@ -35,7 +35,7 @@ keywords:
 
 annotations:
   category: Security
-  licenses: MIT
+  licenses: Apache-2.0
 
 # Subchart dependencies are intentionally undeclared until the chart audit
 # produces patched Wazuh/TheHive/Cortex charts under ./charts/. At that point

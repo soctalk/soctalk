@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "SecOps LLM Agent using LangGraph with Wazuh, Cortex, and TheHive integration via MCP"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Gianluca Brigandi"}
 ]

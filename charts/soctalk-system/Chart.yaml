@@ -36,7 +36,7 @@ keywords:
 
 annotations:
   category: Security
-  licenses: MIT
+  licenses: Apache-2.0
 
 # Postgres could be externalized or kept in-chart; current default is in-chart StatefulSet.
 dependencies: []

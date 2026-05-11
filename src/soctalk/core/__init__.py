@@ -1,6 +1,6 @@
 """SocTalk V1 open-core package.
 
-Code under ``soctalk.core`` is open-source (MIT). By design, it may not import
+Code under ``soctalk.core`` is open-source (Apache 2.0). By design, it may not import
 from ``soctalk_enterprise``. The boundary is enforced in CI via import-linter
 (see ``.importlinter`` at repo root).
 

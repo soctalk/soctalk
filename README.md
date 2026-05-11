@@ -255,4 +255,4 @@ pnpm test   # Playwright
 
 ## License
 
-MIT
+Apache 2.0. See `LICENSE` and `NOTICE`.

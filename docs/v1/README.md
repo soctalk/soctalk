@@ -36,7 +36,7 @@ Phase 0 completes when every document above is reviewed and merged as a read-onl
 - `.importlinter` config active in CI (enforces `src/soctalk/core` cannot import `src/soctalk_enterprise`).
 - `scripts/dev-up.sh` brings up k3d + Cilium for local dev and CI.
 - `charts/soctalk-system/` and `charts/soctalk-tenant/` skeletons exist with `Chart.yaml`, `values.yaml`, `values.schema.json`.
-- `LICENSE` file exists at repo root mirroring `pyproject.toml` MIT declaration.
+- `LICENSE` (Apache 2.0) and `NOTICE` files exist at repo root, mirrored by `pyproject.toml`.
 - Phase 0 spikes for chart audit (P0-2), sizing measurement (P0-7), Wazuh ingress (P0-6) complete and update the documents with real numbers.
 
 ## Traceability into Phase 1+
