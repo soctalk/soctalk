@@ -1,4 +1,4 @@
-# SocTalk V1 Operator Runbook
+# SocTalk Operator Runbook
 
 Common operational tasks for MSSP operators running a SocTalk install.
 
@@ -49,9 +49,9 @@ curl -X POST https://mssp.../api/mssp/tenants/<id>:decommission?force=true
 If the data plane is healthy but adapter can't reach `soctalk-system`,
 inspect the `adapter-egress` NetworkPolicy.
 
-## License expired (V1.5+ only)
+## License expired (future releases only)
 
-*V1 has no license enforcement. This section documents V1.5 behavior.*
+*has no license enforcement. This section documents a future release behavior.*
 
 1. Install banner appears; new tenant creation / upgrades blocked.
 2. Get a fresh license JWT from Cloud portal.
@@ -85,7 +85,7 @@ soctalk-cli rotate-agent-secret --tenant <slug>
 
 ## Database restore (disaster recovery)
 
-V1 backup is MSSP-managed externally (Velero, cluster snapshots, external
+This release backup is MSSP-managed externally (Velero, cluster snapshots, external
 `pg_dump`). To restore:
 
 1. Stop SocTalk API + orchestrator:

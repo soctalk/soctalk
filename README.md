@@ -6,9 +6,25 @@ LLM-powered SOC agent that autonomously triages, investigates, and escalates sec
 
 Integrates with Wazuh SIEM, Cortex, TheHive, and MISP via MCP servers, plus a real-time dashboard.
 
-## Quick Start
+SocTalk runs as a single-host SOC tool or as a multi-tenant platform for MSPs and MSSPs.
 
-### Docker Compose (recommended)
+The single-host path uses Docker Compose. One SocTalk instance, one Wazuh, one dashboard. Setup is under "Quick Start: Single-tenant Compose" below.
+
+The multi-tenant platform is the MSSP-facing shape of SocTalk. A shared control plane holds tenant-scoped state in Postgres and provisions per-tenant SOC stacks in their own Kubernetes namespaces. Design and install guides live in [`docs/multi-tenant/`](docs/multi-tenant/); "Multi-tenant deployment" below summarizes the shape.
+
+## Multi-tenant deployment
+
+Multi-tenant SocTalk is an MSSP-deployed control plane. It provisions and operates dedicated OSS SOC stacks per customer tenant on k3s or k8s. Tenant state lives in Postgres under Row-Level Security. Each tenant's SOC stack runs in its own Kubernetes namespace, with its own LLM credentials and branding.
+
+Two charts ship. `soctalk-system` is the control plane. `soctalk-tenant` is the per-customer SOC stack the controller renders and applies.
+
+Full design and operations material lives in [`docs/multi-tenant/`](docs/multi-tenant/), including the security model, chart audit, RLS hygiene, ingress, sizing, and the install, runbook, and upgrade guides.
+
+## Quick Start: Single-tenant Compose
+
+The single-host path. Use it for evaluation, lab work, or running SocTalk as the SOC tool for a single team.
+
+### Docker Compose
 
 ```bash
 cp .env.example .env
@@ -69,7 +85,7 @@ Dev helper to run everything locally:
 - **Real-time dashboard** (SvelteKit + SSE)
 - **Configurable integrations** via Settings UI (secrets remain env-only)
 
-## How It Works
+## Architecture
 
 SocTalk is split into three pieces: an **orchestrator** (LangGraph workflow), an **API** that streams events and exposes REST, and a **dashboard** for investigations and human review.
 
@@ -252,6 +268,12 @@ cd frontend
 pnpm check
 pnpm test   # Playwright
 ```
+
+## Further docs
+
+[`docs/multi-tenant/`](docs/multi-tenant/) covers the multi-tenant architecture and operations, including the security model, chart audit, RLS hygiene, ingress, sizing, install, runbook, and upgrade material.
+
+[`docs/multi-tenant/TROUBLESHOOTING.md`](docs/multi-tenant/TROUBLESHOOTING.md) is the symptom-to-fix index for multi-tenant deployments.
 
 ## License
 

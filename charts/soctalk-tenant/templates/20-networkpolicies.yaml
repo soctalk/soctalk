@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicies.enabled }}
 {{/*
-See docs/v1/P0-3-cni-networkpolicy.md. §4.3.
+See docs/multi-tenant/P0-3-cni-networkpolicy.md. §4.3.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

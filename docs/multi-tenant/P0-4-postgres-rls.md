@@ -161,14 +161,14 @@ Migrations land in this order (Alembic revisions):
 
 1. `add_tenants_and_organizations`: create `tenants`, `organizations`, seed default MSSP row for the install.
 2. `add_tenant_id_to_core_tables`: add nullable `tenant_id` columns to existing tenant-scoped tables.
-3. `backfill_tenant_id`: if any existing data: associate with a "default tenant" for migration continuity; V1 has no existing data to worry about in a greenfield pilot, but the migration path exists.
+3. `backfill_tenant_id`: if any existing data: associate with a "default tenant" for migration continuity; has no existing data to worry about in a greenfield pilot, but the migration path exists.
 4. `make_tenant_id_not_null`: once backfilled, tighten constraint.
 5. `enable_rls_on_tenant_scoped_tables`: apply policies, FORCE RLS.
 6. `create_postgres_roles`: idempotent role creation (guarded by `DO $$ BEGIN ... EXCEPTION ... END $$;` blocks).
 7. `convert_idempotency_keys_to_composite`: drop+recreate unique constraint.
 8. `add_new_tenant_scoped_tables` creates `audit_log`, `tenant_lifecycle_events`, `integration_configs`, `branding_configs`, and `tenant_secrets`.
 
-All migrations forward-only. Each migration must include a test that asserts RLS behavior post-apply. Rollback strategy: restore from pre-migration Postgres dump (backup/restore runbook); no `downgrade()` Alembic functions in V1 (to avoid giving a false sense of clean reversal).
+All migrations forward-only. Each migration must include a test that asserts RLS behavior post-apply. Rollback strategy: restore from pre-migration Postgres dump (backup/restore runbook); no `downgrade()` Alembic functions in this release (to avoid giving a false sense of clean reversal).
 
 ## 9 Isolation test template (Phase 1 gate)
 

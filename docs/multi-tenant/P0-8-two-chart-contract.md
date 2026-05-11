@@ -84,11 +84,11 @@ resources:
 admission:
   engine: vap    # vap | none
 
-# Licensing: disabled in V1
+# Licensing: disabled in this release
 licensing:
   enabled: false
 
-# Telemetry: disabled in V1 (no Cloud backend to send to)
+# Telemetry: disabled in this release (no Cloud backend to send to)
 telemetry:
   enabled: false
 ```
@@ -172,9 +172,9 @@ components:
         limits:   { cpu: 1,    memory: 2Gi }
       persistence:
         size: 20Gi
-    analyzers: []              # V1 allowlist; empty = safe defaults
+    analyzers: []              # allowlist; empty = safe defaults
   misp:
-    enabled: false             # V1.5
+    enabled: false             # a future release
 
 # Tenant namespace policies
 networkPolicies:
@@ -296,7 +296,7 @@ dependencies:
 
 Vendoring reasons (from P0-2):
 - Apply SocTalk patches without depending on upstream acceptance.
-- Stable hash for supply-chain attestation (V1.5 cosign).
+- Stable hash for supply-chain attestation (a future release cosign).
 - Reproducible builds.
 
 ## 6 Render → apply flow
@@ -326,7 +326,7 @@ On failure at any step:
 - If `helm install` fails, rollback via `helm uninstall` + `kubectl delete ns`.
 - Tenant state remains `pending` with error details; MSSP operator can retry from UI.
 
-On `POST /api/mssp/tenants/:id:upgrade` (V1.5 API; V1 runbook):
+On `POST /api/mssp/tenants/:id:upgrade` (a future release API; runbook):
 ```
 1. Check compatibility matrix.
 2. helm upgrade soctalk-tenant -n tenant-<slug> --values <new-values.yaml>
@@ -348,8 +348,8 @@ On `POST /api/mssp/tenants/:id:decommission`:
 
 ### 7.1 Distribution
 
-- **V1 (minimal)**: push as OCI artifacts to `ghcr.io/gbrigandi/charts/soctalk-system` and `/charts/soctalk-tenant`: Public, unauthenticated pulls.
-- **V1.5**: cosign-signed + SBOM attached.
+- **(minimal)**: push as OCI artifacts to `ghcr.io/gbrigandi/charts/soctalk-system` and `/charts/soctalk-tenant`: Public, unauthenticated pulls.
+- **a future release**: cosign-signed + SBOM attached.
 
 Install guide uses:
 ```bash
@@ -373,7 +373,7 @@ Phase 0 and Phase 2 tests:
 2. **Round-trip render**: SocTalk renders a tenant config → values → apply → read back from K8s → compare. Assert no drift.
 3. **Subchart pinning**: `Chart.lock` + digests match expectations; CI fails on drift.
 4. **Compatibility matrix enforcement**: unit test for `controller.can_upgrade(system=X, tenant=Y)` across supported / deprecated / blocked combos.
-5. **Bundle signing smoke test (V1.5)**: `cosign verify` on published chart.
+5. **Bundle signing smoke test (a future release)**: `cosign verify` on published chart.
 
 ## 9 Phase 0 gate criteria
 

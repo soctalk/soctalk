@@ -1,6 +1,6 @@
 """Integration tests for the internal authentication subsystem.
 
-Covers the nine backend cases from ``docs/v1/P1-1-internal-auth.md`` §11:
+Covers the nine backend cases from ``docs/multi-tenant/P1-1-internal-auth.md`` §11:
 
 1. Login happy path creates a session row with the right tenant_context.
 2. Wrong password increments consecutive_failures; ten triggers lockout.

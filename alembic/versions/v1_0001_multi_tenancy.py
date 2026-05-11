@@ -4,7 +4,7 @@ Revision ID: v1_0001_multi_tenancy
 Revises: <chain-to-latest-existing>
 Create Date: 2026-04-19
 
-Authoritative spec: ``docs/v1/P0-4-postgres-rls.md``.
+Authoritative spec: ``docs/multi-tenant/P0-4-postgres-rls.md``.
 
 Changes
 -------

@@ -1,5 +1,5 @@
 {{/*
-NetworkPolicies for soctalk-system. Per docs/v1/P0-3-cni-networkpolicy.md §4.1.
+NetworkPolicies for soctalk-system. Per docs/multi-tenant/P0-3-cni-networkpolicy.md §4.1.
 Default-deny baseline plus explicit allow rules.
 */}}
 apiVersion: networking.k8s.io/v1

@@ -1,6 +1,6 @@
 """Deterministic reducer over investigation_events → investigation_facts projection.
 
-Contract (see ``docs/v1/P2-implementation-plan.md`` §b):
+Contract (see ``docs/multi-tenant/P2-implementation-plan.md`` §b):
 
 - Input: ordered stream of events for an investigation.
 - Output: projected facts (hypotheses, directives, policies, timeline).

@@ -164,7 +164,7 @@ Same state → same key → unique index dedups. First mirror stores
 5. Slack refresh (M8) parallelizable, non-gating.
 6. M6b (tree navigator, command polish) lands post-beta as v1.x.
 
-Upgrade path from current V1: additive. New tables, new columns with
-safe defaults, no schema breaks. Existing V1 deployments migrate by
+Upgrade path from current : additive. New tables, new columns with
+safe defaults, no schema breaks. Existing deployments migrate by
 running the new migration and restarting the API. Wazuh adapter wiring
 already in place — native IR starts consuming events immediately.

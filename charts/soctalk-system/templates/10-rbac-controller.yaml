@@ -1,6 +1,6 @@
 {{/*
 SocTalk control-plane RBAC: cluster-scoped namespace verbs and workload verbs
-needed to provision tenant namespaces. Per docs/v1/P0-1-security-model.md §B3.
+needed to provision tenant namespaces. Per docs/multi-tenant/P0-1-security-model.md §B3.
 
 The controller needs cluster-scoped namespace verbs. The system chart installs
 an admission guard when admission.engine=vap so this ServiceAccount can only

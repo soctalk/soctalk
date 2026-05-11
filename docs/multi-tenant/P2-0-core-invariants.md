@@ -41,7 +41,7 @@ case_outbox          outbound work for executors and exports
 ```
 
 Every content-bearing row carries `tenant_id`, `visibility`, and
-`created_at`. RLS applies per V1 tenancy.
+`created_at`. RLS applies per tenancy.
 
 ## 3. Visibility model
 

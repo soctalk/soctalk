@@ -1,8 +1,8 @@
-# SocTalk V1 Upgrade Guide
+# SocTalk Upgrade Guide
 
-V1 supports upgrades via `helm upgrade` for both chart classes. Upgrade and
-rollback are **runbook operations** in V1; an API for fleet-wide upgrade
-orchestration lands in V1.5 (see `docs/v1/00-decisions.md` D-21).
+This release supports upgrades via `helm upgrade` for both chart classes. Upgrade and
+rollback are **runbook operations** in this release; an API for fleet-wide upgrade
+orchestration lands in a future release.
 
 ## Pre-flight checklist
 
@@ -14,7 +14,7 @@ Before any upgrade:
 2. **Verify compatibility matrix**: MSSP UI → System → Versions shows which
    `soctalk-tenant` versions are supported by the target
    `soctalk-system`. Upgrade `soctalk-system` first, then tenants.
-3. **Backup** (V1 is MSSP-managed): snapshot Postgres + all tenant PVCs.
+3. **Backup** (is MSSP-managed): snapshot Postgres + all tenant PVCs.
    See the [runbook](../runbook/README.md#database-restore-disaster-recovery).
 4. **Dry-run** with `helm diff`:
    ```bash
@@ -75,7 +75,7 @@ Tenant data plane rollbacks are safer than system-level rollbacks: the OSS
 stacks (Wazuh/TheHive/Cortex) store their own data in PVCs that `helm
 rollback` leaves untouched.
 
-## Fleet upgrade (manual loop in V1)
+## Fleet upgrade (manual loop in this release)
 
 ```bash
 # List tenants.
@@ -91,7 +91,7 @@ for ns in tenant-acme tenant-beta tenant-gamma; do
 done
 ```
 
-V1.5 replaces this loop with a canary-aware fleet-upgrade API.
+a future release replaces this loop with a canary-aware fleet-upgrade API.
 
 ## Upgrade ordering
 
@@ -114,6 +114,6 @@ change:
 4. Be prepared to `helm rollback` + restore PVCs if the data plane's
    schema-migration process fails.
 
-Upstream OSS projects occasionally ship breaking changes. The V1 chart
-audit (`docs/v1/P0-2-chart-audit.md`) pins exact subchart versions; bumping
+Upstream OSS projects occasionally ship breaking changes. The chart
+audit (`docs/multi-tenant/P0-2-chart-audit.md`) pins exact subchart versions; bumping
 those versions is explicit and tested before release.

@@ -10,5 +10,5 @@ licensing hooks (V1.5+) under ``soctalk.core.licensing``; observability helpers
 under ``soctalk.core.observability``.
 
 Legacy single-tenant code remains at ``soctalk.*`` top level until its
-multi-tenant refactor lands (phased per ``docs/v1/README.md``).
+multi-tenant refactor lands (phased per ``docs/multi-tenant/README.md``).
 """

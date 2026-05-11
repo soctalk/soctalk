@@ -4,7 +4,7 @@ Gate artifact: Principal catalog, actor×resource matrix, RLS policy matrix, Pos
 
 ## 1 Principal catalog
 
-Eight principals. See `00-decisions.md` D-07.
+Eight principals.
 
 | # | Principal | Category | Scope | Authenticates via |
 |---|---|---|---|---|
@@ -15,13 +15,13 @@ Eight principals. See `00-decisions.md` D-07.
 | 5 | **Tenant adapter** | Data plane sidecar | Single tenant, calls SocTalk API only | Adapter JWT, tenant-scoped, short-lived |
 | 6 | **Wazuh agent** | External endpoint agent | Single tenant's Wazuh manager | Wazuh `authd` enrollment → per-agent mTLS |
 | 7 | **MSSP cluster admin** | Human, out-of-band | Entire cluster (unbounded) | `kubectl` credentials |
-| 8 | **Cloud license issuer** | Trust anchor | Offline signing authority | Ed25519 key in HSM/KMS (V1.5+) |
+| 8 | **Cloud license issuer** | Trust anchor | Offline signing authority | Ed25519 key in HSM/KMS (future releases) |
 
 ### 1.1 User roles
 
 | Role | Scope | Typical function |
 |---|---|---|
-| `platform_admin` | Install-wide | SocTalk upgrades, install settings, audit export, license rotation (V1.5) |
+| `platform_admin` | Install-wide | SocTalk upgrades, install settings, audit export, license rotation (a future release) |
 | `mssp_admin` | Cross-tenant | Customer CRUD, user management, cross-tenant reporting, branding |
 | `analyst` | Cross-tenant | Triage, approvals, investigation work; auditable impersonation into any tenant |
 | `customer_viewer` | Single tenant | Read-only dashboards, incidents, reports, audit trail |
@@ -89,18 +89,18 @@ Matrix is expressed as allowed actions per (principal, resource-group). `R`=read
 | User management (MSSP-side) | RW | R (+ invite) | R | | - | RW | | - |
 | User management (tenant-side, within own tenant) | RW | RW | | R self | | - | | - |
 | Audit log (own tenant) | R all | R all | R all | R own | W | W | | W (via bootstrap) |
-| License material (V1.5) | R | | - | | - | R | | - |
+| License material (a future release) | R | | - | | - | R | | - |
 | K8s namespaces `tenant-*` | (via API only) | (via API only) | (via API only) | | - | | CRUD | |
 | K8s resources within tenant-* | (via API only) | (via API only) | (via API only) | | - | | CRUD | R self |
 | K8s resources in `soctalk-system` | | - | | - | | - | R (own ns) | |
 | Per-tenant LLM Secret | | - | | - | R (own tenant) | | mount | |
 | Per-tenant integration Secrets (Wazuh/TheHive/Cortex API creds) | | - | | - | R (own tenant) | | mount | |
-| Cloud telemetry (V1.5) | | - | | - | W (anonymized aggregate) | W | | - |
+| Cloud telemetry (a future release) | | - | | - | W (anonymized aggregate) | W | | - |
 
 Notes:
 - "via API only" means the human principal triggers K8s operations by calling SocTalk API endpoints, not directly. API handlers use the SocTalk K8s ServiceAccount.
 - `analyst` acting on a tenant writes audit rows with both `user_id` and the tenant's `tenant_id`: Customer-side audit view shows these as impersonation entries.
-- `Worker` reads tenant-scoped Secrets via K8s mount when orchestrator pod needs per-tenant LLM key for the tenant it's currently processing. Mount strategy: projected per-tenant at orchestrator startup if small enough, or env-var rotation per job dispatch for larger fleets (V1.5 decision).
+- `Worker` reads tenant-scoped Secrets via K8s mount when orchestrator pod needs per-tenant LLM key for the tenant it's currently processing. Mount strategy: projected per-tenant at orchestrator startup if small enough, or env-var rotation per job dispatch for larger fleets (a future release decision).
 
 ## 4 RLS policy matrix
 
@@ -127,7 +127,7 @@ Examples: `POST /api/mssp/tenants`, `GET /api/mssp/tenants`, `POST /api/mssp/imp
 
 ### 5.2 `/api/tenant/*`. Tenant-side (requires `customer_viewer`)
 
-Hard-scoped. Tenant context from JWT; no impersonation entry. All queries RLS-enforced via `soctalk_app`: Read-only in V1 (except user self-service).
+Hard-scoped. Tenant context from JWT; no impersonation entry. All queries RLS-enforced via `soctalk_app`: Read-only in this release (except user self-service).
 
 Examples: `GET /api/tenant/overview`, `GET /api/tenant/incidents`, `GET /api/tenant/reports`, `GET /api/tenant/audit`, `GET /api/tenant/branding`.
 
@@ -204,7 +204,7 @@ When an `mssp_admin` or `analyst` enters tenant context, a new short-lived token
 
 Adapter JWTs are refreshed weekly; rotation is a SocTalk-controller-side secret rewrite in the tenant namespace.
 
-### 6.5 License JWT (V1.5: reserved schema)
+### 6.5 License JWT (a future release: reserved schema)
 
 ```json
 {
@@ -223,7 +223,7 @@ Adapter JWTs are refreshed weekly; rotation is a SocTalk-controller-side secret 
 }
 ```
 
-Signed with Ed25519 (alg=EdDSA). Header includes `kid` for key identifier. JWKS distributed via ConfigMap in `soctalk-system`: Not enforced in V1; schema reserved for forward compatibility.
+Signed with Ed25519 (alg=EdDSA). Header includes `kid` for key identifier. JWKS distributed via ConfigMap in `soctalk-system`: Not enforced in this release; schema reserved for forward compatibility.
 
 ## 7 Audit requirements
 
@@ -238,13 +238,13 @@ Every mutation writes an `AuditLog` row with:
 - `acting_as` (nullable; set when `mssp_admin`/`analyst` is impersonating a tenant)
 - `request_id` (correlates with log lines)
 
-Retention: 90 days in V1, configurable per-install in V1.5. Customer can view audit rows where `tenant_id = own` including entries with `acting_as` populated (transparency into MSSP actions).
+Retention: 90 days in this release, configurable per-install in a future release. Customer can view audit rows where `tenant_id = own` including entries with `acting_as` populated (transparency into MSSP actions).
 
 MSSP cross-tenant audit view runs under `System` principal.
 
-## 8 Degraded-mode operation allowlist (V1.5 when licensing lands)
+## 8 Degraded-mode operation allowlist (a future release when licensing lands)
 
-V1 has no license enforcement. When licensing lands, expired-license behavior is:
+This release has no license enforcement. When licensing lands, expired-license behavior is:
 
 | Operation | Works when license expired? |
 |---|---|
@@ -268,20 +268,20 @@ Summary; full matrix in `P0-5-secret-placement.md`.
 |---|---|---|---|
 | Per-tenant LLM API key | K8s Secret in `soctalk-system`, named `tenant-<id>-llm` | Worker (mount, per-tenant projection) | MSSP-initiated via tenant config UI |
 | Per-tenant integration creds (Wazuh API, TheHive token, Cortex key) | K8s Secret in `soctalk-system`, named `tenant-<id>-integrations` | Worker (MCP subprocess env) | MSSP-initiated via tenant config UI |
-| Data plane service bootstrap creds (Wazuh admin pw, TheHive init token, Cortex admin key) | K8s Secret in respective `tenant-<slug>` ns | Respective data plane Deployment | Runbook (V1); automated V1.5 |
-| Adapter token signing key | K8s Secret in `soctalk-system`, named `soctalk-adapter-signing-key` | SocTalk API + controller pod only | Manual V1; automated rotation V1.5 |
+| Data plane service bootstrap creds (Wazuh admin pw, TheHive init token, Cortex admin key) | K8s Secret in respective `tenant-<slug>` ns | Respective data plane Deployment | Runbook ; automated in a future release |
+| Adapter token signing key | K8s Secret in `soctalk-system`, named `soctalk-adapter-signing-key` | SocTalk API + controller pod only | Manual; automated rotation a future release |
 | Tenant adapter bearer token | K8s Secret in respective `tenant-<slug>` ns, named `adapter-token` | Tenant adapter only | Minted on tenant provisioning; rotated by controller |
-| User-facing session/JWT signing key | K8s Secret in `soctalk-system`, named `soctalk-jwt-signing-key` | SocTalk API pod | Manual V1; rotation procedure in V1.5 |
-| Postgres credentials | K8s Secret in `soctalk-system`, named `soctalk-postgres-creds` (three entries: admin, app, mssp) | Respective SocTalk pods | Manual V1 |
-| License material (V1.5) | K8s Secret in `soctalk-system`, named `soctalk-license` | SocTalk API pod (read on startup, re-read on SIGHUP) | Issued by Cloud (V1.5); dropped into Secret manually V1.5 |
+| User-facing session/JWT signing key | K8s Secret in `soctalk-system`, named `soctalk-jwt-signing-key` | SocTalk API pod | Manual; rotation procedure in a future release |
+| Postgres credentials | K8s Secret in `soctalk-system`, named `soctalk-postgres-creds` (three entries: admin, app, mssp) | Respective SocTalk pods | Manual |
+| License material (a future release) | K8s Secret in `soctalk-system`, named `soctalk-license` | SocTalk API pod (read on startup, re-read on SIGHUP) | Issued by Cloud (a future release); dropped into Secret manually a future release |
 
 **Invariant**: raw secret material never in Postgres. `TenantSecret` table stores `(namespace, name, version_label)` tuples only.
 
 ## 10 Known architectural limits
 
-- **MSSP cluster admin trust**: principal #7 has unbounded K8s access. SocTalk's isolation model presumes this principal is trusted. Customers requiring defense against insider threat at MSSP level need dedicated-node/dedicated-VM tiering (V2+).
-- **Admission boundary scope**: V1 constrains the SocTalk controller ServiceAccount with `ValidatingAdmissionPolicy` for tenant namespaces and namespaced resource mutations, but MSSP cluster-admin users remain trusted break-glass operators. Kyverno is an optional V1.5 hardening path.
-- **No license enforcement (V1)**: license JWT and feature gates deferred to V1.5. Pilot MSSPs operate on honor.
+- **MSSP cluster admin trust**: principal #7 has unbounded K8s access. SocTalk's isolation model presumes this principal is trusted. Customers requiring defense against insider threat at MSSP level need dedicated-node/dedicated-VM tiering (a future release+).
+- **Admission boundary scope**: constrains the SocTalk controller ServiceAccount with `ValidatingAdmissionPolicy` for tenant namespaces and namespaced resource mutations, but MSSP cluster-admin users remain trusted break-glass operators. Kyverno is an optional a future release hardening path.
+- **No license enforcement **: license JWT and feature gates deferred to a future release. Pilot MSSPs operate on honor.
 - **LLM response cache**: keyed on `(tenant_id, prompt_hash)` from day 1. If ever relaxed, cross-tenant content leak risk; test suite asserts the key composition.
 - **SSE subscriptions**: tenant-scoped at subscription time. Connection-persistence bugs could deliver cross-tenant events on a stale subscription; explicit SSE isolation test in Phase 1 gate.
 - **Worker context leakage**: every worker entrypoint must set `app.current_tenant_id`: Defensive default is zero rows under RLS, not cross-tenant leakage, but test suite asserts the defense.

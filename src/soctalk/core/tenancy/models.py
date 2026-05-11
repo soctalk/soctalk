@@ -1,11 +1,11 @@
 """V1 multi-tenancy SQLModel definitions.
 
-``docs/v1/P0-1-security-model.md``.
+``docs/multi-tenant/P0-1-security-model.md``.
 
 Design notes
 ------------
 - Shared-database tenancy with ``tenant_id`` on every tenant-scoped table.
-- Row-Level Security enforced at Postgres layer (see ``docs/v1/P0-4-postgres-rls.md``);
+- Row-Level Security enforced at Postgres layer (see ``docs/multi-tenant/P0-4-postgres-rls.md``);
   these Python models declare the schema but rely on the migration to attach
   ``ENABLE ROW LEVEL SECURITY`` and ``FORCE ROW LEVEL SECURITY``.
 - ``TenantSecret`` stores *references only*. ``(namespace, secret_name, version_label)``.
@@ -15,7 +15,7 @@ Design notes
   NULL-tenant rows to be visible across contexts for join-style access from
   MSSP endpoints (see P0-4 §5.2).
 
-Roles follow the 4-role model locked in 00-decisions.md (D-08):
+Roles follow a 4-role model:
 ``platform_admin``, ``mssp_admin``, ``analyst``, ``customer_viewer``.
 """
 
@@ -32,7 +32,7 @@ from sqlmodel import Field, SQLModel, Text
 
 
 class Role(str, Enum):
-    """Roles. The original 4 in D-08 plus ``tenant_admin`` introduced for
+    """Roles. The original 4 plus ``tenant_admin`` introduced for
     the per-tenant bootstrap user created at provisioning time
     (``_mint_tenant_admin_user``) — gives a tenant-scoped principal that
     can edit settings within their own tenant without holding any MSSP
@@ -60,7 +60,7 @@ class UserType(str, Enum):
 
 
 class TenantState(str, Enum):
-    """Tenant lifecycle states (see docs/v1/P0-8 §6)."""
+    """Tenant lifecycle states (see docs/multi-tenant/P0-8 §6)."""
 
     PENDING = "pending"
     PROVISIONING = "provisioning"

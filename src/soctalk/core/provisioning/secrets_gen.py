@@ -1,6 +1,6 @@
 """Generation of per-tenant secrets at provisioning time.
 
-See docs/v1/P0-5-secret-placement.md. §5.
+See docs/multi-tenant/P0-5-secret-placement.md. §5.
 """
 
 from __future__ import annotations

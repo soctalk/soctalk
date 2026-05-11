@@ -1,13 +1,13 @@
-# SocTalk V1 Install Guide
+# SocTalk Install Guide
 
-This guide walks an MSSP cluster admin through installing SocTalk V1 and
+This guide walks an MSSP cluster admin through installing SocTalk and
 onboarding the first end-customer.
 
 ## 1 Cluster prerequisites
 
 Install these once per K3s cluster *before* `soctalk-system`:
 
-SocTalk V1 expects Kubernetes 1.30+ because the system chart installs a native
+SocTalk expects Kubernetes 1.30+ because the system chart installs a native
 `ValidatingAdmissionPolicy` guard for tenant namespace operations.
 
 ### 1.1 K3s with Cilium
@@ -65,7 +65,7 @@ spec:
 
 ### 1.3 Ingress controller
 
-K3s does not ship Traefik with V1 (we disabled it in §1.1). Install your
+K3s does not ship Traefik with (we disabled it in §1.1). Install your
 preferred ingress:
 
 ```bash
@@ -215,7 +215,7 @@ After the tenant reaches `active`:
 
 1. Update the tenant's LLM API key via **Customer → Settings → LLM**.
 2. Configure Wazuh agent ingress per
-   [docs/v1/P0-6-wazuh-ingress.md](../P0-6-wazuh-ingress.md).
+   [docs/multi-tenant/P0-6-wazuh-ingress.md](../P0-6-wazuh-ingress.md).
 3. Share the customer UI URL and initial `customer_viewer` invite with the
    end-customer.
 

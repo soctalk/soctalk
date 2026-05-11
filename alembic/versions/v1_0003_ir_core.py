@@ -4,7 +4,7 @@ Revision ID: v1_0003_ir_core
 Revises: v1_0002_internal_auth
 Create Date: 2026-04-21
 
-Authoritative spec: ``docs/v1/P2-0-core-invariants.md``.
+Authoritative spec: ``docs/multi-tenant/P2-0-core-invariants.md``.
 
 Adds the data foundation for native AI-led incident response.
 Integration-toggle columns for TheHive/MISP are added to

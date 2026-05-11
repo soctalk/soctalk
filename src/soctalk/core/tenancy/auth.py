@@ -1,7 +1,7 @@
 """Ingress-handoff authentication for SocTalk V1.
 
-``docs/v1/00-decisions.md`` D-06 (three-layer access
-model) and ``docs/v1/P0-1-security-model.md`` §§6.1–6.2 (token claims).
+See ``docs/multi-tenant/P0-1-security-model.md`` §§6.1–6.2 for token claims and the
+three-layer access model.
 
 Pattern:
 

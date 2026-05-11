@@ -1,6 +1,6 @@
 """Decorators enforcing tenant context and role checks.
 
-``docs/v1/P0-1-security-model.md`` §§1.2, 5.
+``docs/multi-tenant/P0-1-security-model.md`` §§1.2, 5.
 
 Three decorators:
 

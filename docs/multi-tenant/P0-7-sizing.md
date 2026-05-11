@@ -4,7 +4,7 @@ Gate artifact: Reference hardware profiles, per-tenant footprint estimates, and 
 
 ## 1 Reference profiles
 
-Two reference host sizes for V1.
+Two reference host sizes for this release.
 
 ### 1.1 small-dev
 
@@ -84,9 +84,9 @@ The dominant disk consumer is the Wazuh indexer (stores indexed events). Ingest 
 | 1 alert/sec sustained | ~500 MB/day | 15 GB | 45 GB |
 | 100 alerts/day | ~10 MB/day | 300 MB | 900 MB |
 
-Tenant PVC sizes in the V1 chart default to **50 GB** for the Wazuh indexer; MSSPs override per-tenant for high-volume customers.
+Tenant PVC sizes in the chart default to **50 GB** for the Wazuh indexer; MSSPs override per-tenant for high-volume customers.
 
-Retention policy defaults to 30 days of hot data in indexer; older data is deleted or archived (V1 doesn't implement hot→cold tiering; V2 adds it).
+Retention policy defaults to 30 days of hot data in indexer; older data is deleted or archived (doesn't implement hot→cold tiering; a future release adds it).
 
 ## 5 Sizing gates
 
@@ -102,7 +102,7 @@ if (new_tenant.resourceQuota.requests.memory > available_RAM):
     prompt MSSP: "this will overcommit; proceed? [y/N]"
 ```
 
-This gate is softer in V1 (warn rather than hard-fail) since MSSPs may intentionally overcommit for light-use customers.
+This gate is softer in this release (warn rather than hard-fail) since MSSPs may intentionally overcommit for light-use customers.
 
 ### 5.2 Per-tenant LimitRange enforcement
 
@@ -128,20 +128,20 @@ spec:
 
 Prevents an accidentally-misconfigured pod from requesting 30 GB and starving the node.
 
-## 6 Profiles beyond V1
+## 6 Profiles beyond
 
-Documented but not validated in V1:
+Documented but not validated in this release:
 
 | Profile | CPU | RAM | Disk | Max tenants |
 |---|---|---|---|---|
 | **mid-host** | 16 vCPU | 64 GB | 1 TB | 10–15 |
 | **large-host** | 32 vCPU | 128 GB | 2 TB | 25–30 |
-| **multi-node cluster** | 3 nodes × large | | - | 50+ (V1.5 multi-install recommended instead) |
+| **multi-node cluster** | 3 nodes × large | | - | 50+ (a future release multi-install recommended instead) |
 
 Recommendation for MSSPs growing past `pilot-prod` capacity:
-- V1: add a second host, run a second SocTalk install (schema supports this, tooling is manual).
-- V1.5: multi-install automation in Cloud layer.
-- V2: clustered K3s with proper scheduling across nodes.
+- : add a second host, run a second SocTalk install (schema supports this, tooling is manual).
+- a future release: multi-install automation in Cloud layer.
+- a future release: clustered K3s with proper scheduling across nodes.
 
 ## 7 Measurement plan (Phase 0 spike)
 

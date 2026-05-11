@@ -1,6 +1,6 @@
 """Tenant provisioning and lifecycle control plane.
 
-``docs/v1/P0-8-two-chart-contract.md`` §6 (render → apply flow).
+``docs/multi-tenant/P0-8-two-chart-contract.md`` §6 (render → apply flow).
 
 The :class:`TenantController` orchestrates:
 

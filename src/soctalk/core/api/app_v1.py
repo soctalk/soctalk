@@ -123,7 +123,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app = FastAPI(
         title="SocTalk V1",
         description=(
-            "MSSP-deployed SOC control plane. See docs/v1/ for architecture."
+            "MSSP-deployed SOC control plane. See docs/multi-tenant/ for architecture."
         ),
         version="0.1.0",
         lifespan=_lifespan,

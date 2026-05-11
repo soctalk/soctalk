@@ -1,6 +1,6 @@
 """V1 multi-tenancy primitives.
 
-See docs/v1/P0-1-security-model.md and docs/v1/P0-4-postgres-rls.md for the
+See docs/multi-tenant/P0-1-security-model.md and docs/multi-tenant/P0-4-postgres-rls.md for the
 authoritative design. This package implements the runtime:
 
 - :mod:`~soctalk.core.tenancy.models`. Organization, Tenant, User (4-role),

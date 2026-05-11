@@ -4,7 +4,7 @@ Pure functions: given a Tenant + associated config + deployment profile,
 produce dicts matching the respective chart's values schema. Output is
 written to a temp file and passed to ``helm install -f`` by the caller.
 
-Profiles (see ``docs/v1/P2-10-wazuh-profiles.md``):
+Profiles (see ``docs/multi-tenant/P2-10-wazuh-profiles.md``):
 
 - ``poc`` — ephemeral / cheapest viable. Single-node, node-local storage,
   no ingress, tight resource quotas. Intended for demo tenants.

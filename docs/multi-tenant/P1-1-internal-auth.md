@@ -17,7 +17,7 @@ SOCTALK_AUTH_MODE = internal | proxy
 
 - `internal` (default for new installs) — SocTalk owns login, sessions,
   password storage. Ingress-handoff middleware is disabled.
-- `proxy` — the V1 behaviour. Internal endpoints respond with 404.
+- `proxy` — the behaviour. Internal endpoints respond with 404.
 
 No hybrid mode. Federation (JIT provisioning, OIDC SP, etc.) is a
 separate spec.
@@ -152,7 +152,7 @@ Per request:
    `absolute_expiry`, or past `idle_expiry`.
 3. Update `last_seen_at` (throttled — write at most every 60s).
 4. Load the user and construct the same `UserIdentity` shape produced
-   by the V1 path. Set `request.state.user_identity` exactly as today,
+   by the path. Set `request.state.user_identity` exactly as today,
    so decorators and RLS context helpers are untouched.
 
 Rate limiting: login attempts per IP and per email per 15 minutes,

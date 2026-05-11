@@ -1,14 +1,13 @@
-# SocTalk V1 Upgrade Artifacts
+# SocTalk Upgrade Artifacts
 
-This directory contains the **V1 upgrade design artifacts**: Phase 0 gate documents plus phased implementation references (install, runbook, upgrade, troubleshooting).
+This directory contains the **upgrade design artifacts**: Phase 0 gate documents plus phased implementation references (install, runbook, upgrade, troubleshooting).
 
-V1 transforms SocTalk from a single-tenant SOC automation appliance into an **MSSP-deployed control plane** that provisions and operates dedicated per-customer OSS SOC stacks on K3s.
+This release transforms SocTalk from a single-tenant SOC automation appliance into an **MSSP-deployed control plane** that provisions and operates dedicated per-customer OSS SOC stacks on K3s.
 
 ## Documents
 
 | # | Artifact | Scope |
 |---|---|---|
-| [00](00-decisions.md) | **Decisions log** | Every V1 decision, classified `LOCKED` / `MVP-CUT` / `DEFAULT`, with traceability to the artifact it drives |
 | [P0-1](P0-1-security-model.md) | **Tenant security model** | Principal catalog (8), actor×resource matrix, RLS policy matrix, Postgres roles, endpoint classification, token schemas, audit rules, secret placement |
 | [P0-2](P0-2-chart-audit.md) | **Tenant Helm chart audit** | Per-object classification of Wazuh/TheHive/Cortex charts: namespace-scoped OK vs cluster-prereq vs forbidden/patched |
 | [P0-3](P0-3-cni-networkpolicy.md) | **CNI + NetworkPolicy design** | Cilium primary, NP templates for `soctalk-system` ↔ `tenant-*`, FQDN egress for BYO LLM |
@@ -20,14 +19,14 @@ V1 transforms SocTalk from a single-tenant SOC automation appliance into an **MS
 
 ## What Phase 0 does NOT cover
 
-Explicitly deferred to V1.5 or V2 per `00-decisions.md`:
+Explicitly deferred to a future release or a future release:
 
-- **Licensing** (D-14): no license verification or feature gating in V1. Pilot MSSPs operate on honor + written commercial terms.
-- **Supply chain hardening** (D-15): no cosign / SBOM / Trivy in V1 beyond dependency scans.
-- **Backup/restore tooling** (D-16). V1 documents where data lives; MSSP owns external backup.
-- **MISP integration** (D-19). V1.5.
-- **SocTalk Cloud SaaS**. V1.5.
-- **Custom K8s operator with CRDs**. V2.
+- **Licensing**: no license verification or feature gating in this release. Pilot MSSPs operate on honor + written commercial terms.
+- **Supply chain hardening**: no cosign / SBOM / Trivy in this release beyond dependency scans.
+- **Backup/restore tooling**: documents where data lives; MSSP owns external backup.
+- **MISP integration**: a future release.
+- **SocTalk Cloud SaaS**: a future release.
+- **Custom K8s operator with CRDs**: a future release.
 
 ## Phase 0 gate
 
@@ -52,13 +51,13 @@ Each artifact identifies its Phase 1+ consumers:
 
 ## Implementation artifacts (code + infra)
 
-The V1 implementation artifacts live outside this directory but are indexed here for navigation:
+The implementation artifacts live outside this directory but are indexed here for navigation:
 
 - `src/soctalk/core/tenancy/`: multi-tenant models, context, decorators, auth adapter
 - `src/soctalk/core/provisioning/`: TenantController, Helm SDK wrapper, K8s client, secret generation
-- `src/soctalk/core/api/`: V1 FastAPI routers (MSSP tenants, branding, LLM config, adapter, health) + composed app at `app_v1.py`
+- `src/soctalk/core/api/`: FastAPI routers (MSSP tenants, branding, LLM config, adapter, health) + composed app at `app_v1.py`
 - `src/soctalk/core/observability/`: Prometheus exporter + audit helper
-- `src/soctalk_enterprise/`: proprietary-edition package boundary (empty in V1)
+- `src/soctalk_enterprise/`: proprietary-edition package boundary (empty in this release)
 - `alembic/versions/v1_0001_multi_tenancy.py`: roles, schema, RLS, composite idempotency
 - `charts/soctalk-system/`: install-scoped Helm chart (control plane)
 - `charts/soctalk-tenant/`: per-tenant Helm chart (OSS SOC stack + adapter)
@@ -80,4 +79,4 @@ The V1 implementation artifacts live outside this directory but are indexed here
 
 ## Status
 
-All artifacts produced in the current autonomous session are in the working tree; none are committed. MSSP cluster admins reviewing V1 should start with [00-decisions.md](00-decisions.md) and [P0-1-security-model.md](P0-1-security-model.md).
+All artifacts produced in the current autonomous session are in the working tree; none are committed. MSSP cluster admins reviewing should start with [P0-1-security-model.md](P0-1-security-model.md).

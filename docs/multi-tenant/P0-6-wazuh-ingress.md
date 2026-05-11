@@ -69,7 +69,7 @@ Recommend wildcard for MVP; MSSPs can pivot to explicit records for certificate 
 Each tenant gets a certificate whose SAN covers `<slug>.soc.mssp.example.com`. Options:
 
 - **Per-tenant cert via cert-manager + Let's Encrypt** (recommended for MVP): cert-manager `Certificate` CR per tenant, issued by a DNS-01 or HTTP-01 `ClusterIssuer`: Cert stored in `tenant-<slug>` ns as `Secret/wazuh-tls`: Renewed automatically.
-- **Wildcard cert for `*.soc.mssp.example.com`**: one cert covers all tenants. Simpler, but means any tenant's Wazuh manager can present the cert for any tenant's agent during MSSP-side proxy failures: acceptable risk for V1 since the routing is the real enforcement.
+- **Wildcard cert for `*.soc.mssp.example.com`**: one cert covers all tenants. Simpler, but means any tenant's Wazuh manager can present the cert for any tenant's agent during MSSP-side proxy failures: acceptable risk for this release since the routing is the real enforcement.
 - **MSSP-provided internal CA**: for MSSPs running their own PKI, cert-manager can issue from an in-cluster `Issuer` backed by the MSSP CA.
 
 Install guide documents all three; pilot defaults to Let's Encrypt per-tenant.
@@ -84,7 +84,7 @@ Three viable options:
 | **Envoy** (TCP filter + SNI) | Dynamic xDS config, rich observability | Heavier; more moving parts |
 | **nginx-stream module** | Familiar to many ops teams | Stream module needs to be compiled in; some distros ship without |
 
-V1 MVP reference: **HAProxy** running as a Deployment in `soctalk-system` or on MSSP edge nodes. Config managed by SocTalk controller (regenerated + reloaded on tenant create/delete).
+MVP reference: **HAProxy** running as a Deployment in `soctalk-system` or on MSSP edge nodes. Config managed by SocTalk controller (regenerated + reloaded on tenant create/delete).
 
 Sample HAProxy config (excerpt):
 
@@ -164,7 +164,7 @@ If a customer's network policy disallows agents sending telemetry over public in
 - MSSP routes tunnel traffic to the same edge proxy (or directly to cluster on internal addresses).
 - Agent configuration points at an internal hostname.
 
-Not implemented in V1 tooling; documented as a setup pattern for MSSPs who need it.
+Not implemented in this release tooling; documented as a setup pattern for MSSPs who need it.
 
 ### 6.2 Tailscale / overlay network
 
@@ -172,7 +172,7 @@ Similar to 6.1; MSSP and customer join a Tailscale network, agent reaches `acme.
 
 ### 6.3 Per-region MSSP edge
 
-For MSSPs with geographic separation (EU, US, APAC), multiple edge proxies in different regions. Tenant assigned to nearest region; DNS reflects (`acme.soc.eu.mssp.example.com`, `acme.soc.us.mssp.example.com`). V1 design supports this because the edge proxy → tenant namespace routing is just cluster-internal DNS lookup. V1.5 automation for multi-region dispatch.
+For MSSPs with geographic separation (EU, US, APAC), multiple edge proxies in different regions. Tenant assigned to nearest region; DNS reflects (`acme.soc.eu.mssp.example.com`, `acme.soc.us.mssp.example.com`). design supports this because the edge proxy → tenant namespace routing is just cluster-internal DNS lookup. a future release automation for multi-region dispatch.
 
 ## 7 Runbook: onboarding a customer's first agent
 

@@ -1,10 +1,10 @@
 # P0-3: CNI + NetworkPolicy Design
 
-Gate artifact: Chooses the Container Network Interface for V1, defines the NetworkPolicy matrix between `soctalk-system` and `tenant-*` namespaces, and specifies FQDN egress rules for BYO LLM endpoints.
+Gate artifact: Chooses the Container Network Interface for this release, defines the NetworkPolicy matrix between `soctalk-system` and `tenant-*` namespaces, and specifies FQDN egress rules for BYO LLM endpoints.
 
 ## 1 Decision: Cilium as primary CNI
 
-Cilium is the supported CNI for SocTalk V1. Rationale:
+Cilium is the supported CNI for SocTalk. Rationale:
 
 1. **NetworkPolicy enforcement**. K3s's default Flannel does not enforce `NetworkPolicy`: Without enforcement, tenant isolation at the network layer is a claim without backing. Cilium enforces standard `NetworkPolicy` out of the box.
 2. **FQDN egress policies**: standard `NetworkPolicy` permits only IP/CIDR-based egress. BYO LLM endpoints are hostnames (`api.openai.com`, customer-self-hosted endpoints behind CDNs with dynamic IPs). Cilium's `CiliumNetworkPolicy` with `toFQDNs` matches hostnames. This is the only way to enforce per-tenant LLM egress at the network layer without introducing a forward proxy.
@@ -14,12 +14,12 @@ Cilium is the supported CNI for SocTalk V1. Rationale:
 
 ### Alternate install mode: Calico + egress proxy
 
-MSSPs with an operational mandate to run Calico can use V1 with the following adjustment:
+MSSPs with an operational mandate to run Calico can use with the following adjustment:
 - Standard K8s `NetworkPolicy` (Calico-enforced) for all east-west and coarse egress.
 - An **egress proxy** (Envoy, HAProxy, or Squid) in `soctalk-system` namespace that does FQDN-based allowlisting.
 - `NetworkPolicy` restricts tenant pods and SocTalk orchestrator to egress **only through the proxy** for external (non-cluster) destinations.
 
-This alternate is documented but is not the recommended V1 path. It adds one component, one failure point, and inter-tenant shared resource (the proxy). If an MSSP selects it, SocTalk's Phase 0 spike validates it end-to-end on their cluster before onboarding.
+This alternate is documented but is not the recommended path. It adds one component, one failure point, and inter-tenant shared resource (the proxy). If an MSSP selects it, SocTalk's Phase 0 spike validates it end-to-end on their cluster before onboarding.
 
 ## 2 Install requirements
 
@@ -305,9 +305,9 @@ Phase 1 gate includes a cross-tenant network isolation test:
 3. From the orchestrator in `soctalk-system`, attempt to call `tenant-a`'s LLM FQDN while operating in `tenant-b` context. Expect application-layer refusal (no key); policy layer may still permit since both FQDNs are in allow-list.
 4. From a pod in `soctalk-system` that isn't the orchestrator, attempt to reach `tenant-a`'s Wazuh. Expect connection refused (only orchestrator has egress to tenant data plane ports).
 
-## 8 Deferred (V1.5+)
+## 8 Deferred (future releases)
 
-- **L7 HTTP policies**: Cilium supports L7 HTTP `CiliumNetworkPolicy` (restrict to specific paths/methods). V1 is L4 only. L7 useful for finer MCP call restrictions in V1.5.
-- **Identity-based policies**: labels-only in V1; Cilium identity with SPIFFE-style mTLS is V2.
-- **Egress gateway for static source IP**: if MSSP end-customers need whitelisted static source IP on SocTalk's LLM calls, Cilium Egress Gateway handles it. V1.5.
-- **Transparent encryption (WireGuard/IPsec)**: cluster-wide encryption of pod-to-pod traffic. V1.5 hardening.
+- **L7 HTTP policies**: Cilium supports L7 HTTP `CiliumNetworkPolicy` (restrict to specific paths/methods). This release is L4 only. L7 useful for finer MCP call restrictions in a future release.
+- **Identity-based policies**: labels-only in this release; Cilium identity with SPIFFE-style mTLS is a future release.
+- **Egress gateway for static source IP**: if MSSP end-customers need whitelisted static source IP on SocTalk's LLM calls, Cilium Egress Gateway handles it. a future release.
+- **Transparent encryption (WireGuard/IPsec)**: cluster-wide encryption of pod-to-pod traffic. a future release hardening.

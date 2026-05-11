@@ -1,7 +1,7 @@
 {{/*
 Pre-install hook: verify cluster prerequisites are in place.
 Bails out fast with an actionable error if CNI/cert-manager/StorageClass missing.
-See docs/v1/P0-2-chart-audit.md. §4.
+See docs/multi-tenant/P0-2-chart-audit.md. §4.
 
 Gated by ``preInstallCheck.enabled`` (default true). Operators on
 non-Cilium dev clusters who don't need the production CNI/cert-manager
@@ -31,7 +31,7 @@ data:
       && ! kubectl get crd globalnetworkpolicies.crd.projectcalico.org >/dev/null 2>&1; then
       echo "ERROR: neither Cilium nor Calico CRDs found."
       echo "       SocTalk requires an NP-enforcing CNI."
-      echo "       See docs/v1/P0-3-cni-networkpolicy.md."
+      echo "       See docs/multi-tenant/P0-3-cni-networkpolicy.md."
       exit 1
     fi
 

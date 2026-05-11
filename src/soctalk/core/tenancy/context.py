@@ -1,7 +1,7 @@
 """Tenant context primitives.
 
-``docs/v1/P0-1-security-model.md`` §6.1–6.4 (token claims)
-and ``docs/v1/P0-4-postgres-rls.md`` §4 (session variables).
+``docs/multi-tenant/P0-1-security-model.md`` §6.1–6.4 (token claims)
+and ``docs/multi-tenant/P0-4-postgres-rls.md`` §4 (session variables).
 
 Two context flavors:
 
@@ -240,7 +240,7 @@ def system_context(
     """Open a cross-tenant operation scope.
 
     The caller must pass a session bound to the ``soctalk_mssp`` Postgres role
-    (see ``docs/v1/P0-4-postgres-rls.md``). Typical usage from MSSP endpoints
+    (see ``docs/multi-tenant/P0-4-postgres-rls.md``). Typical usage from MSSP endpoints
     that need fleet-wide aggregation.
     """
     return SystemContext(mssp_session=mssp_session, reason=reason, actor_id=actor_id)

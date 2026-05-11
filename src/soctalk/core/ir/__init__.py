@@ -1,7 +1,7 @@
 """AI-led native incident response subsystem.
 
-Authoritative spec: ``docs/v1/P2-0-core-invariants.md``.
-Implementation plan: ``docs/v1/P2-implementation-plan.md``.
+Authoritative spec: ``docs/multi-tenant/P2-0-core-invariants.md``.
+Implementation plan: ``docs/multi-tenant/P2-implementation-plan.md``.
 
 Modules:
 

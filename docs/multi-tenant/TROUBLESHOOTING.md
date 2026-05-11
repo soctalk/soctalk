@@ -1,4 +1,4 @@
-# SocTalk V1 Troubleshooting Index
+# SocTalk Troubleshooting Index
 
 Symptoms → diagnostic → fix. Runbook for the most common failure modes.
 
@@ -18,9 +18,9 @@ Symptoms → diagnostic → fix. Runbook for the most common failure modes.
 | Cilium Hubble shows DROPPED flows between tenant and soctalk-system | Check NetworkPolicies + Cilium identities | Adapter egress policy missing or wrong namespaceSelector |
 | Customer user login → 403 on /api/tenant/* | JWT claims | Ensure user row has `tenant_id` set and `role=customer_viewer` |
 | MSSP user impersonation not showing in customer audit | Audit query | Verify `acting_as` column populated on write; customer audit view joins on `tenant_id = own AND acting_as IS NOT NULL` |
-| `pip-audit` CI job reports CVEs | Review advisory | Non-fatal for V1; upgrade when maintainers publish fix |
+| `pip-audit` CI job reports CVEs | Review advisory | Non-fatal for this release; upgrade when maintainers publish fix |
 | Isolation test fails in CI (FORCE RLS admin can see rows) | Check migration applied | Re-run `alembic upgrade head`; ensure `FORCE ROW LEVEL SECURITY` applied to every tenant-scoped table |
-| `cosign verify` fails for a chart (V1.5+) | Key rotation | Pull latest cosign pubkey from releases page; verify against the correct `kid` |
+| `cosign verify` fails for a chart (future releases) | Key rotation | Pull latest cosign pubkey from releases page; verify against the correct `kid` |
 
 ## Collecting diagnostic bundles
 
@@ -48,6 +48,6 @@ soctalk-cli debug-bundle --tenant <slug> > bundle.json
 tar czf soctalk-debug-$(date +%s).tgz *.yaml *.log *.txt bundle.json
 ```
 
-Send the tarball to `support@your-mssp.example` (you, during V1 pilots).
+Send the tarball to `support@your-mssp.example` (you, during pilots).
 **Review for customer data leakage before sharing externally**: logs may
 contain alert excerpts.
