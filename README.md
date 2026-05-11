@@ -14,6 +14,8 @@ The multi-tenant platform is the MSSP-facing shape of SocTalk. A shared control 
 
 ## Multi-tenant deployment
 
+![MSSP Dashboard](docs/images/soctalk-mssp-dashboard.png)
+
 Multi-tenant SocTalk is an MSSP-deployed control plane. It provisions and operates dedicated OSS SOC stacks per customer tenant on k3s or k8s. Tenant state lives in Postgres under Row-Level Security. Each tenant's SOC stack runs in its own Kubernetes namespace, with its own LLM credentials and branding.
 
 Two charts ship. `soctalk-system` is the control plane. `soctalk-tenant` is the per-customer SOC stack the controller renders and applies.
