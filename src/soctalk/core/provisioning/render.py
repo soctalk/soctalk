@@ -4,7 +4,7 @@ Pure functions: given a Tenant + associated config + deployment profile,
 produce dicts matching the respective chart's values schema. Output is
 written to a temp file and passed to ``helm install -f`` by the caller.
 
-Profiles (see ``docs/multi-tenant/P2-10-wazuh-profiles.md``):
+Profiles (see ``docs/multi-tenant/wazuh-profiles.md``):
 
 - ``poc`` — ephemeral / cheapest viable. Single-node, node-local storage,
   no ingress, tight resource quotas. Intended for demo tenants.
@@ -99,7 +99,7 @@ def render_tenant_values(
             this tenant's LLM API key.
         allowed_llm_hosts: FQDNs permitted in Cilium egress policy.
             Defaults to the host portion of ``integration.llm_base_url``.
-        agent_hostname: public hostname used by Wazuh agents (see P0-6).
+        agent_hostname: public hostname used by Wazuh agents (see wazuh-ingress).
         cert_issuer: cert-manager ClusterIssuer for per-tenant TLS.
 
     Returns:

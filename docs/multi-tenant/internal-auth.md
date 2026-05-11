@@ -1,4 +1,4 @@
-# P1-1 — Internal authentication
+# internal-auth — Internal authentication
 
 ## 1. Scope
 
@@ -286,7 +286,7 @@ Rollback: flip the flag back and restart.
 
 ## 11. Tests
 
-Mandatory backend suite (P0-4 §9 style):
+Mandatory backend suite (postgres-rls §9 style):
 
 1. Login happy path creates a session row with the right
    `tenant_context` and sets the cookie.

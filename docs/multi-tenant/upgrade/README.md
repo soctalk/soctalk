@@ -115,5 +115,5 @@ change:
    schema-migration process fails.
 
 Upstream OSS projects occasionally ship breaking changes. The chart
-audit (`docs/multi-tenant/P0-2-chart-audit.md`) pins exact subchart versions; bumping
+audit (`docs/multi-tenant/chart-audit.md`) pins exact subchart versions; bumping
 those versions is explicit and tested before release.

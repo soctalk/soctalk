@@ -1,4 +1,4 @@
-# P0-3: CNI + NetworkPolicy Design
+# cni-networkpolicy: CNI + NetworkPolicy Design
 
 Gate artifact: Chooses the Container Network Interface for this release, defines the NetworkPolicy matrix between `soctalk-system` and `tenant-*` namespaces, and specifies FQDN egress rules for BYO LLM endpoints.
 
@@ -19,11 +19,11 @@ MSSPs with an operational mandate to run Calico can use with the following adjus
 - An **egress proxy** (Envoy, HAProxy, or Squid) in `soctalk-system` namespace that does FQDN-based allowlisting.
 - `NetworkPolicy` restricts tenant pods and SocTalk orchestrator to egress **only through the proxy** for external (non-cluster) destinations.
 
-This alternate is documented but is not the recommended path. It adds one component, one failure point, and inter-tenant shared resource (the proxy). If an MSSP selects it, SocTalk's Phase 0 spike validates it end-to-end on their cluster before onboarding.
+This alternate is documented but is not the recommended path. It adds one component, one failure point, and inter-tenant shared resource (the proxy). If an MSSP selects it, SocTalk's design spike validates it end-to-end on their cluster before onboarding.
 
 ## 2 Install requirements
 
-Cilium is a **cluster prerequisite** (see `P0-2-chart-audit.md` §4). The `soctalk-system` chart does not install Cilium. The install guide's prerequisite section specifies:
+Cilium is a **cluster prerequisite** (see `chart-audit.md` §4). The `soctalk-system` chart does not install Cilium. The install guide's prerequisite section specifies:
 
 ```bash
 # K3s without flannel and without default NP:
@@ -269,7 +269,7 @@ spec:
 
 **4.3.5 Allow Wazuh agent ingress from MSSP edge**
 
-This policy governs agent telemetry arriving at the tenant's Wazuh manager. Since ingress comes from the cluster's node (via SNI proxy / NodePort / ingress controller), the NP needs to permit traffic from the ingress path. Exact allow source depends on MSSP ingress topology (Traefik/nginx/MetalLB IP range). See `P0-6-wazuh-ingress.md` for the deployment pattern; template:
+This policy governs agent telemetry arriving at the tenant's Wazuh manager. Since ingress comes from the cluster's node (via SNI proxy / NodePort / ingress controller), the NP needs to permit traffic from the ingress path. Exact allow source depends on MSSP ingress topology (Traefik/nginx/MetalLB IP range). See `wazuh-ingress.md` for the deployment pattern; template:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -299,7 +299,7 @@ Hubble (bundled with Cilium) is enabled in the reference install. MSSP ops teams
 
 ## 7 Testing
 
-Phase 1 gate includes a cross-tenant network isolation test:
+A later release gate includes a cross-tenant network isolation test:
 1. Deploy two tenants (`tenant-a`, `tenant-b`).
 2. From a pod in `tenant-a`, attempt to connect to `tenant-b`'s Wazuh service by IP and by DNS name. Expect connection refused / timeout.
 3. From the orchestrator in `soctalk-system`, attempt to call `tenant-a`'s LLM FQDN while operating in `tenant-b` context. Expect application-layer refusal (no key); policy layer may still permit since both FQDNs are in allow-list.

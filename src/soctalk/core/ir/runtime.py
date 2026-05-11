@@ -3,7 +3,7 @@
 No LangGraph in MVP — plain async functions. If an investigation needs more
 sophisticated planning later, layer it under the same interfaces.
 
-Authoritative state machine: P2-0 §4 (runs), §6 (proposals).
+Authoritative state machine: core-invariants §4 (runs), §6 (proposals).
 """
 
 from __future__ import annotations

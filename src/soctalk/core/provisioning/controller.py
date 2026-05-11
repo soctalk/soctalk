@@ -1,6 +1,6 @@
 """Tenant controller: orchestrates the full provisioning lifecycle.
 
-``docs/multi-tenant/P0-8-two-chart-contract.md`` §6.
+``docs/multi-tenant/two-chart-contract.md`` §6.
 
 Operations exposed:
 

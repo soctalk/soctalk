@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicies.enabled }}
 {{/*
-See docs/multi-tenant/P0-3-cni-networkpolicy.md. §4.3.
+See docs/multi-tenant/cni-networkpolicy.md. §4.3.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -133,7 +133,7 @@ spec:
         - { port: 443, protocol: TCP }
 ---
 {{/*
-Wazuh agent ingress allow: see P0-6 for the MSSP-edge SNI proxy pattern.
+Wazuh agent ingress allow: see wazuh-ingress for the MSSP-edge SNI proxy pattern.
 The ingress-system namespace holds the L4 proxy that SNI-routes to the
 correct tenant's Wazuh manager.
 */}}

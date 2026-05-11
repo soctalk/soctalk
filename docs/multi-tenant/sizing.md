@@ -1,6 +1,6 @@
-# P0-7: Sizing Profile for Pilot Installs
+# sizing: Sizing Profile for Pilot Installs
 
-Gate artifact: Reference hardware profiles, per-tenant footprint estimates, and guidance on max tenants per node. Numbers are estimates pending Phase 0 spike measurement on `k3d` + representative workload.
+Gate artifact: Reference hardware profiles, per-tenant footprint estimates, and guidance on max tenants per node. Numbers are estimates pending design spike measurement on `k3d` + representative workload.
 
 ## 1 Reference profiles
 
@@ -38,7 +38,7 @@ Boot times on the `<15 min to OSS stack healthy` SLO.
 
 ## 2 Per-tenant footprint (estimates)
 
-These are starting-point values for `ResourceQuota` and `LimitRange` in the tenant chart. Phase 0 spike measures actuals; actuals replace these in the final values.
+These are starting-point values for `ResourceQuota` and `LimitRange` in the tenant chart. design spike measures actuals; actuals replace these in the final values.
 
 | Component | RAM request | RAM limit | CPU request | CPU limit | Disk (PVC) |
 |---|---|---|---|---|---|
@@ -143,7 +143,7 @@ Recommendation for MSSPs growing past `pilot-prod` capacity:
 - a future release: multi-install automation in Cloud layer.
 - a future release: clustered K3s with proper scheduling across nodes.
 
-## 7 Measurement plan (Phase 0 spike)
+## 7 Measurement plan (design spike)
 
 The spike produces real numbers to replace the estimates in §2:
 
@@ -154,10 +154,10 @@ The spike produces real numbers to replace the estimates in §2:
 5. Repeat with three tenants in parallel to observe interference.
 6. Update this document's tables with measured values.
 
-## 8 Phase 0 gate criteria
+## 8 Gate criteria
 
 - [x] This document merged as reference.
-- [ ] Phase 0 spike measures real per-tenant footprint; replaces estimates.
-- [ ] Phase 2 tenant chart defaults reflect measured footprint.
-- [ ] Phase 2 `soctalk-system` chart pre-install hook verifies node meets small-dev or pilot-prod profile.
-- [ ] Phase 8 install guide publishes the pilot-prod profile + measurement methodology for MSSPs to validate their infra.
+- [ ] design spike measures real per-tenant footprint; replaces estimates.
+- [ ] tenant chart defaults reflect measured footprint.
+- [ ] `soctalk-system` chart pre-install hook verifies node meets small-dev or pilot-prod profile.
+- [ ] install guide publishes the pilot-prod profile + measurement methodology for MSSPs to validate their infra.

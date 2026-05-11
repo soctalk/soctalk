@@ -1,4 +1,4 @@
-"""Mandatory V1 isolation tests (P0-4 §9).
+"""Mandatory V1 isolation tests (postgres-rls §9).
 
 These are the Phase 1 gate tests: all must pass before Phase 2 begins.
 
@@ -38,7 +38,7 @@ pytestmark = [
 
 
 async def test_raw_sql_respects_rls(app_session: AsyncSession, seed_two_tenants):
-    """P0-4 Test 2. ``soctalk_app`` query under tenant context returns only
+    """postgres-rls Test 2. ``soctalk_app`` query under tenant context returns only
     that tenant's rows."""
     tenant_a, tenant_b = seed_two_tenants
 
@@ -66,7 +66,7 @@ async def test_raw_sql_respects_rls(app_session: AsyncSession, seed_two_tenants)
 async def test_raw_sql_without_context_is_defensive_zero(
     app_session: AsyncSession, seed_two_tenants
 ):
-    """P0-4 Test 2b: no ``SET LOCAL`` → zero rows under RLS policy."""
+    """postgres-rls Test 2b: no ``SET LOCAL`` → zero rows under RLS policy."""
     # Do NOT set app.current_tenant_id on this transaction.
     result = await app_session.execute(
         text("SELECT count(*) FROM integration_configs")
@@ -115,7 +115,7 @@ async def test_audit_log_respects_rls(
 async def test_admin_role_is_rls_subject(
     admin_session: AsyncSession, seed_two_tenants
 ):
-    """P0-4 Test 4. FORCE RLS makes the table owner RLS-subject too.
+    """postgres-rls Test 4. FORCE RLS makes the table owner RLS-subject too.
 
     Note: the admin session already ran seeding above in the fixture, which
     doesn't violate RLS because fixtures use the admin role on a freshly-
@@ -141,7 +141,7 @@ async def test_admin_role_is_rls_subject(
 async def test_mssp_role_bypasses_for_rollup(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """P0-4 Test 5. BYPASSRLS role sees all tenants."""
+    """postgres-rls Test 5. BYPASSRLS role sees all tenants."""
     result = await mssp_session.execute(
         text("SELECT count(*) FROM integration_configs")
     )
@@ -154,7 +154,7 @@ async def test_mssp_role_bypasses_for_rollup(
 async def test_idempotency_key_per_tenant(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """P0-4 Test 7: same external idempotency_key in two tenants must not collide.
+    """postgres-rls Test 7: same external idempotency_key in two tenants must not collide.
 
     Uses ``mssp_session`` (BYPASSRLS) because the ``events`` policy only grants
     ``soctalk_app`` — admin role has no matching policy and FORCE RLS denies
@@ -202,7 +202,7 @@ async def test_idempotency_key_per_tenant(
 
 
 async def test_system_context_emits_audit_row(mssp_session: AsyncSession):
-    """P0-1 §7: entering system_context writes an audit row."""
+    """security-model §7: entering system_context writes an audit row."""
     from soctalk.core.tenancy.context import system_context
 
     async with system_context(mssp_session, reason="test.system_ctx"):

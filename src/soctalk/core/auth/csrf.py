@@ -1,6 +1,6 @@
 """CSRF protection for state-changing first-party requests.
 
-Strategy per P1-1 §6: SameSite=Lax on the session cookie blocks cross-site
+Strategy per internal-auth §6: SameSite=Lax on the session cookie blocks cross-site
 POST at the browser layer. In addition, any state-changing request must
 carry an ``Origin`` (or fallback ``Referer``) matching the configured
 public origin.

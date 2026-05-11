@@ -1,4 +1,4 @@
-# P0-8: Two-Chart Contract
+# two-chart-contract: Two-Chart Contract
 
 Gate artifact: Defines the contract between `charts/soctalk-system/` and `charts/soctalk-tenant/`: what each chart owns, how values flow, the compatibility matrix, pinning policy, and the render→apply flow SocTalk controller uses.
 
@@ -120,7 +120,7 @@ llm:
   baseUrl: https://api.openai.com/v1
   model: gpt-4o
   apiKeyRef:
-    namespace: soctalk-system   # see P0-5; this is the install ns
+    namespace: soctalk-system   # see secret-placement; this is the install ns
     name: tenant-<id>-llm       # naming convention
     key: api_key
 
@@ -183,7 +183,7 @@ networkPolicies:
   allowedLlmHosts:
     - api.openai.com
 
-# Resource quota & limits (from P0-7)
+# Resource quota & limits (from sizing)
 resourceQuota:
   requests:
     cpu: "3"
@@ -294,7 +294,7 @@ dependencies:
     repository: "file://./charts/cortex"
 ```
 
-Vendoring reasons (from P0-2):
+Vendoring reasons (from chart-audit):
 - Apply SocTalk patches without depending on upstream acceptance.
 - Stable hash for supply-chain attestation (a future release cosign).
 - Reproducible builds.
@@ -305,7 +305,7 @@ Controller-side flow when `POST /api/mssp/tenants` arrives:
 
 ```
 1. Validate payload against tenant config JSON Schema.
-2. Generate secrets (P0-5 §5): wazuh-bootstrap pw, thehive admin, cortex admin,
+2. Generate secrets (secret-placement §5): wazuh-bootstrap pw, thehive admin, cortex admin,
    cassandra pw, wazuh authd secret.
 3. Write K8s Secrets in soctalk-system (per-tenant LLM, integration creds).
 4. Write K8s Secrets in (to-be-created) tenant-<slug>: deferred until ns exists,
@@ -367,7 +367,7 @@ helm install soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
 
 ## 8 Testing the contract
 
-Phase 0 and Phase 2 tests:
+A later release and tests:
 
 1. **values.schema.json validation**: `helm lint` + `helm template` with sample values: both charts.
 2. **Round-trip render**: SocTalk renders a tenant config → values → apply → read back from K8s → compare. Assert no drift.
@@ -375,11 +375,11 @@ Phase 0 and Phase 2 tests:
 4. **Compatibility matrix enforcement**: unit test for `controller.can_upgrade(system=X, tenant=Y)` across supported / deprecated / blocked combos.
 5. **Bundle signing smoke test (a future release)**: `cosign verify` on published chart.
 
-## 9 Phase 0 gate criteria
+## 9 Gate criteria
 
 - [x] This document merged as reference.
 - [ ] `charts/soctalk-system/Chart.yaml` and `values.schema.json` exist in repo with the shape from §2.
 - [ ] `charts/soctalk-tenant/Chart.yaml` and `values.schema.json` exist with §3 shape.
 - [ ] `compatibility.yaml` exists at repo root with initial `v1.0.0 ↔ v1.0.0` entry.
-- [ ] Phase 2 implements §6 flow in SocTalk controller.
-- [ ] Phase 7 publishes charts to GHCR as OCI artifacts.
+- [ ] implements §6 flow in SocTalk controller.
+- [ ] Publishing charts to GHCR as OCI artifacts.

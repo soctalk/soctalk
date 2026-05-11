@@ -1,6 +1,6 @@
 """Internal authentication subsystem.
 
-Authoritative spec: ``docs/multi-tenant/P1-1-internal-auth.md``.
+Authoritative spec: ``docs/multi-tenant/internal-auth.md``.
 
 Provides a self-contained login path (email + password + DB-backed session
 cookie) alongside the V1 ingress-handoff flow. Mode is selected per install

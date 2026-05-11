@@ -34,7 +34,7 @@ dependencies = [
     "prometheus-client>=0.20.0",
     "kubernetes>=29.0.0",
     "pyyaml>=6.0",
-    # Internal auth (P1-1):
+    # Internal auth (internal-auth):
     "argon2-cffi>=23.1.0",
 ]
 

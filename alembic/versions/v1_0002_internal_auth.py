@@ -4,7 +4,7 @@ Revision ID: v1_0002_internal_auth
 Revises: v1_0001_multi_tenancy
 Create Date: 2026-04-20
 
-Authoritative spec: ``docs/multi-tenant/P1-1-internal-auth.md``.
+Authoritative spec: ``docs/multi-tenant/internal-auth.md``.
 
 Adds ``password_credentials`` and ``sessions``. Everything else reuses
 existing models (``users``, ``audit_log``).

@@ -1,10 +1,10 @@
 """Tenant provisioning and lifecycle control plane.
 
-``docs/multi-tenant/P0-8-two-chart-contract.md`` §6 (render → apply flow).
+``docs/multi-tenant/two-chart-contract.md`` §6 (render → apply flow).
 
 The :class:`TenantController` orchestrates:
 
-1. Secret generation per P0-5 §5.
+1. Secret generation per secret-placement §5.
 2. Namespace creation with required labels (no Kyverno in V1; application code
    enforces naming).
 3. Per-tenant K8s Secret provisioning in both ``soctalk-system`` (for

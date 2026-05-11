@@ -1,4 +1,4 @@
-# P2-0 — Core invariants for AI-led native IR
+# core-invariants — Core invariants for AI-led native IR
 
 ## 1. Scope and non-goals
 

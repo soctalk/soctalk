@@ -2,10 +2,10 @@
 #
 # dev-up.sh: bring up a local k3d cluster with Cilium CNI for SocTalk V1 dev.
 #
-# Creates a k3d cluster that matches the prerequisites in docs/multi-tenant/P0-3:
+# Creates a k3d cluster that matches the prerequisites in docs/multi-tenant/cni-networkpolicy:
 #   - K3s with flannel disabled and kube-proxy disabled
 #   - Cilium installed with NetworkPolicy enforcement and FQDN egress
-#   - cert-manager for per-tenant TLS issuance (P0-6)
+#   - cert-manager for per-tenant TLS issuance (wazuh-ingress)
 #   - default StorageClass from k3d local-path
 #
 # Usage:

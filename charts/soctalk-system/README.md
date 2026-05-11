@@ -26,7 +26,7 @@ Does **not** install:
 Must exist in the cluster **before** `helm install soctalk-system`:
 
 1. **Kubernetes 1.30+** (K3s or equivalent) for the default `ValidatingAdmissionPolicy` guard.
-2. **NetworkPolicy-enforcing CNI**: Cilium is the supported primary path (see `docs/multi-tenant/P0-3-cni-networkpolicy.md`). Calico is a documented alternate.
+2. **NetworkPolicy-enforcing CNI**: Cilium is the supported primary path (see `docs/multi-tenant/cni-networkpolicy.md`). Calico is a documented alternate.
 3. **cert-manager** with a `ClusterIssuer` resolvable for TLS (Let's Encrypt / internal CA / self-signed for dev).
 4. **Ingress controller**: Traefik (K3s default) or ingress-nginx.
 5. **Dynamic StorageClass**: local-path, Longhorn, cloud-provider CSI, etc. PVCs will use default if `postgres.storage.storageClassName` is empty.
@@ -68,7 +68,7 @@ helm uninstall soctalk-system --namespace soctalk-system
 kubectl delete namespace soctalk-system
 ```
 
-**Warning**: uninstalling destroys SocTalk's Postgres (including all tenant metadata). **Backup first.** V1 backup is manual (see `docs/multi-tenant/P0-5-secret-placement.md` §6 and forthcoming install guide). `tenant-*` namespaces persist and must be cleaned separately via the SocTalk UI *before* uninstalling, or manually via `kubectl delete namespace tenant-*`.
+**Warning**: uninstalling destroys SocTalk's Postgres (including all tenant metadata). **Backup first.** V1 backup is manual (see `docs/multi-tenant/secret-placement.md` §6 and forthcoming install guide). `tenant-*` namespaces persist and must be cleaned separately via the SocTalk UI *before* uninstalling, or manually via `kubectl delete namespace tenant-*`.
 
 ## Files
 

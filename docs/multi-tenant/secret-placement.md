@@ -1,6 +1,6 @@
-# P0-5: Secret Placement Policy
+# secret-placement: Secret Placement Policy
 
-Gate artifact: Defines where every secret lives, who can read it, how it's rotated, and why raw material never appears in Postgres. Complements P0-1 §9.
+Gate artifact: Defines where every secret lives, who can read it, how it's rotated, and why raw material never appears in Postgres. Complements security-model §9.
 
 ## 1 Invariant
 
@@ -94,7 +94,7 @@ For, rotation is a runbook operation:
    - No pod restart.
 
 2. **Wazuh / TheHive / Cortex admin credential rotation** (runbook):
-   - Operator runs SocTalk CLI (Phase 8 deliverable): `soctalk-cli rotate-admin --tenant=acme --service=wazuh`.
+   - Operator runs SocTalk CLI (deliverable): `soctalk-cli rotate-admin --tenant=acme --service=wazuh`.
    - CLI generates new credential, `kubectl patch secret wazuh-bootstrap ...`, restarts Wazuh pods.
    - Brief service interruption per tenant.
 
@@ -134,10 +134,10 @@ a future release introduces External Secrets Operator integration:
 
 The structure (refs in Postgres → K8s Secret → mount) is compatible: only the Secret source changes (ESO-managed vs SocTalk-controller-written).
 
-## 10 Phase 0 gate criteria
+## 10 Gate criteria
 
 - [x] This document merged as reference.
-- [ ] Phase 1 tenant provisioning logic implements secret generation per §5 and writes references to `TenantSecret` table.
-- [ ] Phase 2 Helm charts use `valueFrom.secretKeyRef` for all credential injection, never hardcoded values.
-- [ ] Phase 2 chart templates include `Role`/`RoleBinding` per §7.
-- [ ] Phase 8 runbook covers rotation per §6.
+- [ ] tenant provisioning logic implements secret generation per §5 and writes references to `TenantSecret` table.
+- [ ] Helm charts use `valueFrom.secretKeyRef` for all credential injection, never hardcoded values.
+- [ ] chart templates include `Role`/`RoleBinding` per §7.
+- [ ] runbook covers rotation per §6.

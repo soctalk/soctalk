@@ -1,6 +1,6 @@
 """In-process rate limiter for login attempts.
 
-P1-1 §7 calls for per-IP and per-email throttling before DB lookup, with
+internal-auth §7 calls for per-IP and per-email throttling before DB lookup, with
 the note "in-process for beta; swap for Redis when horizontal scale is
 needed." This module is the in-process implementation.
 """

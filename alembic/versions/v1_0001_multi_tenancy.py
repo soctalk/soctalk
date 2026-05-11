@@ -4,7 +4,7 @@ Revision ID: v1_0001_multi_tenancy
 Revises: <chain-to-latest-existing>
 Create Date: 2026-04-19
 
-Authoritative spec: ``docs/multi-tenant/P0-4-postgres-rls.md``.
+Authoritative spec: ``docs/multi-tenant/postgres-rls.md``.
 
 Changes
 -------
@@ -25,7 +25,7 @@ Changes
    tenant-scoped table. Create ``tenant_isolation`` policies.
 
 Forward-only. Rollback is via Postgres backup restore, NOT an Alembic
-``downgrade()`` (explicitly not provided: see P0-4 §8).
+``downgrade()`` (explicitly not provided: see postgres-rls §8).
 """
 
 from __future__ import annotations
@@ -388,7 +388,7 @@ def upgrade() -> None:
     _apply_audit_rls()
 
     # Also apply an RLS policy to `users` that allows NULL-tenant rows plus
-    # matching-tenant rows (see P0-4 §5.2).
+    # matching-tenant rows (see postgres-rls §5.2).
     op.execute("ALTER TABLE users ENABLE ROW LEVEL SECURITY;")
     op.execute("ALTER TABLE users FORCE ROW LEVEL SECURITY;")
     op.execute("""
@@ -413,7 +413,7 @@ def downgrade() -> None:
     """Intentionally not implemented.
 
     Reverting a multi-tenant schema to single-tenant is a data operation, not
-    a schema flip. Rollback is via Postgres backup restore per P0-4 §8 and
+    a schema flip. Rollback is via Postgres backup restore per postgres-rls §8 and
     the P0-10 backup/restore runbook.
     """
     raise NotImplementedError(

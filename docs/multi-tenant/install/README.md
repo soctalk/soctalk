@@ -215,7 +215,7 @@ After the tenant reaches `active`:
 
 1. Update the tenant's LLM API key via **Customer → Settings → LLM**.
 2. Configure Wazuh agent ingress per
-   [docs/multi-tenant/P0-6-wazuh-ingress.md](../P0-6-wazuh-ingress.md).
+   [docs/multi-tenant/wazuh-ingress.md](../wazuh-ingress.md).
 3. Share the customer UI URL and initial `customer_viewer` invite with the
    end-customer.
 
@@ -234,4 +234,4 @@ hubble observe --namespace tenant-acme --verdict DROPPED
 
 - [Operator runbook](../runbook/README.md): common issues and fixes.
 - [Upgrade guide](../upgrade/README.md): install-level + per-tenant upgrades.
-- [P0-6 Wazuh ingress](../P0-6-wazuh-ingress.md): customer agent onboarding.
+- [wazuh-ingress Wazuh ingress](../wazuh-ingress.md): customer agent onboarding.

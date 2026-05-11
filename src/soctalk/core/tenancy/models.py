@@ -1,19 +1,19 @@
 """V1 multi-tenancy SQLModel definitions.
 
-``docs/multi-tenant/P0-1-security-model.md``.
+``docs/multi-tenant/security-model.md``.
 
 Design notes
 ------------
 - Shared-database tenancy with ``tenant_id`` on every tenant-scoped table.
-- Row-Level Security enforced at Postgres layer (see ``docs/multi-tenant/P0-4-postgres-rls.md``);
+- Row-Level Security enforced at Postgres layer (see ``docs/multi-tenant/postgres-rls.md``);
   these Python models declare the schema but rely on the migration to attach
   ``ENABLE ROW LEVEL SECURITY`` and ``FORCE ROW LEVEL SECURITY``.
 - ``TenantSecret`` stores *references only*. ``(namespace, secret_name, version_label)``.
-  Raw secret material lives in Kubernetes Secrets (see P0-5).
+  Raw secret material lives in Kubernetes Secrets (see secret-placement).
 - ``User`` carries both MSSP-side staff (``tenant_id`` NULL) and customer-side
   users (``tenant_id`` set, role = ``customer_viewer``). The RLS policy allows
   NULL-tenant rows to be visible across contexts for join-style access from
-  MSSP endpoints (see P0-4 §5.2).
+  MSSP endpoints (see postgres-rls §5.2).
 
 Roles follow a 4-role model:
 ``platform_admin``, ``mssp_admin``, ``analyst``, ``customer_viewer``.
@@ -60,7 +60,7 @@ class UserType(str, Enum):
 
 
 class TenantState(str, Enum):
-    """Tenant lifecycle states (see docs/multi-tenant/P0-8 §6)."""
+    """Tenant lifecycle states (see docs/multi-tenant/two-chart-contract §6)."""
 
     PENDING = "pending"
     PROVISIONING = "provisioning"
@@ -152,7 +152,7 @@ class Tenant(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     state_changed_at: datetime = Field(default_factory=datetime.utcnow)
     deleted_at: datetime | None = Field(default=None)
-    # Config snapshot (mirrors the tenant chart values schema; see P0-8 §3).
+    # Config snapshot (mirrors the tenant chart values schema; see two-chart-contract §3).
     # Stored as JSONB for schema flexibility during V1. Typed pydantic model
     # validates before writes in the application layer.
     config: dict[str, Any] = Field(
@@ -290,7 +290,7 @@ class TenantSecret(SQLModel, table=True):
     """Reference (not material) to a Kubernetes Secret holding per-tenant credentials.
 
     Stored references only; actual secret material never lands in Postgres.
-    See P0-5 §1.
+    See secret-placement §1.
     """
 
     __tablename__ = "tenant_secrets"

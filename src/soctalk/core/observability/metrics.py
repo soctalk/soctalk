@@ -1,6 +1,6 @@
 """Prometheus exporter for SocTalk V1.
 
-See docs/multi-tenant/P0-1-security-model.md. §10: tenant isolation extends to metrics: per-tenant counters carry a ``tenant_id`` label so MSSPs can attribute usage
+See docs/multi-tenant/security-model.md. §10: tenant isolation extends to metrics: per-tenant counters carry a ``tenant_id`` label so MSSPs can attribute usage
 and detect per-tenant outliers. Install-level metrics (no tenant label) cover
 SocTalk's own health.
 

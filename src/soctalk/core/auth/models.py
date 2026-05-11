@@ -55,7 +55,7 @@ class Session(SQLModel, table=True):
     """DB-backed session. The cookie carries ``id`` as an opaque value; the
     row is the source of truth.
 
-    See ``docs/multi-tenant/P1-1-internal-auth.md`` §4.
+    See ``docs/multi-tenant/internal-auth.md`` §4.
     """
 
     __tablename__ = "sessions"

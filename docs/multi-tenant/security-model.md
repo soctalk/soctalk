@@ -1,6 +1,6 @@
-# P0-1: Tenant Security Model
+# security-model: Tenant Security Model
 
-Gate artifact: Principal catalog, actor×resource matrix, RLS policy matrix, Postgres role model, endpoint classification, token claim schemas, audit requirements, secret placement. Drives: `P0-4-postgres-rls.md`, `P0-5-secret-placement.md`, Phase 1 implementation of multi-tenancy, Phase 2 RBAC in charts.
+Gate artifact: Principal catalog, actor×resource matrix, RLS policy matrix, Postgres role model, endpoint classification, token claim schemas, audit requirements, secret placement. Drives: `postgres-rls.md`, `secret-placement.md`, implementation of multi-tenancy, RBAC in charts.
 
 ## 1 Principal catalog
 
@@ -76,7 +76,7 @@ See section 5.
 
 ### 2.5 Secrets
 
-See section 9 and `P0-5-secret-placement.md`.
+See section 9 and `secret-placement.md`.
 
 ## 3 Actor × resource matrix
 
@@ -104,7 +104,7 @@ Notes:
 
 ## 4 RLS policy matrix
 
-See `P0-4-postgres-rls.md` for SQL. Summary:
+See `postgres-rls.md` for SQL. Summary:
 
 | Table | Policy | `USING` | `WITH CHECK` |
 |---|---|---|---|
@@ -262,7 +262,7 @@ This release has no license enforcement. When licensing lands, expired-license b
 
 ## 9 Secret placement
 
-Summary; full matrix in `P0-5-secret-placement.md`.
+Summary; full matrix in `secret-placement.md`.
 
 | Secret | Location | Accessed by | Rotation |
 |---|---|---|---|
@@ -283,10 +283,10 @@ Summary; full matrix in `P0-5-secret-placement.md`.
 - **Admission boundary scope**: constrains the SocTalk controller ServiceAccount with `ValidatingAdmissionPolicy` for tenant namespaces and namespaced resource mutations, but MSSP cluster-admin users remain trusted break-glass operators. Kyverno is an optional a future release hardening path.
 - **No license enforcement **: license JWT and feature gates deferred to a future release. Pilot MSSPs operate on honor.
 - **LLM response cache**: keyed on `(tenant_id, prompt_hash)` from day 1. If ever relaxed, cross-tenant content leak risk; test suite asserts the key composition.
-- **SSE subscriptions**: tenant-scoped at subscription time. Connection-persistence bugs could deliver cross-tenant events on a stale subscription; explicit SSE isolation test in Phase 1 gate.
+- **SSE subscriptions**: tenant-scoped at subscription time. Connection-persistence bugs could deliver cross-tenant events on a stale subscription; explicit SSE isolation test in implementation gate.
 - **Worker context leakage**: every worker entrypoint must set `app.current_tenant_id`: Defensive default is zero rows under RLS, not cross-tenant leakage, but test suite asserts the defense.
 
-## 11 Test requirements (mandated for Phase 1 gate)
+## 11 Test requirements (mandated for the release gate)
 
 1. **Cross-tenant API probe**: for every `/api/tenant/*` and `/api/mssp/*` endpoint that accesses tenant-scoped data, craft requests as tenant A that attempt reads/writes of tenant B resources. Assert 0 rows or 403.
 2. **Raw-SQL RLS probe**: connect as `soctalk_app`, set `app.current_tenant_id = A`, execute `SELECT * FROM events` (unfiltered); assert only tenant A rows returned.
@@ -296,4 +296,4 @@ Summary; full matrix in `P0-5-secret-placement.md`.
 6. **Impersonation audit**: as `mssp_admin`, impersonate tenant A, perform a mutation; assert `AuditLog` row exists with `acting_as=<mssp_admin_id>` and `tenant_id=A`; assert customer user in A can read the row.
 7. **System context audit**: trigger an `/api/mssp/fleet/summary` call; assert audit row for system-context entry with reason.
 
-Tests are part of the Phase 1 gate. None optional.
+Tests are part of the release gate. None optional.

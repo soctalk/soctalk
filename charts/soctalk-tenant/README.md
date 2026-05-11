@@ -1,6 +1,6 @@
 # soctalk-tenant
 
-**Status: V1 alpha.** Upstream Wazuh / TheHive / Cortex subcharts are not yet vendored under `./charts/*`; the chart audit (`docs/multi-tenant/P0-2-chart-audit.md`) produces the patched versions.
+**Status: V1 alpha.** Upstream Wazuh / TheHive / Cortex subcharts are not yet vendored under `./charts/*`; the chart audit (`docs/multi-tenant/chart-audit.md`) produces the patched versions.
 
 ## Purpose
 
@@ -32,7 +32,7 @@ Does **not** contain:
 
 Direct `helm install` by a human operator is supported only for break-glass / debugging: bypasses SocTalk's DB, bypasses audit, bypasses license cap (V1.5+). Documented as emergency-only.
 
-See `docs/multi-tenant/P0-8-two-chart-contract.md` for full render→apply flow.
+See `docs/multi-tenant/two-chart-contract.md` for full render→apply flow.
 
 ## Cluster prerequisites
 
@@ -49,7 +49,7 @@ Listed in `Chart.yaml`; vendored (not fetched at install time) once Phase 0 char
 - `cortex`: patched Cortex chart with embedded Elasticsearch
 - `misp`: deferred V1.5
 
-Patches remove cluster-scoped resources (`ClusterRole`, `CRD`, `ValidatingWebhookConfiguration`), remove `Ingress` / `LoadBalancer` Services (ingress handled by MSSP-edge SNI proxy per `P0-6`), strip `hostPath` volumes, enforce `runAsNonRoot`, pin images to digests.
+Patches remove cluster-scoped resources (`ClusterRole`, `CRD`, `ValidatingWebhookConfiguration`), remove `Ingress` / `LoadBalancer` Services (ingress handled by MSSP-edge SNI proxy per `wazuh-ingress`), strip `hostPath` volumes, enforce `runAsNonRoot`, pin images to digests.
 
 ## Files
 

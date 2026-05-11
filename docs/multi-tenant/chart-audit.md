@@ -1,8 +1,8 @@
-# P0-2: Tenant Helm Chart Audit
+# chart-audit: Tenant Helm Chart Audit
 
 Gate artifact: Classifies every Kubernetes object rendered by upstream charts we bundle in `charts/soctalk-tenant/`, producing a list of **cluster-scoped prerequisites** (installed by MSSP cluster admin or `soctalk-system` chart) versus **namespace-scoped objects** (safe inside `tenant-<slug>`) versus **forbidden/patched** (objects we cannot accept and must remove or replace).
 
-> **Audit methodology**: this document captures the expected classification based on chart inspection. Actual `helm template` runs and diff-vs-classification are required in the Phase 0 spike. Any object found in a real render that isn't listed here becomes a review gate.
+> **Audit methodology**: this document captures the expected classification based on chart inspection. Actual `helm template` runs and diff-vs-classification are required in the design spike. Any object found in a real render that isn't listed here becomes a review gate.
 
 ## 1 Scope of audit
 
@@ -43,7 +43,7 @@ Wazuh charts typically render:
 | `Role` + `RoleBinding` (for leader election if used) | NS-OK | Namespace-scoped only |
 | `NetworkPolicy` (chart-provided) | PATCH | Replace with SocTalk-rendered NP for consistent posture; don't allow upstream defaults to override default-deny |
 | `StorageClass` references | CLUSTER-PREREQ | MSSP must provide a dynamic provisioner; `storageClassName` is a values input |
-| `Ingress` | PATCH or disable | Default Wazuh charts often expose 1514/1515 via LoadBalancer or Ingress. We use per-tenant SNI routing at MSSP edge (see `P0-6-wazuh-ingress.md`); chart should render only `Service` of type `ClusterIP`, no `Ingress` / `LoadBalancer` |
+| `Ingress` | PATCH or disable | Default Wazuh charts often expose 1514/1515 via LoadBalancer or Ingress. We use per-tenant SNI routing at MSSP edge (see `wazuh-ingress.md`); chart should render only `Service` of type `ClusterIP`, no `Ingress` / `LoadBalancer` |
 | `PodSecurityPolicy` / `SecurityContextConstraints` | CLUSTER-PREREQ if present; forbidden otherwise | PSP is deprecated; if present, remove. OpenShift SCC is not in scope for this release |
 | `CustomResourceDefinition` | **FORBIDDEN** in tenant chart | If the chart tries to install a CRD, move to `soctalk-system` chart or document as prerequisite |
 | `ClusterRole` / `ClusterRoleBinding` | **FORBIDDEN** in tenant chart | Never install cluster-wide RBAC from a tenant namespace |
@@ -53,7 +53,7 @@ Wazuh charts typically render:
 **Expected patches**:
 1. Remove any `ClusterRole`/`ClusterRoleBinding` from rendered output.
 2. Remove any cluster-scoped resources (`ValidatingWebhookConfiguration`, etc.).
-3. Patch `Service` for agent ingress to `ClusterIP` only; real ingress happens at MSSP edge (see P0-6).
+3. Patch `Service` for agent ingress to `ClusterIP` only; real ingress happens at MSSP edge (see wazuh-ingress).
 4. Strip `Ingress` resources. SocTalk doesn't expose Wazuh dashboards through K8s Ingress in this release (MSSP-side SNI proxy handles it).
 5. Ensure all pods have `securityContext: { runAsNonRoot: true, allowPrivilegeEscalation: false }`; patch if upstream sets otherwise.
 6. Pin images to digests, not `latest`.
@@ -76,7 +76,7 @@ Wazuh charts typically render:
 
 **Expected patches**:
 1. Strip Ingress; use ClusterIP Services only.
-2. Pin Cassandra to digest; set resource limits matching P0-7 sizing.
+2. Pin Cassandra to digest; set resource limits matching sizing sizing.
 3. Ensure init Job is idempotent (re-runs harmless).
 4. No CRD dependencies.
 
@@ -129,22 +129,22 @@ We vendor upstream charts as pinned subchart dependencies in `charts/soctalk-ten
 - Apply patches as needed without depending on upstream PR acceptance
 - Sign our bundle as a single artifact (a future release when cosign lands)
 
-If upstream doesn't meet our needs after patches, the fallback is to write SocTalk-native templates that call the same container images with our own manifests. Phase 0 spike decides this per chart.
+If upstream doesn't meet our needs after patches, the fallback is to write SocTalk-native templates that call the same container images with our own manifests. design spike decides this per chart.
 
-## 6 Known unknowns (Phase 0 spike resolves)
+## 6 Known unknowns (design spike resolves)
 
 Items that require actual `helm template` runs + inspection to confirm:
 
 - [ ] **Wazuh**: does the chosen chart version require CRDs for operator-driven deployment? If yes, move CRDs to `soctalk-system` chart.
-- [ ] **TheHive**: does Cassandra require `StorageClass` with specific features (e.g., RWO only, minimum IOPS)? Document in P0-7 sizing.
+- [ ] **TheHive**: does Cassandra require `StorageClass` with specific features (e.g., RWO only, minimum IOPS)? Document in sizing sizing.
 - [ ] **Cortex**: what analyzers are enabled by default, and do any require Docker-in-Docker? Produce an allowlist of-safe analyzers.
 - [ ] **All charts**: any `Job` or `CronJob` that runs with `ServiceAccount` beyond the namespace? Patch to ns-local SA.
 - [ ] **All charts**: any `initContainer` with `privileged: true` or `hostPath` mounts? Patch or replace.
-- [ ] **All charts**: default `resources.requests` and `limits`: Compare to P0-7 sizing profile; override in values where needed.
+- [ ] **All charts**: default `resources.requests` and `limits`: Compare to sizing sizing profile; override in values where needed.
 
-Each open item becomes a Phase 0 spike checklist entry. The spike's output is a filled-in classification table and the patched chart ready for `charts/soctalk-tenant/charts/`.
+Each open item becomes a design spike checklist entry. The spike's output is a filled-in classification table and the patched chart ready for `charts/soctalk-tenant/charts/`.
 
-## 7 Output artifact (produced by Phase 0 spike)
+## 7 Output artifact (produced by design spike)
 
 The spike produces:
 
@@ -154,14 +154,14 @@ The spike produces:
 4. **Analyzer allowlist** for Cortex (safe-only set).
 5. **Values schema fragment** for each subchart (inputs SocTalk will provide per-tenant).
 
-The spike's completion is a prerequisite for Phase 2 (Helm chart implementation).
+The spike's completion is a prerequisite for Helm chart implementation.
 
-## 8 Phase 0 gate criteria for this artifact
+## 8 Gate criteria for this artifact
 
-Before Phase 1 begins:
+Before implementation begins:
 
 - [x] This document merged as reference.
-- [ ] Phase 0 spike executes `helm template` against chosen versions of Wazuh, TheHive, Cortex; produces filled classification tables.
+- [ ] design spike executes `helm template` against chosen versions of Wazuh, TheHive, Cortex; produces filled classification tables.
 - [ ] Patched charts vendored under `charts/soctalk-tenant/charts/`.
-- [ ] Cluster prerequisites list incorporated into install guide draft (Phase 8 deliverable).
+- [ ] Cluster prerequisites list incorporated into install guide draft (deliverable).
 - [ ] Analyzer allowlist produced.

@@ -1,4 +1,4 @@
-"""Auth + role decorator tests (P0-1 §5, §6)."""
+"""Auth + role decorator tests (security-model §5, §6)."""
 
 from __future__ import annotations
 

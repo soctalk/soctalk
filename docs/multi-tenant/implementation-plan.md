@@ -7,7 +7,7 @@ Wazuh and native IR enabled by default; TheHive and MISP disabled by
 default. Campaigns, NL policy editing, vector memory, and MISP runtime
 deferred to v1.x.
 
-Invariants anchored in P2-0. UI surface in P2-1 (to draft alongside
+Invariants anchored in core-invariants. UI surface in P2-1 (to draft alongside
 M6a, informed by the real backend).
 
 ## Integration posture
@@ -22,7 +22,7 @@ M6a, informed by the real backend).
 ## Milestones
 
 ```
-M0     Spec commit (P2-0) + plan (this doc)
+M0     Spec commit (core-invariants) + plan (this doc)
 M1     DB foundation
 M2     Reducer + inbox consumer + outbox executor
 M3     Tool registry + policy loader
@@ -39,7 +39,7 @@ M10    Docs + rollout
 
 Critical path: `M0 → M1 → M2 → M4 → M5a → M6a → M7`.
 
-## Detail locks from P2-0 review
+## Detail locks from core-invariants review
 
 ### a. DB session vars for visibility RLS
 

@@ -1,6 +1,6 @@
 """Password hashing and policy.
 
-argon2id via ``argon2-cffi``. Parameters match P1-1 §5 (OWASP 2025
+argon2id via ``argon2-cffi``. Parameters match internal-auth §5 (OWASP 2025
 baseline). The hash string embeds all parameters, so tuning is
 backwards-compatible via transparent rehash on verify.
 """

@@ -1,7 +1,7 @@
 # SocTalk V1: soctalk-tenant chart default values.
 #
 # This chart is not installed by human operators. The SocTalk controller
-# renders values from the per-tenant config row (see docs/multi-tenant/P0-8-two-chart-contract.md)
+# renders values from the per-tenant config row (see docs/multi-tenant/two-chart-contract.md)
 # and applies via Helm. These defaults document the contract; most fields are
 # overridden per-tenant by the controller.
 

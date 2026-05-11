@@ -219,7 +219,7 @@ async def _truncate_test_tables(session: AsyncSession) -> None:
         "iocs",
         "notes",
         "tenant_policies",
-        # P1-1 internal auth
+        # internal-auth internal auth
         "sessions",
         "password_credentials",
         # V1 multi-tenancy

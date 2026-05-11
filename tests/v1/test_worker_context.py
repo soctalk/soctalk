@@ -1,4 +1,4 @@
-"""Worker context discipline tests: covers P0-4 Test 3 + P0-1 §11.3.
+"""Worker context discipline tests: covers postgres-rls Test 3 + security-model §11.3.
 
 These tests don't require Postgres; they exercise the decorator and
 ContextVar primitives in-process.
@@ -19,7 +19,7 @@ from soctalk.core.tenancy.decorators import tenant_scoped_worker
 
 
 async def test_worker_raises_when_tenant_missing():
-    """P0-4 Test 3: worker without tenant_id in payload must raise."""
+    """postgres-rls Test 3: worker without tenant_id in payload must raise."""
 
     @tenant_scoped_worker
     async def hostile_worker(state):

@@ -1,4 +1,4 @@
-# P0-6: Wazuh Agent Ingress and Cert Enrollment
+# wazuh-ingress: Wazuh Agent Ingress and Cert Enrollment
 
 Gate artifact: Specifies how customer endpoints' Wazuh agents reach the per-tenant Wazuh manager across tenant isolation, including hostname strategy, TLS, routing, enrollment flow, and firewall/DNS requirements.
 
@@ -153,7 +153,7 @@ To revoke a specific agent:
 To revoke all agents for a tenant (e.g., customer offboarding):
 1. Rotate tenant's `authd` shared secret (re-enrollment required for new agents).
 2. Delete all existing agent registrations via Wazuh API.
-3. Tenant decommission (Phase 6) eventually tears down the manager.
+3. Tenant decommission  eventually tears down the manager.
 
 ## 6 Alternative connectivity patterns (documented, not built)
 
@@ -188,22 +188,22 @@ For MSSPs with geographic separation (EU, US, APAC), multiple edge proxies in di
 5. Customer endpoint admin installs + enrolls.
 6. MSSP operator watches tenant detail → Agents tab, sees agent appear within ~30 seconds.
 
-## 8 Testing (Phase 0 spike + Phase 8 pilot validation)
+## 8 Testing (design spike + pilot validation)
 
-Phase 0 spike validates:
+Design spike validates:
 - HAProxy config template with two tenants; prove SNI routing works.
 - cert-manager per-tenant cert issuance (or wildcard).
 - End-to-end: spin up two tenants in `k3d`, deploy HAProxy as NodePort, enroll an agent at each via localhost:1515 with SNI override, verify events flow to the correct tenant's Wazuh indexer.
 
-Phase 8 pilot validates:
+A later release pilot validates:
 - Real customer endpoint (on actual separate network) successfully enrolls.
 - Cross-tenant probe: try to enroll an `acme` agent with `beta`'s `authd` secret against `beta`'s hostname; expect rejection. Try vice versa. Both should fail.
 
-## 9 Phase 0 gate criteria
+## 9 Gate criteria
 
 - [x] This document merged as reference.
-- [ ] Phase 0 spike produces working HAProxy config template with per-tenant routing.
-- [ ] Phase 0 spike validates cert-manager per-tenant cert issuance.
-- [ ] Phase 2 SocTalk controller implements `authd` secret generation + HAProxy config re-render.
-- [ ] Phase 8 install guide documents MSSP-edge proxy deployment + DNS setup + firewall rules.
-- [ ] Phase 8 customer-onboarding runbook includes agent enrollment walkthrough.
+- [ ] design spike produces working HAProxy config template with per-tenant routing.
+- [ ] design spike validates cert-manager per-tenant cert issuance.
+- [ ] SocTalk controller implements `authd` secret generation + HAProxy config re-render.
+- [ ] install guide documents MSSP-edge proxy deployment + DNS setup + firewall rules.
+- [ ] customer-onboarding runbook includes agent enrollment walkthrough.

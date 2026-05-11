@@ -1,7 +1,7 @@
 # Wazuh — persistent profile.
 #
 # Single-node topology (same as poc) but backed by a durable StorageClass.
-# Survives pod/node restarts. Not HA — see docs/multi-tenant/P2-10-wazuh-profiles.md
+# Survives pod/node restarts. Not HA — see docs/multi-tenant/wazuh-profiles.md
 # for the split rationale; HA is deferred to v1.x.
 
 storage:

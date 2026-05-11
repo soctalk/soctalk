@@ -1,6 +1,6 @@
-# P0-4: Postgres RLS Hygiene
+# postgres-rls: Postgres RLS Hygiene
 
-Gate artifact: Defines the three-role Postgres model, RLS policy templates, `FORCE ROW LEVEL SECURITY` discipline, and the isolation test template mandated for the Phase 1 gate.
+Gate artifact: Defines the three-role Postgres model, RLS policy templates, `FORCE ROW LEVEL SECURITY` discipline, and the isolation test template mandated for the release gate.
 
 ## 1 Roles
 
@@ -58,7 +58,7 @@ Applying `ALTER TABLE <t> FORCE ROW LEVEL SECURITY` makes even the owner RLS-sub
 
 SocTalk sets `app.current_tenant_id` (a custom GUC) per transaction. Policies reference it via `current_setting('app.current_tenant_id', true)`. The `true` second argument returns NULL if unset (rather than erroring), which keeps isolation tests clean.
 
-Middleware (Phase 1):
+Middleware :
 
 ```python
 async def tenant_context_middleware(request, call_next):
@@ -170,7 +170,7 @@ Migrations land in this order (Alembic revisions):
 
 All migrations forward-only. Each migration must include a test that asserts RLS behavior post-apply. Rollback strategy: restore from pre-migration Postgres dump (backup/restore runbook); no `downgrade()` Alembic functions in this release (to avoid giving a false sense of clean reversal).
 
-## 9 Isolation test template (Phase 1 gate)
+## 9 Isolation test template (gate)
 
 ### Test 1 Application endpoint probe
 
@@ -272,7 +272,7 @@ async def test_idempotency_key_per_tenant():
         await insert_event(tenant_a, idempotency_key="ext-123")
 ```
 
-All seven tests are required to pass for the Phase 1 gate. No optional.
+All seven tests are required to pass for the release gate. No optional.
 
 ## 10 Operational notes
 
@@ -280,9 +280,9 @@ All seven tests are required to pass for the Phase 1 gate. No optional.
 - **Logging**: every connection logs its role (in `pg_stat_activity.usename`): Operators can audit which role is running which query.
 - **Superuser access**: Postgres superuser exists but is only used for break-glass debugging, not by any application code. Credentials stored separately and rotated after use.
 
-## 11 Phase 0 gate criteria
+## 11 Gate criteria
 
 - [x] This document merged as reference.
-- [ ] Phase 1 Alembic migrations implement role DDL, policies, FORCE RLS, composite idempotency keys.
-- [ ] Phase 1 test suite includes tests 1–7 above and passes.
+- [ ] Alembic migrations implement role DDL, policies, FORCE RLS, composite idempotency keys.
+- [ ] tests suite includes tests 1–7 above and passes.
 - [ ] Secret generation for three Postgres credentials is part of `soctalk-system` chart install.

@@ -1,7 +1,7 @@
 """Tool registry and capability taxonomy.
 
 Tools are declared in code; policies decide whether each tool is
-autonomous, analyst-gated, or needs a typed reason. See P2-0 §9.
+autonomous, analyst-gated, or needs a typed reason. See core-invariants §9.
 
 Usage:
 

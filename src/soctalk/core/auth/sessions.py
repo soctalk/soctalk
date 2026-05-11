@@ -1,7 +1,7 @@
 """Session CRUD helpers.
 
 Sessions are DB-backed (table ``sessions``). The cookie carries only the
-session ``id`` (UUID). Lifetime policy: 12h absolute, 30m idle (P1-1 §4).
+session ``id`` (UUID). Lifetime policy: 12h absolute, 30m idle (internal-auth §4).
 """
 
 from __future__ import annotations

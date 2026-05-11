@@ -12,7 +12,7 @@ Symptoms → diagnostic → fix. Runbook for the most common failure modes.
 | Tenant goes `degraded` | adapter logs in tenant ns | NetworkPolicy egress, adapter pod crash, or DNS misresolved |
 | Cross-tenant data visible | Run isolation test suite | **P1 incident.** RLS is the last line: failure indicates app or Postgres role misconfiguration |
 | LLM calls failing for one tenant | Worker logs: look for 401/403 from LLM provider | `tenant-<id>-llm` Secret `api_key` empty or wrong. Rotate via UI |
-| Wazuh agent can't connect | Check MSSP edge L4 proxy + DNS + TLS cert for `<slug>.soc.mssp.*` | P0-6 §8; ensure SNI routes to the right tenant's Wazuh manager |
+| Wazuh agent can't connect | Check MSSP edge L4 proxy + DNS + TLS cert for `<slug>.soc.mssp.*` | wazuh-ingress §8; ensure SNI routes to the right tenant's Wazuh manager |
 | Postgres StatefulSet won't start (Pending) | `kubectl describe pvc -n soctalk-system` | No default StorageClass, or class doesn't support RWO, or cluster out of disk |
 | `PolicyViolation` messages from ingress controller | NetworkPolicy allow-rules | Make sure ingress ns is labeled `kubernetes.io/metadata.name=ingress-system` |
 | Cilium Hubble shows DROPPED flows between tenant and soctalk-system | Check NetworkPolicies + Cilium identities | Adapter egress policy missing or wrong namespaceSelector |
