@@ -1,10 +1,10 @@
 name: Publish Images and Charts
 
 # Builds and publishes:
-#   - Four container images at ghcr.io/gbrigandi/soctalk-*
+#   - Four container images at ghcr.io/soctalk/soctalk-*
 #     tagged `latest` + short SHA (+ release version on `v*` tags).
 #   - Three Helm charts (soctalk-system, soctalk-tenant, wazuh) as OCI
-#     artifacts at ghcr.io/gbrigandi/charts/<chart>, tagged with the
+#     artifacts at ghcr.io/soctalk/charts/<chart>, tagged with the
 #     Chart.yaml version. Helm OCI doesn't have a `latest` tag — to
 #     publish a new chart version, bump `version:` in Chart.yaml.
 #
@@ -80,7 +80,7 @@ jobs:
         id: tags
         run: |
           set -euo pipefail
-          image="ghcr.io/gbrigandi/${{ matrix.image }}"
+          image="ghcr.io/soctalk/${{ matrix.image }}"
           short_sha="${GITHUB_SHA::7}"
           tags=("$image:latest" "$image:$short_sha")
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -143,6 +143,6 @@ jobs:
             # `helm push` is idempotent: pushing the same chart version
             # twice is a no-op (artifact already exists in registry).
             # To publish a new version, bump `version:` in Chart.yaml.
-            helm push "$tgz" oci://ghcr.io/gbrigandi/charts
+            helm push "$tgz" oci://ghcr.io/soctalk/charts
             echo "::endgroup::"
           done

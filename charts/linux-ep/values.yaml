@@ -8,7 +8,7 @@
 # ingests and triages.
 
 image:
-  repository: ghcr.io/gbrigandi/soctalk-linux-ep
+  repository: ghcr.io/soctalk/soctalk-linux-ep
   tag: latest
   pullPolicy: IfNotPresent
 

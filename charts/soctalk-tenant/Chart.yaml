@@ -17,9 +17,9 @@ appVersion: 0.1.0
 
 kubeVersion: ">=1.28.0-0"
 
-home: https://github.com/gbrigandi/soctalk
+home: https://github.com/soctalk/soctalk
 sources:
-  - https://github.com/gbrigandi/soctalk
+  - https://github.com/soctalk/soctalk
 
 maintainers:
   - name: Gianluca Brigandi

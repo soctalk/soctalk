@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/gbrigandi/soctalk/charts/soctalk-tenant/values.schema.json",
+  "$id": "https://github.com/soctalk/soctalk/charts/soctalk-tenant/values.schema.json",
   "title": "SocTalk Tenant Chart Values",
   "description": "Validation schema for soctalk-tenant Helm chart values (rendered by SocTalk controller from per-tenant config).",
   "type": "object",

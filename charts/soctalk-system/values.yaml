@@ -17,7 +17,7 @@ install:
     password: ''
     existingSecret: ''
 image:
-  registry: ghcr.io/gbrigandi
+  registry: ghcr.io/soctalk
   tag: 0.1.0
   pullPolicy: IfNotPresent
   pullSecrets: []

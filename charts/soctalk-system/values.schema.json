@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/gbrigandi/soctalk/charts/soctalk-system/values.schema.json",
+  "$id": "https://github.com/soctalk/soctalk/charts/soctalk-system/values.schema.json",
   "title": "SocTalk System Chart Values",
   "description": "Validation schema for soctalk-system Helm chart values.",
   "type": "object",

@@ -141,7 +141,7 @@ agentIngress:
 # SocTalk adapter (health reporting + Wazuh alert ingest back to L1)
 adapter:
   image:
-    repository: "ghcr.io/gbrigandi/soctalk-adapter"
+    repository: "ghcr.io/soctalk/soctalk-adapter"
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   resources:
@@ -177,7 +177,7 @@ runsWorker:
   enabled: true
   replicas: 1
   image:
-    repository: "ghcr.io/gbrigandi/soctalk-orchestrator"
+    repository: "ghcr.io/soctalk/soctalk-orchestrator"
     tag: "0.1.0"
     pullPolicy: IfNotPresent
   resources:

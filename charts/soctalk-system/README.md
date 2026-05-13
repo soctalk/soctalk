@@ -36,7 +36,7 @@ For local development, `scripts/dev-up.sh` at repo root brings up a `k3d` cluste
 ## Install
 
 ```bash
-helm install soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
     --version 0.1.0 \
     --namespace soctalk-system --create-namespace \
     -f values.yaml
@@ -53,7 +53,7 @@ Required values (see `values.schema.json`):
 ## Upgrade
 
 ```bash
-helm upgrade soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+helm upgrade soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
     --version 0.2.0 \
     --namespace soctalk-system \
     -f values.yaml
