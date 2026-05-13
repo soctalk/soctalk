@@ -67,7 +67,7 @@ async def helm_install_tenant(
     """Run ``helm upgrade --install`` for a tenant release.
 
     ``chart_ref`` may be a local path (dev) or an OCI reference like
-    ``oci://ghcr.io/gbrigandi/charts/soctalk-tenant`` with a ``--version`` arg
+    ``oci://ghcr.io/soctalk/charts/soctalk-tenant`` with a ``--version`` arg
     added by the caller.
     """
     with tempfile.NamedTemporaryFile(

@@ -28,7 +28,7 @@ install:
 
 # Image sources
 image:
-  registry: ghcr.io/gbrigandi
+  registry: ghcr.io/soctalk
   tag: v1.0.0                 # or `latest`
   pullPolicy: IfNotPresent
 
@@ -204,7 +204,7 @@ agentIngress:
 # Adapter
 adapter:
   image:
-    repository: ghcr.io/gbrigandi/soctalk-adapter
+    repository: ghcr.io/soctalk/soctalk-adapter
     tag: v1.0.0
   resources:
     requests: { cpu: 50m, memory: 128Mi }
@@ -273,7 +273,7 @@ Pinned by digest in `soctalk-tenant/values.yaml`:
 ```yaml
 adapter:
   image:
-    repository: ghcr.io/gbrigandi/soctalk-adapter
+    repository: ghcr.io/soctalk/soctalk-adapter
     digest: sha256:abc123...
 ```
 
@@ -348,12 +348,12 @@ On `POST /api/mssp/tenants/:id:decommission`:
 
 ### 7.1 Distribution
 
-- **(minimal)**: push as OCI artifacts to `ghcr.io/gbrigandi/charts/soctalk-system` and `/charts/soctalk-tenant`: Public, unauthenticated pulls.
+- **(minimal)**: push as OCI artifacts to `ghcr.io/soctalk/charts/soctalk-system` and `/charts/soctalk-tenant`: Public, unauthenticated pulls.
 - **a future release**: cosign-signed + SBOM attached.
 
 Install guide uses:
 ```bash
-helm install soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
     --version v1.0.0 \
     --namespace soctalk-system --create-namespace \
     -f values.yaml

@@ -186,7 +186,7 @@ def render_tenant_values(
             "image": {
                 "repository": os.getenv(
                     "SOCTALK_TENANT_ADAPTER_IMAGE_REPO",
-                    "ghcr.io/gbrigandi/soctalk-adapter",
+                    "ghcr.io/soctalk/soctalk-adapter",
                 ),
                 "tag": os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "0.1.13-fixes"),
                 "pullPolicy": "IfNotPresent",
@@ -219,7 +219,7 @@ def render_tenant_values(
             "image": {
                 "repository": os.getenv(
                     "SOCTALK_TENANT_RUNS_WORKER_IMAGE_REPO",
-                    "ghcr.io/gbrigandi/soctalk-orchestrator",
+                    "ghcr.io/soctalk/soctalk-orchestrator",
                 ),
                 "tag": os.getenv(
                     "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", "0.1.13-fixes"

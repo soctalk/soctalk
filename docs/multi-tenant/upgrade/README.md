@@ -18,14 +18,14 @@ Before any upgrade:
    See the [runbook](../runbook/README.md#database-restore-disaster-recovery).
 4. **Dry-run** with `helm diff`:
    ```bash
-   helm diff upgrade soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+   helm diff upgrade soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
      --version <new> -n soctalk-system -f values.yaml
    ```
 
 ## Upgrade `soctalk-system` (install-level)
 
 ```bash
-helm upgrade soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+helm upgrade soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
   --version <new-version> \
   --namespace soctalk-system \
   -f soctalk-system-values.yaml \
@@ -51,7 +51,7 @@ pre-upgrade backup in addition.
 ## Upgrade a single tenant's data plane
 
 ```bash
-helm upgrade tenant-<slug> oci://ghcr.io/gbrigandi/charts/soctalk-tenant \
+helm upgrade tenant-<slug> oci://ghcr.io/soctalk/charts/soctalk-tenant \
   --version <new-tenant-chart-version> \
   --namespace tenant-<slug> \
   -f /tmp/tenant-<slug>-values.yaml \
@@ -84,7 +84,7 @@ kubectl get ns -l tenant=true,managed-by=soctalk -o jsonpath='{.items[*].metadat
 # Upgrade each, pausing between.
 for ns in tenant-acme tenant-beta tenant-gamma; do
   echo "upgrading $ns..."
-  helm upgrade ${ns} oci://ghcr.io/gbrigandi/charts/soctalk-tenant \
+  helm upgrade ${ns} oci://ghcr.io/soctalk/charts/soctalk-tenant \
     --version <new> -n $ns -f /tmp/${ns}-values.yaml --wait --timeout 15m
   kubectl -n $ns rollout status deploy/soctalk-adapter
   sleep 60  # let heartbeat settle before next.

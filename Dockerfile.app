@@ -6,7 +6,7 @@
 # existing UI container template applies unchanged once the image is
 # repointed.
 #
-#   docker build -f Dockerfile.app -t ghcr.io/gbrigandi/soctalk-app-ui:0.1.0 .
+#   docker build -f Dockerfile.app -t ghcr.io/soctalk/soctalk-app-ui:0.1.0 .
 
 # ---- Stage 1: build ---------------------------------------------------------
 FROM node:22-alpine AS builder

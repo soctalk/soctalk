@@ -749,12 +749,12 @@ async def issue_agent(
     import os
     chart_ref = os.getenv(
         "SOCTALK_TENANT_CHART_REF",
-        "oci://ghcr.io/gbrigandi/charts/soctalk-tenant",
+        "oci://ghcr.io/soctalk/charts/soctalk-tenant",
     )
     chart_version = os.getenv("SOCTALK_TENANT_CHART_VERSION", "0.1.0")
     agent_chart_ref = os.getenv(
         "SOCTALK_AGENT_CHART_REF",
-        "oci://ghcr.io/gbrigandi/charts/soctalk-cloud-agent",
+        "oci://ghcr.io/soctalk/charts/soctalk-cloud-agent",
     )
     agent_chart_version = os.getenv(
         "SOCTALK_AGENT_CHART_VERSION", "0.1.0"

@@ -165,7 +165,7 @@ async def test_k3d_live_provision_poc_happy_path(
         readiness_poll_interval_seconds=5.0,
         readiness_timeout_seconds=900.0,  # 15 min — wazuh indexer JVM warm-up
         wait_timeout="4m",  # only bounds the helm apply, not workload readiness
-        # The real adapter image (ghcr.io/gbrigandi/soctalk-adapter) is not
+        # The real adapter image (ghcr.io/soctalk/soctalk-adapter) is not
         # built yet; swap in a trivially-pullable stub with no readiness
         # probe so helm --wait can succeed. The rest of the pipeline
         # (namespace, secrets, two releases, wazuh pod readiness) is

@@ -141,7 +141,7 @@ install:
   installLabel: "pilot-prod"
 
 image:
-  registry: ghcr.io/gbrigandi
+  registry: ghcr.io/soctalk
   tag: "0.1.0"
 
 ingress:
@@ -168,7 +168,7 @@ postgres:
 ### 2.2 Install
 
 ```bash
-helm install soctalk-system oci://ghcr.io/gbrigandi/charts/soctalk-system \
+helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
   --version 0.1.0 \
   --namespace soctalk-system --create-namespace \
   -f soctalk-system-values.yaml

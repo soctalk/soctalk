@@ -14,8 +14,8 @@ name: Publish Images and Charts
 #   - workflow_dispatch    → manual button; useful for the first publish
 #
 # First-time setup: after the first successful run, flip each ghcr package
-# to public visibility at https://github.com/users/gbrigandi/packages
-# (or via `gh api -X PATCH /user/packages/container/<name> -f visibility=public`).
+# to public visibility at https://github.com/orgs/soctalk/packages
+# (or via `gh api -X PATCH /orgs/soctalk/packages/container/<name> -f visibility=public`).
 
 on:
   push:

@@ -130,7 +130,7 @@ class ControllerSettings:
     soctalk_system_namespace: str = "soctalk-system"
     soctalk_system_release_name: str = "soctalk-system"
     api_service_name: str = "soctalk-system-api"
-    tenant_chart_ref: str = "oci://ghcr.io/gbrigandi/charts/soctalk-tenant"
+    tenant_chart_ref: str = "oci://ghcr.io/soctalk/charts/soctalk-tenant"
     tenant_chart_version: str = "0.1.0"
     wazuh_chart_path: str = "charts/wazuh"
     default_agent_dns_suffix: str = "soc.mssp.local"
@@ -163,7 +163,7 @@ class ControllerSettings:
             ),
             tenant_chart_ref=os.getenv(
                 "SOCTALK_TENANT_CHART_REF",
-                "oci://ghcr.io/gbrigandi/charts/soctalk-tenant",
+                "oci://ghcr.io/soctalk/charts/soctalk-tenant",
             ),
             tenant_chart_version=os.getenv(
                 "SOCTALK_TENANT_CHART_VERSION", "0.1.0"
