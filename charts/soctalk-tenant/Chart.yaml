@@ -10,7 +10,7 @@ description: |
 type: application
 
 # Chart version is independent of application versions.
-version: 0.1.0-alpha.1
+version: 0.1.0
 
 # Application version identifier (bumped when subchart versions change)
 appVersion: 0.1.0
