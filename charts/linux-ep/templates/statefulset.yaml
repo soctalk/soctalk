@@ -1,0 +1,60 @@
+{{- if not .Values.wazuh.managerHost -}}
+{{- fail "wazuh.managerHost is required (e.g. wazuh-demo-wazuh-manager)" -}}
+{{- end -}}
+{{- if not .Values.wazuh.credsSecret.name -}}
+{{- fail "wazuh.credsSecret.name is required (e.g. wazuh-demo-wazuh-creds)" -}}
+{{- end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "linux-ep.fullname" . }}
+  labels:
+    {{- include "linux-ep.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ include "linux-ep.fullname" . }}
+  # Pods get K8s-managed stable names `<release>-0`, `<release>-1`, ...
+  # The container's hostname defaults to the pod name; the entrypoint
+  # uses $(hostname) as the Wazuh agent name, so each pod registers
+  # under a unique agent identity.
+  selector:
+    matchLabels:
+      {{- include "linux-ep.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "linux-ep.labels" . | nindent 8 }}
+    spec:
+      subdomain: {{ include "linux-ep.fullname" . | quote }}
+      containers:
+        - name: endpoint
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: WAZUH_MANAGER
+              value: {{ .Values.wazuh.managerHost | quote }}
+            - name: ATTACK_DELAY
+              value: {{ .Values.simulator.attackDelay | quote }}
+            - name: ATTACK_INTERVAL
+              value: {{ .Values.simulator.attackInterval | quote }}
+            - name: WAZUH_REGISTRATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wazuh.credsSecret.name | quote }}
+                  key: {{ .Values.wazuh.credsSecret.authdPasswordKey | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

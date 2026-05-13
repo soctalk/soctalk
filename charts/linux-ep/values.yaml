@@ -1,0 +1,53 @@
+# Defaults for the SocTalk mock-endpoint chart.
+#
+# This chart deploys a StatefulSet of N attack-simulator pods. Each
+# pod registers a Wazuh agent named `<release>-<ordinal>` with the
+# configured Wazuh manager (typically inside the same tenant
+# namespace) and executes Atomic Red Team / scripted MITRE TTPs on
+# itself. The resulting Wazuh alerts are what the soctalk pipeline
+# ingests and triages.
+
+image:
+  repository: ghcr.io/gbrigandi/soctalk-linux-ep
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Number of simulated endpoints. Each registers with the Wazuh
+# manager under a unique agent name (release-name plus pod ordinal).
+replicas: 1
+
+# Wazuh manager wiring. Defaults assume the tenant chart's standard
+# `wazuh-<tenantSlug>-wazuh-manager` Service name lives in the same
+# namespace as this release.
+wazuh:
+  # Cluster-DNS-resolvable hostname for the Wazuh manager 1514/1515.
+  managerHost: ""          # e.g. wazuh-demo-wazuh-manager
+  # Name of an existing Secret holding the authd enrollment password.
+  # Typically `wazuh-<tenantSlug>-wazuh-creds` from the wazuh chart.
+  credsSecret:
+    name: ""
+    authdPasswordKey: AUTHD_PASS
+
+# Simulator runtime knobs (passed through as container env vars
+# matching the original attack-simulator docker-compose service).
+simulator:
+  attackDelay: 10           # seconds after agent enroll before the first TTP
+  attackInterval: 120       # seconds between subsequent TTPs
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# The Wazuh agent + Atomic Red Team scripts in the image expect
+# privileged operations (loading kernel modules in some TTPs, file
+# perms tweaks, etc). Required for realistic TTP execution.
+securityContext:
+  privileged: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

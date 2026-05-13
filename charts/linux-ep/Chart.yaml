@@ -1,0 +1,20 @@
+apiVersion: v2
+name: linux-ep
+description: |
+  Linux endpoint simulator(s) for SocTalk dev / PoC. Spins up N
+  containers that each (a) install the Wazuh agent and register
+  with a tenant's Wazuh manager, and (b) execute scripted MITRE
+  ATT&CK techniques against themselves so the SocTalk pipeline
+  has real Wazuh-native alerts to triage. Pods register as agents
+  ``linux-ep-0``, ``linux-ep-1``, ... by default.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - soctalk
+  - wazuh
+  - mitre
+  - endpoint
+home: https://soctalk.ai
+sources:
+  - https://github.com/gbrigandi/soctalk
