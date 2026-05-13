@@ -1,18 +1,20 @@
-name: Publish Images
+name: Publish Images and Charts
 
-# Builds and publishes the four soctalk container images to GitHub Container
-# Registry (ghcr.io/gbrigandi/soctalk-*). Triggered on:
-#   - push to main         → tags `latest` + commit SHA
-#   - push of a `v*` tag   → tags `latest`, the version, and the commit SHA
+# Builds and publishes:
+#   - Four container images at ghcr.io/gbrigandi/soctalk-*
+#     tagged `latest` + short SHA (+ release version on `v*` tags).
+#   - Three Helm charts (soctalk-system, soctalk-tenant, wazuh) as OCI
+#     artifacts at ghcr.io/gbrigandi/charts/<chart>, tagged with the
+#     Chart.yaml version. Helm OCI doesn't have a `latest` tag — to
+#     publish a new chart version, bump `version:` in Chart.yaml.
+#
+# Triggered on:
+#   - push to main         → publishes images (charts only if Chart.yaml version is new)
+#   - push of a `v*` tag   → adds the release version as an image tag
 #   - workflow_dispatch    → manual button; useful for the first publish
 #
-# The four images correspond to the chart values in:
-#   charts/soctalk-system/values.yaml  (api, app-ui)
-#   charts/soctalk-tenant/values.yaml  (orchestrator, adapter)
-#
-# First-time setup: after the first successful run, flip each of the four
-# packages to public visibility at
-#   https://github.com/users/gbrigandi/packages
+# First-time setup: after the first successful run, flip each ghcr package
+# to public visibility at https://github.com/users/gbrigandi/packages
 # (or via `gh api -X PATCH /user/packages/container/<name> -f visibility=public`).
 
 on:
@@ -99,3 +101,41 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
           provenance: false
+
+  charts:
+    runs-on: ubuntu-latest
+    # Charts publish independently of images; they don't need images to
+    # build, only to run. So we don't `needs: build`.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Log in to ghcr.io (Helm)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push charts
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/helm-out
+
+          for chart in soctalk-system soctalk-tenant wazuh; do
+            echo "::group::package $chart"
+            helm package "charts/$chart" --destination /tmp/helm-out
+            echo "::endgroup::"
+          done
+
+          for tgz in /tmp/helm-out/*.tgz; do
+            echo "::group::push $tgz"
+            # `helm push` is idempotent: pushing the same chart version
+            # twice is a no-op (artifact already exists in registry).
+            # To publish a new version, bump `version:` in Chart.yaml.
+            helm push "$tgz" oci://ghcr.io/gbrigandi/charts
+            echo "::endgroup::"
+          done
