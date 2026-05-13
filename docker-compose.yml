@@ -17,6 +17,7 @@ services:
       retries: 5
 
   api:
+    image: ghcr.io/soctalk/soctalk-api:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -48,6 +49,7 @@ services:
     restart: unless-stopped
 
   orchestrator:
+    image: ghcr.io/soctalk/soctalk-orchestrator:latest
     build:
       context: .
       dockerfile: Dockerfile.orchestrator
@@ -70,8 +72,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  mock-endpoint:
-    image: soctalk-mock-endpoint:latest
+  linux-ep:
+    image: ghcr.io/soctalk/soctalk-linux-ep:latest
+    build:
+      context: attack-simulator
+      dockerfile: Dockerfile
     privileged: true
     environment:
       WAZUH_MANAGER: ${WAZUH_API_HOST}
