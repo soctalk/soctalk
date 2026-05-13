@@ -9,7 +9,7 @@
 #   docker build -f Dockerfile.app -t ghcr.io/gbrigandi/soctalk-app-ui:0.1.0 .
 
 # ---- Stage 1: build ---------------------------------------------------------
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -22,7 +22,7 @@ COPY frontend/ ./
 RUN pnpm build
 
 # ---- Stage 2: runtime -------------------------------------------------------
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
