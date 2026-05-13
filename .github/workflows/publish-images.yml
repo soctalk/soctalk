@@ -45,12 +45,19 @@ jobs:
         include:
           - image: soctalk-api
             dockerfile: Dockerfile
+            context: .
           - image: soctalk-app-ui
             dockerfile: Dockerfile.app
+            context: .
           - image: soctalk-orchestrator
             dockerfile: Dockerfile.orchestrator
+            context: .
           - image: soctalk-adapter
             dockerfile: Dockerfile.adapter
+            context: .
+          - image: soctalk-linux-ep
+            dockerfile: attack-simulator/Dockerfile
+            context: attack-simulator
 
     steps:
       - name: Checkout
@@ -93,7 +100,7 @@ jobs:
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
@@ -125,7 +132,7 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/helm-out
 
-          for chart in soctalk-system soctalk-tenant wazuh; do
+          for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
             echo "::group::package $chart"
             helm package "charts/$chart" --destination /tmp/helm-out
             echo "::endgroup::"
