@@ -207,7 +207,7 @@ The dashboard Settings page shows where a value comes from (Env vs Override) and
 
 ## Mock Agents (attack simulator)
 
-The `mock-endpoint` service runs a real Wazuh agent that executes MITRE ATT&CK-style techniques to produce high-signal alerts for testing.
+The `linux-ep` service runs a real Wazuh agent that executes MITRE ATT&CK-style techniques to produce high-signal alerts for testing.
 
 Prerequisites:
 - Reachable Wazuh manager (agent registration + TCP) on ports `1515` and `1514`.
@@ -216,15 +216,15 @@ Prerequisites:
 Deploy and generate alerts:
 ```bash
 # start mock agent (testing profile)
-docker compose --profile testing up -d --build mock-endpoint
-docker compose logs -f mock-endpoint
+docker compose --profile testing up -d --build linux-ep
+docker compose logs -f linux-ep
 
 # list available techniques
-docker compose exec mock-endpoint /opt/scripts/run-attack.sh list
+docker compose exec linux-ep /opt/scripts/run-attack.sh list
 # run specific techniques (examples)
-docker compose exec mock-endpoint /opt/scripts/run-attack.sh T1110.001    # brute-force auth log spam
-docker compose exec mock-endpoint /opt/scripts/run-attack.sh T1059.SHELL # reverse-shell command traces
-docker compose exec mock-endpoint /opt/scripts/run-attack.sh MALWARE     # ransomware-like artifacts
+docker compose exec linux-ep /opt/scripts/run-attack.sh T1110.001    # brute-force auth log spam
+docker compose exec linux-ep /opt/scripts/run-attack.sh T1059.SHELL # reverse-shell command traces
+docker compose exec linux-ep /opt/scripts/run-attack.sh MALWARE     # ransomware-like artifacts
 ```
 
 How it triggers suspicious actions:
