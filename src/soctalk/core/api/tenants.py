@@ -429,7 +429,7 @@ async def resume_tenant(tenant_id: UUID, request: Request) -> TenantRead:
     response_model=TenantRead,
     status_code=202,
     dependencies=[
-        Depends(require_role(Role.PLATFORM_ADMIN))
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
     ],
 )
 async def decommission_tenant(

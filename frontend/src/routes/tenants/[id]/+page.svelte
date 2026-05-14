@@ -84,7 +84,7 @@
 				<h1 class="h2">{tenant.display_name}</h1>
 				<p class="text-sm opacity-70 font-mono">{tenant.slug}</p>
 			</div>
-			<span class="badge {tenantStateBadge(tenant.state)} text-base">{tenant.state}</span>
+			<span class="badge {tenantStateBadge(tenant.state)} text-base" data-testid="tenant-state" data-state={tenant.state}>{tenant.state}</span>
 		</div>
 
 		<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">

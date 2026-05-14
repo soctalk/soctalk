@@ -51,7 +51,13 @@ def _ensure_app_engine() -> AsyncEngine:
     global _APP_ENGINE, _APP_SM
     if _APP_ENGINE is None:
         url = _require("DATABASE_URL_APP")
-        _APP_ENGINE = create_async_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=5)
+        _APP_ENGINE = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=int(os.getenv("SOCTALK_DB_APP_POOL_SIZE", "25")),
+            max_overflow=int(os.getenv("SOCTALK_DB_APP_MAX_OVERFLOW", "15")),
+            pool_recycle=int(os.getenv("SOCTALK_DB_POOL_RECYCLE", "1800")),
+        )
         _APP_SM = async_sessionmaker(_APP_ENGINE, expire_on_commit=False)
     return _APP_ENGINE
 
@@ -60,7 +66,13 @@ def _ensure_mssp_engine() -> AsyncEngine:
     global _MSSP_ENGINE, _MSSP_SM
     if _MSSP_ENGINE is None:
         url = _require("DATABASE_URL_MSSP")
-        _MSSP_ENGINE = create_async_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=2)
+        _MSSP_ENGINE = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=int(os.getenv("SOCTALK_DB_MSSP_POOL_SIZE", "10")),
+            max_overflow=int(os.getenv("SOCTALK_DB_MSSP_MAX_OVERFLOW", "5")),
+            pool_recycle=int(os.getenv("SOCTALK_DB_POOL_RECYCLE", "1800")),
+        )
         _MSSP_SM = async_sessionmaker(_MSSP_ENGINE, expire_on_commit=False)
     return _MSSP_ENGINE
 
