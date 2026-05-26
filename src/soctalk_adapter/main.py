@@ -24,11 +24,27 @@ def _read_token() -> str:
     return path.read_text().strip()
 
 
+def _initial_alert_ts() -> str:
+    """Initial cursor for alert ingestion.
+
+    Defaults to epoch (full backfill). Set SOCTALK_INGEST_INITIAL_TS to
+    an ISO-8601 timestamp to start ingesting from a specific point, or
+    to the literal string ``"now"`` to skip backfill entirely (start
+    from the moment the adapter boots).
+    """
+    raw = os.environ.get("SOCTALK_INGEST_INITIAL_TS", "").strip()
+    if not raw:
+        return "1970-01-01T00:00:00.000Z"
+    if raw.lower() == "now":
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z"
+    return raw
+
+
 class _State:
     def __init__(self) -> None:
         self.last_heartbeat_ok: datetime | None = None
         self.last_heartbeat_error: str | None = None
-        self.last_alert_ts: str = "1970-01-01T00:00:00.000Z"
+        self.last_alert_ts: str = _initial_alert_ts()
         self.alerts_forwarded: int = 0
         self.last_ingest_error: str | None = None
 
