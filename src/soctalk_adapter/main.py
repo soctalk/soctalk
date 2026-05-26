@@ -165,17 +165,30 @@ def _min_severity() -> int:
 
 async def _query_alerts(client: httpx.AsyncClient, since_ts: str, limit: int) -> list[dict]:
     user, pw = _wazuh_indexer_creds()
+    filters: list[dict] = [
+        {"range": {"@timestamp": {"gt": since_ts}}},
+        {"range": {"rule.level": {"gte": _min_severity()}}},
+    ]
+    must_not: list[dict] = []
+    # By default the Wazuh manager pod's agent (id 000) flood-generates
+    # FIM/monitord self-alerts (rules 510/550/553/...) that aren't
+    # security signals. Default behaviour is to skip them; flip the
+    # env var to "0" to ingest manager-self alerts too.
+    if os.environ.get("SOCTALK_ADAPTER_EXCLUDE_MANAGER_AGENT", "1") in {"1", "true"}:
+        must_not.append({"term": {"agent.id": "000"}})
+    # Optional allowlist by agent.name prefix — when set, only agents
+    # whose name starts with the prefix are ingested. Useful to scope
+    # ingestion to docker-based endpoints like ``linux-ep-*``.
+    prefix = os.environ.get("SOCTALK_ADAPTER_AGENT_PREFIX")
+    if prefix:
+        filters.append({"prefix": {"agent.name": prefix}})
+    bool_query: dict = {"filter": filters}
+    if must_not:
+        bool_query["must_not"] = must_not
     body = {
         "size": limit,
         "sort": [{"@timestamp": {"order": "asc"}}],
-        "query": {
-            "bool": {
-                "filter": [
-                    {"range": {"@timestamp": {"gt": since_ts}}},
-                    {"range": {"rule.level": {"gte": _min_severity()}}},
-                ]
-            }
-        },
+        "query": {"bool": bool_query},
     }
     resp = await client.post(
         f"{_wazuh_indexer_url()}/wazuh-alerts-*/_search",
