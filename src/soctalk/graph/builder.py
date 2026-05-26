@@ -82,8 +82,12 @@ def route_from_verdict(state: dict[str, Any]) -> Literal[
         # Read verdict retry count (already incremented by verdict_node)
         verdict_retries = state.get("verdict_retry_count", 0)
 
-        # After 2 retries, force escalation to human review
-        if verdict_retries >= 2:
+        # After 1 retry, force escalation to human review. At depth >= 2 the
+        # supervisor's own max_iterations gate fires repeatedly and the graph
+        # spends its recursion budget bouncing supervisor→verdict without ever
+        # surfacing to a human. One retry is enough to know the AI alone
+        # cannot decide.
+        if verdict_retries >= 1:
             logger.warning(
                 "verdict_max_retries_reached",
                 retries=verdict_retries,

@@ -393,6 +393,29 @@ async def main() -> int:
     logger.info(
         "runs_worker_start version=%s api=%s", VERSION, _api_url()
     )
+
+    # Bind MCP clients so cortex_worker_node / misp_worker_node /
+    # thehive_worker_node have actual MCP clients to call during graph
+    # execution. Without this, enrichment is a no-op and the verdict
+    # LLM perpetually returns ``needs_more_info``. Bind is graceful —
+    # if individual MCP server connections fail (chart components not
+    # enabled), the worker logs and the graph node gets None and
+    # skips. See codex round-1 finding: "runs_worker does not bind MCP
+    # clients before graph execution".
+    mcp_bound = False
+    try:
+        from soctalk.mcp.bindings import bind_clients
+        from soctalk.settings_provider import (
+            create_mcp_configs,
+            load_integration_settings_from_env,
+        )
+        env_settings = load_integration_settings_from_env()
+        mcp_configs = create_mcp_configs(env_settings)
+        await bind_clients(mcp_configs)
+        mcp_bound = True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mcp_bind_failed err=%s", e)
+
     async with httpx.AsyncClient() as client:
         while not stop.is_set():
             try:
@@ -411,6 +434,12 @@ async def main() -> int:
             await _run_one(client, claim)
             if busy_sleep > 0:
                 await asyncio.sleep(busy_sleep)
+    if mcp_bound:
+        try:
+            from soctalk.mcp.bindings import unbind_clients
+            await unbind_clients()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("mcp_unbind_failed err=%s", e)
     logger.info("runs_worker_stop")
     return 0
 
