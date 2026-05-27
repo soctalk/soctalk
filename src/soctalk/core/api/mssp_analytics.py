@@ -155,8 +155,18 @@ async def trends(
                 closed_b AS (
                   SELECT date_trunc('{bucket}', c.closed_at) AS ts,
                          count(*)::int                                AS n,
+                         -- V1 schema: ``investigations.status`` is
+                         -- ``active`` or ``auto_closed_fp``; the
+                         -- "escalation" signal lives on
+                         -- ``pending_reviews.ai_decision='escalate'``.
+                         -- Prior code (status IN ('escalated','closed_tp'))
+                         -- always evaluated false and zeroed the rate.
                          count(*) FILTER (
-                           WHERE c.status IN ('escalated', 'closed_tp')
+                           WHERE EXISTS (
+                             SELECT 1 FROM pending_reviews pr
+                             WHERE pr.investigation_id = c.id
+                               AND pr.ai_decision = 'escalate'
+                           )
                          )::int                                       AS escalated,
                          percentile_cont(0.95) WITHIN GROUP (
                            ORDER BY extract(epoch FROM (c.closed_at - c.opened_at))
@@ -202,8 +212,14 @@ async def trends(
                      WHERE first_event_at >= :start AND first_event_at < :end)
                     AS alert_total,
                   count(*)::int AS closed_total,
+                  -- See bucketed query above for why this checks
+                  -- pending_reviews instead of investigations.status.
                   count(*) FILTER (
-                    WHERE c.status IN ('escalated', 'closed_tp')
+                    WHERE EXISTS (
+                      SELECT 1 FROM pending_reviews pr
+                      WHERE pr.investigation_id = c.id
+                        AND pr.ai_decision = 'escalate'
+                    )
                   )::int AS escalated_total,
                   percentile_cont(0.95) WITHIN GROUP (
                     ORDER BY extract(epoch FROM (c.closed_at - c.opened_at))
