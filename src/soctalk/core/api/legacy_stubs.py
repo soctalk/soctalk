@@ -96,13 +96,22 @@ async def events_stream(request: Request) -> StreamingResponse:
 class _PendingReviewItem(BaseModel):
     id: str
     investigation_id: str
+    status: str
     title: str
     description: str
     max_severity: str
     alert_count: int
+    malicious_count: int = 0
+    suspicious_count: int = 0
+    clean_count: int = 0
+    findings: list[str] = []
+    enrichments: dict[str, Any] = {}
+    misp_context: dict[str, Any] | None = None
     ai_decision: str | None = None
     ai_confidence: float | None = None
     ai_assessment: str | None = None
+    ai_recommendation: str | None = None
+    timeout_seconds: int = 3600
     created_at: str
     expires_at: str | None = None
 
@@ -144,9 +153,11 @@ async def review_pending(
             await s.execute(
                 text(
                     """
-                    SELECT id::text, investigation_id::text, title, description,
-                           max_severity, alert_count, ai_decision, ai_confidence,
-                           ai_assessment, created_at, expires_at
+                    SELECT id::text, investigation_id::text, status, title, description,
+                           max_severity, alert_count, malicious_count, suspicious_count,
+                           clean_count, findings, enrichments, misp_context, ai_decision,
+                           ai_confidence, ai_assessment, ai_recommendation,
+                           timeout_seconds, created_at, expires_at
                     FROM pending_reviews
                     WHERE status = 'pending'
                     ORDER BY created_at DESC
@@ -168,15 +179,24 @@ async def review_pending(
         _PendingReviewItem(
             id=r["id"],
             investigation_id=r["investigation_id"],
+            status=r["status"],
             title=r["title"],
             description=r["description"],
             max_severity=r["max_severity"],
             alert_count=int(r["alert_count"] or 0),
+            malicious_count=int(r["malicious_count"] or 0),
+            suspicious_count=int(r["suspicious_count"] or 0),
+            clean_count=int(r["clean_count"] or 0),
+            findings=list(r["findings"] or []),
+            enrichments=dict(r["enrichments"] or {}),
+            misp_context=(dict(r["misp_context"]) if r["misp_context"] else None),
             ai_decision=r["ai_decision"],
             ai_confidence=(
                 float(r["ai_confidence"]) if r["ai_confidence"] is not None else None
             ),
             ai_assessment=r["ai_assessment"],
+            ai_recommendation=r["ai_recommendation"],
+            timeout_seconds=int(r["timeout_seconds"] or 3600),
             created_at=_iso(r["created_at"]) or "",
             expires_at=_iso(r["expires_at"]),
         )
