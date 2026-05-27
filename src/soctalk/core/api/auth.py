@@ -266,7 +266,23 @@ async def logout(request: Request, response: Response) -> dict[str, bool]:
             user_id=UUID(identity["user_id"]),
             tenant_id=UUID(ct) if ct else None,
         )
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    # ``delete_cookie`` must match every attribute used by
+    # ``_set_session_cookie`` (path / secure / samesite / httponly)
+    # or some browsers — Safari and recent Chrome with strict
+    # SameSite/Secure matching — treat the Set-Cookie line as a
+    # *new* cookie and the original sticks around. Symptom: the
+    # next ``GET /api/auth/me`` returns the still-logged-in user,
+    # the login page sees ``session.user`` populated and
+    # ``goto('/')`` bounces the user straight back to the
+    # dashboard. Repro requires a real browser; headless Chromium
+    # in Playwright is lenient about this.
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path="/",
+        secure=_cookie_secure_default(),
+        httponly=True,
+        samesite="lax",
+    )
     return {"ok": True}
 
 
