@@ -39,6 +39,22 @@ spec:
               value: {{ .Values.simulator.attackDelay | quote }}
             - name: ATTACK_INTERVAL
               value: {{ .Values.simulator.attackInterval | quote }}
+            # Attack-simulator gate. Default off so a demo/customer
+            # install doesn't ship a built-in cost burner that hits
+            # the LLM continuously via cron. Flip to ``true`` for dev
+            # clusters where you want synthetic load.
+            - name: ATTACK_SIM_ENABLED
+              value: {{ .Values.simulator.enabled | default false | quote }}
+            # Sprig's ``default`` treats numeric ``0`` as empty, so the
+            # documented ``dailyAlertCap: 0`` (disable) path would
+            # silently render as ``30`` if we used ``default``. Use
+            # ``hasKey`` so an explicit zero round-trips.
+            - name: ATTACK_SIM_DAILY_ALERT_CAP
+              {{- if hasKey .Values.simulator "dailyAlertCap" }}
+              value: {{ .Values.simulator.dailyAlertCap | quote }}
+              {{- else }}
+              value: "30"
+              {{- end }}
             - name: WAZUH_REGISTRATION_PASSWORD
               valueFrom:
                 secretKeyRef:

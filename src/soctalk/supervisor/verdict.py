@@ -25,6 +25,35 @@ from soctalk.persistence.emitter import get_emitter_from_config, get_investigati
 
 logger = structlog.get_logger()
 
+
+def _classify_llm_error(e: BaseException) -> str:
+    """Bucket an LLM-provider exception into a stable category string.
+
+    Categories the worker actually branches on:
+      * ``insufficient_credit`` — provider billing / quota lack
+      * ``rate_limited``       — provider 429 / TPM RPM exceeded
+      * ``provider_error``     — other 4xx/5xx from the provider
+      * ``timeout``            — local/transport timeout
+      * ``unknown``            — fallback
+
+    The category goes to logs + state["verdict_error"]; the raw error
+    string is intentionally kept out of any user-facing field.
+    """
+    msg = str(e).lower()
+    status = getattr(e, "status_code", None) or getattr(
+        getattr(e, "response", None), "status_code", None
+    )
+    if "credit balance" in msg or "insufficient_quota" in msg or "billing" in msg:
+        return "insufficient_credit"
+    if status == 429 or "rate limit" in msg or "tokens per minute" in msg:
+        return "rate_limited"
+    if status and 400 <= int(status) < 600:
+        return "provider_error"
+    if "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    return "unknown"
+
+
 VERDICT_SYSTEM_PROMPT = """You are a Principal Security Analyst providing final verdict on a security investigation.
 
 Your role is to critically evaluate all evidence and make a final recommendation before human review.
@@ -163,28 +192,32 @@ async def verdict_node(
                 logger.warning("event_emission_failed", error=str(emit_error))
 
     except Exception as e:
-        logger.error("verdict_node_error", error=str(e))
-
-        # Create a default verdict on error
-        state["verdict"] = Verdict(
-            decision=VerdictDecision.NEEDS_MORE_INFO,
-            confidence=0.5,
-            threat_assessment="Unable to complete assessment due to error",
-            evidence_strength=EvidenceStrength.WEAK,
-            potential_impact=ImpactLevel.MEDIUM,
-            urgency=Urgency.ROUTINE,
-            key_evidence=[],
-            gaps_in_evidence=["Verdict assessment failed"],
-            assumptions_made=[],
-            alternative_explanations=[],
-            recommendation=f"Error during verdict: {str(e)}. Manual review required.",
-            additional_investigation_needed=["Manual review required due to system error"],
-            reasoning_model=app_config.llm.reasoning_model,
-        ).model_dump()
-
-        # Track retry count for error-induced NEEDS_MORE_INFO
+        # Classify so the worker can route LLM-provider failures
+        # (credit lack, rate limit, transient 5xx) to ``failed`` status
+        # rather than a fake escalated verdict — those errors carry the
+        # raw API response string which would otherwise become the
+        # user-facing HIL review description (real incident from
+        # 2026-05). Anthropic / OpenAI errors all hand us a
+        # ``status_code`` attribute via the langchain wrapper.
+        category = _classify_llm_error(e)
+        logger.error(
+            "verdict_node_error",
+            error=str(e)[:200],
+            category=category,
+        )
+        state["verdict_error"] = {
+            "category": category,
+            # Full string kept in state for operator debugging in logs
+            # only — the worker MUST NOT propagate this into any
+            # user-facing field (verdict_summary, pending_reviews.desc).
+            "message": str(e)[:500],
+        }
+        state["last_error"] = f"verdict_failed:{category}"
+        # Track retry so the supervisor's max_retries gate fires; the
+        # graph keeps running for transient categories but ``verdict``
+        # is NOT populated — the worker treats missing verdict as a
+        # failed run.
         state["verdict_retry_count"] = state.get("verdict_retry_count", 0) + 1
-        state["last_error"] = str(e)
 
     state["last_updated"] = datetime.now().isoformat()
     return state

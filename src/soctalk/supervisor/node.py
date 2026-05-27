@@ -53,19 +53,20 @@ async def supervisor_node(
 
     token_budget.ensure(state)
     if token_budget.over_budget(state):
+        cap_reason = token_budget.reason(state)
         logger.warning(
-            "token_budget_exceeded",
+            "case_run_budget_exceeded",
             tokens_used=state["tokens_used"],
             tokens_budget=state["tokens_budget"],
+            dollars_used=round(state["dollars_used"], 4),
+            dollars_budget=state["dollars_budget"],
+            reason=cap_reason,
         )
         state["supervisor_decision"] = SupervisorDecision(
             next_action="CLOSE",
-            action_reasoning=(
-                f"token_budget_exceeded: used={state['tokens_used']} "
-                f"budget={state['tokens_budget']}"
-            ),
+            action_reasoning=f"budget_exceeded: {cap_reason}",
             tp_confidence=0.0,
-            confidence_reasoning="case_run terminated by per-run token cap",
+            confidence_reasoning="case_run terminated by per-run cost cap",
             specific_instructions=None,
         ).model_dump()
         state["budget_terminated"] = True

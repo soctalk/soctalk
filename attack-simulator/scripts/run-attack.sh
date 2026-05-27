@@ -7,8 +7,48 @@
 
 LOG_FILE="/var/log/attack-simulator/attacks.log"
 ARTIFACTS_DIR="/tmp/attack-artifacts"
+DAILY_COUNTER_FILE="/var/log/attack-simulator/.daily-count"
+DAILY_COUNTER_LOCK="/var/log/attack-simulator/.daily-count.lock"
 
 mkdir -p "$(dirname "$LOG_FILE")" "$ARTIFACTS_DIR"
+
+# Endpoint-level daily alert ceiling. Every SOCTALK_ATTACK syslog line
+# the agent forwards becomes (at least) one Wazuh alert → one IR row →
+# at least one LLM call downstream. A noisy simulator on a per-LLM-call
+# bill is a credit-card incident waiting to happen. Cap defaults to 30
+# alerts/UTC-day per endpoint; override with ATTACK_SIM_DAILY_ALERT_CAP.
+# Set to ``0`` to disable.
+DAILY_ALERT_CAP="${ATTACK_SIM_DAILY_ALERT_CAP:-30}"
+
+# Reserve a slot in today's quota. Returns 0 if accepted (and writes
+# the new counter), 1 if today's cap is already reached.
+#
+# Atomic across the bootstrap and attack-loop background subshells via
+# ``flock``. The counter file format is one line: ``YYYY-MM-DD:N``.
+# Rolling to a new UTC day resets ``N`` to zero implicitly.
+_reserve_daily_slot() {
+    [[ "$DAILY_ALERT_CAP" == "0" ]] && return 0
+    local today current_date current_count
+    today="$(date -u +%Y-%m-%d)"
+    (
+        flock -x 9
+        current_date=""
+        current_count=0
+        if [[ -f "$DAILY_COUNTER_FILE" ]]; then
+            IFS=':' read -r current_date current_count < "$DAILY_COUNTER_FILE" 2>/dev/null || true
+        fi
+        if [[ "$current_date" != "$today" ]]; then
+            current_date="$today"
+            current_count=0
+        fi
+        if (( current_count >= DAILY_ALERT_CAP )); then
+            exit 1
+        fi
+        current_count=$((current_count + 1))
+        printf '%s:%d\n' "$current_date" "$current_count" > "$DAILY_COUNTER_FILE"
+        exit 0
+    ) 9>"$DAILY_COUNTER_LOCK"
+}
 
 # Emit one syslog-formatted line per TTP execution. Wazuh's stock
 # syslog decoder ignores the bracketed-timestamp format used by ``log``,
@@ -21,6 +61,12 @@ mkdir -p "$(dirname "$LOG_FILE")" "$ARTIFACTS_DIR"
 emit_alert() {
     local ttp="$1"
     local desc="$2"
+    if ! _reserve_daily_slot; then
+        printf '[%s] daily_alert_cap_reached cap=%d — skipping SOCTALK_ATTACK %s\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "$DAILY_ALERT_CAP" "$ttp" \
+            >> "$LOG_FILE"
+        return 0
+    fi
     local stamp
     stamp="$(date '+%b %e %H:%M:%S')"
     printf '%s %s soctalk-attack: SOCTALK_ATTACK %s: %s\n' \
@@ -38,6 +84,12 @@ emit_tp_alert() {
     local srcip="${3:-185.220.101.42}"
     local sha256="${4:-44d88612fea8a8f36de82e1278abb02f59554b39c3da40d9ce25d2a4b3f0a5e3}"
     local asset="${5:-DOMAIN-CONTROLLER-01}"
+    if ! _reserve_daily_slot; then
+        printf '[%s] daily_alert_cap_reached cap=%d — skipping SOCTALK_ATTACK_TP %s\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "$DAILY_ALERT_CAP" "$ttp" \
+            >> "$LOG_FILE"
+        return 0
+    fi
     local stamp
     stamp="$(date '+%b %e %H:%M:%S')"
     printf '%s %s soctalk-attack: SOCTALK_ATTACK_TP %s on %s: %s srcip=%s sha256=%s\n' \
@@ -451,9 +503,34 @@ declare -A ATTACKS=(
     ["T1110.001"]="attack_t1110_001"
 )
 
+# Lightweight check that does NOT decrement the counter — used by
+# ``run_attack`` to refuse executing the technique body once the daily
+# cap is reached. The actual reservation still happens in ``emit_alert``
+# / ``emit_tp_alert`` so concurrent attack-loop subshells can't
+# race past the cap. Returns 0 = under cap, 1 = at cap.
+_daily_cap_remaining() {
+    [[ "$DAILY_ALERT_CAP" == "0" ]] && return 0
+    local today current_date current_count
+    today="$(date -u +%Y-%m-%d)"
+    if [[ -f "$DAILY_COUNTER_FILE" ]]; then
+        IFS=':' read -r current_date current_count < "$DAILY_COUNTER_FILE" 2>/dev/null || true
+    fi
+    [[ "$current_date" != "$today" ]] && return 0
+    (( current_count < DAILY_ALERT_CAP ))
+}
+
 run_attack() {
     local technique="$1"
     local func="${ATTACKS[$technique]}"
+
+    # Stop at the cap *before* running the technique body. Several
+    # TTPs call ``logger`` or modify FIM-monitored paths in addition to
+    # ``emit_alert``, so suppressing only the marker leaves a tail of
+    # secondary Wazuh alerts that still spawn LLM-billed investigations.
+    if ! _daily_cap_remaining; then
+        log "daily_alert_cap_reached cap=${DAILY_ALERT_CAP} — skipping ${technique}"
+        return 0
+    fi
 
     if [[ -n "$func" ]]; then
         log "=== Executing $technique ==="

@@ -31,8 +31,18 @@ wazuh:
 # Simulator runtime knobs (passed through as container env vars
 # matching the original attack-simulator docker-compose service).
 simulator:
+  # Off by default — running the simulator on a customer-facing or
+  # demo cluster generates real LLM spend with no business value. Set
+  # to true only on dev/iteration clusters where you want synthetic
+  # alert load.
+  enabled: false
   attackDelay: 10           # seconds after agent enroll before the first TTP
   attackInterval: 120       # seconds between subsequent TTPs
+  # Per-endpoint cap on SOCTALK_ATTACK emissions per UTC day. Every
+  # emission becomes a Wazuh alert → an investigation → at least one
+  # LLM call, so this is the load-bearing cost ceiling at the source.
+  # 0 disables the cap (not recommended on shared clusters).
+  dailyAlertCap: 30
 
 resources:
   requests:

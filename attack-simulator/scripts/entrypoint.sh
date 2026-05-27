@@ -138,14 +138,22 @@ main() {
     # Start rsyslog for logger commands
     service rsyslog start 2>/dev/null || rsyslogd 2>/dev/null || true
 
-    # Start cron
-    service cron start 2>/dev/null || cron || true
-
-    # Run bootstrap attacks in background
-    run_bootstrap &
-
-    # Start continuous loop in background
-    attack_loop &
+    # Attack simulator is gated behind ``ATTACK_SIM_ENABLED``. Set to
+    # ``true`` for dev / iteration clusters where you *want* continuous
+    # synthetic load. Leave unset (or any other value) on customer-facing
+    # or demo clusters — running this on a live LLM-billed install
+    # generates real spend with no business value.
+    if [[ "${ATTACK_SIM_ENABLED:-false}" == "true" ]]; then
+        log "ATTACK_SIM_ENABLED=true — starting cron + bootstrap + loop"
+        service cron start 2>/dev/null || cron || true
+        run_bootstrap &
+        attack_loop &
+    else
+        log "ATTACK_SIM_ENABLED!=true — simulator off (cron not started)"
+        # Hard-disable the baked-in cron file so a stray `service cron
+        # start` from a shell session can't reactivate the schedule.
+        rm -f /etc/cron.d/attack-simulator
+    fi
 
     log "=== Mock Endpoint Ready ==="
     log "Alerts flowing to Wazuh -> SocTalk"

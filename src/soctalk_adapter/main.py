@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,10 +47,48 @@ class _State:
         self.last_heartbeat_error: str | None = None
         self.last_alert_ts: str = _initial_alert_ts()
         self.alerts_forwarded: int = 0
+        self.alerts_dropped_rate_limit: int = 0
         self.last_ingest_error: str | None = None
 
 
 _state = _State()
+
+
+class _TokenBucket:
+    """Cooperative rate-limiter for per-tenant alert ingestion.
+
+    The adapter is single-tenant (one process per tenant), so a process-
+    local token bucket is the per-tenant cap by construction. ``rate``
+    is alerts/sec, ``burst`` is the bucket size. Excess alerts are
+    dropped (and counted on ``_state.alerts_dropped_rate_limit``) rather
+    than queued — better to lose a tail of a flood than to lag forever.
+    """
+
+    def __init__(self, rate_per_sec: float, burst: int) -> None:
+        self.rate = max(rate_per_sec, 0.0)
+        self.burst = max(burst, 1)
+        self.tokens = float(self.burst)
+        self.last = time.monotonic()
+
+    def take(self, n: int) -> tuple[int, int]:
+        """Take up to ``n`` tokens. Returns (allowed, dropped)."""
+        if self.rate <= 0:
+            return n, 0  # rate-limiter disabled
+        now = time.monotonic()
+        self.tokens = min(self.burst, self.tokens + (now - self.last) * self.rate)
+        self.last = now
+        allowed = min(n, int(self.tokens))
+        self.tokens -= allowed
+        return allowed, n - allowed
+
+
+def _make_rate_limiter() -> _TokenBucket:
+    per_min = float(os.environ.get("SOCTALK_ADAPTER_RATE_LIMIT_PER_MIN", "60"))
+    burst = int(os.environ.get("SOCTALK_ADAPTER_RATE_LIMIT_BURST", "30"))
+    return _TokenBucket(rate_per_sec=per_min / 60.0, burst=burst)
+
+
+_rate_limiter = _make_rate_limiter()
 
 
 def _wazuh_indexer_url() -> str:
@@ -312,6 +351,29 @@ async def _ingest_loop() -> None:
                         if ev["ts"] and ev["ts"] > new_high:
                             new_high = ev["ts"]
                         events.append(ev)
+                    # Per-tenant rate limit — drop the tail past the
+                    # bucket capacity. The high-water cursor (new_high)
+                    # still advances past the dropped events so we don't
+                    # replay them next tick; the goal here is to refuse
+                    # work, not to defer it.
+                    if events:
+                        allowed, dropped = _rate_limiter.take(len(events))
+                        if dropped > 0:
+                            _state.alerts_dropped_rate_limit += dropped
+                            logger.warning(
+                                "rate_limited dropped=%d total_dropped=%d batch=%d",
+                                dropped,
+                                _state.alerts_dropped_rate_limit,
+                                len(events),
+                            )
+                        events = events[:allowed]
+                        # If the rate-limiter dropped the entire batch
+                        # the POST below is skipped, but the cursor
+                        # still needs to advance — otherwise next tick
+                        # re-fetches and re-drops the same hits forever
+                        # while newer alerts queue behind them.
+                        if allowed == 0 and new_high > _state.last_alert_ts:
+                            _state.last_alert_ts = new_high
                     if events:
                         resp = await api_client.post(
                             f"{api_url}/api/internal/adapter/events",
@@ -369,6 +431,7 @@ async def ready() -> dict:
         else None,
         "last_heartbeat_error": _state.last_heartbeat_error,
         "alerts_forwarded": _state.alerts_forwarded,
+        "alerts_dropped_rate_limit": _state.alerts_dropped_rate_limit,
         "last_alert_ts": _state.last_alert_ts,
         "last_ingest_error": _state.last_ingest_error,
     }

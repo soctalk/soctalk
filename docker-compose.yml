@@ -83,6 +83,13 @@ services:
       WAZUH_AGENT_NAME: ""
       ATTACK_DELAY: 10
       ATTACK_INTERVAL: 300
+      # The testing profile *wants* synthetic alert load — explicitly
+      # opt in to the simulator. Cluster (Helm) installs default to
+      # off via the linux-ep chart values; this is the dev path.
+      ATTACK_SIM_ENABLED: "true"
+      # Even on dev: cap alerts so an overnight `docker compose up`
+      # doesn't quietly burn the Anthropic credit balance.
+      ATTACK_SIM_DAILY_ALERT_CAP: "30"
     env_file:
       - .env
     volumes:

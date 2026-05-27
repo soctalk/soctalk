@@ -96,6 +96,9 @@ services:
       WAZUH_AGENT_NAME: mock-endpoint-01
       ATTACK_DELAY: 10
       ATTACK_INTERVAL: 300
+      # Compose testing profile opts in; cluster installs default off.
+      ATTACK_SIM_ENABLED: "true"
+      ATTACK_SIM_DAILY_ALERT_CAP: "30"
     env_file:
       - .env
     volumes:

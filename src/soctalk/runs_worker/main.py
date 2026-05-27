@@ -339,7 +339,45 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         "pending_observables": pending,
         "tokens_used": int(claim["tokens_used"]),
         "tokens_budget": int(claim["tokens_budget"]),
+        "dollars_used": float(claim.get("dollars_used") or 0.0),
+        # Per-run dollar budget precedence (highest to lowest):
+        #   1. ``SOCTALK_CASE_RUN_DOLLAR_BUDGET`` env var, **if positive**
+        #      — operator override for the whole worker; useful for
+        #      tightening the cap below the DB policy default. A
+        #      non-positive value is treated as "ignore" rather than
+        #      "no budget" so an operator typo like ``=0`` or ``=-1``
+        #      doesn't halt every claimed run before any work is done.
+        #   2. Claim payload ``dollars_budget`` (if positive) — the DB
+        #      row, which typically reflects the per-investigation
+        #      policy.
+        #   3. Unset → ``token_budget.ensure`` falls back to $5.
+        **_dollars_budget_kv(claim.get("dollars_budget")),
     }
+
+
+def _dollars_budget_kv(claim_dollars_budget: Any) -> dict[str, float]:
+    """Resolve the dollar-budget seed for graph state.
+
+    Returns ``{"dollars_budget": value}`` or ``{}`` (let
+    ``token_budget.ensure`` pick the default). Centralised so the
+    precedence rules + non-positive override guard live in one place.
+    """
+    env_raw = os.environ.get("SOCTALK_CASE_RUN_DOLLAR_BUDGET")
+    if env_raw:
+        try:
+            env_v = float(env_raw)
+        except ValueError:
+            env_v = 0.0
+        if env_v > 0:
+            return {"dollars_budget": env_v}
+        # Fall through to claim/default — see comment above.
+    try:
+        claim_v = float(claim_dollars_budget) if claim_dollars_budget is not None else 0.0
+    except (TypeError, ValueError):
+        claim_v = 0.0
+    if claim_v > 0:
+        return {"dollars_budget": claim_v}
+    return {}
 
 
 async def _heartbeat_loop(
@@ -365,6 +403,7 @@ async def _heartbeat_loop(
                 json={
                     "lease_id": lease_id,
                     "tokens_used": int(state.get("tokens_used", 0)),
+                    "dollars_used": float(state.get("dollars_used", 0.0)),
                 },
                 timeout=10.0,
             )
@@ -399,16 +438,33 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         await hb
 
     used = int(final.get("tokens_used", state.get("tokens_used", 0)))
+    dollars_used = float(final.get("dollars_used", state.get("dollars_used", 0.0)))
     halted = bool(final.get("budget_terminated"))
+    verdict_err = final.get("verdict_error") or {}
+    verdict_err_category = verdict_err.get("category") if isinstance(verdict_err, dict) else None
     if last_error:
         status = "failed"
     elif halted:
         status = "halted_budget"
+    elif verdict_err_category:
+        # LLM provider failed mid-run — credit lack, rate limit, etc.
+        # Mark the run failed so the API skips pending_reviews creation;
+        # without this the verdict's empty/error state would be coerced
+        # into a fake escalation and the raw provider error message
+        # would leak into the user-facing review description.
+        status = "failed"
+        last_error = f"verdict_failed:{verdict_err_category}"
     else:
         status = "completed"
 
-    disposition = _disposition_from_final(final, status)
-    verdict_summary = _verdict_summary(final)
+    # Failed runs MUST NOT carry a disposition or verdict summary —
+    # those fields drive HIL row creation downstream.
+    if status == "failed":
+        disposition = None
+        verdict_summary = None
+    else:
+        disposition = _disposition_from_final(final, status)
+        verdict_summary = _verdict_summary(final)
     logger.info(
         "disposition_decided run=%s status=%s disposition=%s "
         "verdict_decision=%r supervisor_action=%r supervisor_conf=%r",
@@ -427,6 +483,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
             "lease_id": lease_id,
             "status": status,
             "tokens_used": used,
+            "dollars_used": dollars_used,
             "last_error": last_error,
             "disposition": disposition,
             "verdict_summary": verdict_summary,

@@ -72,6 +72,19 @@ def route_from_verdict(state: dict[str, Any]) -> Literal[
     verdict = state.get("verdict", {})
     decision = verdict.get("decision", VerdictDecision.NEEDS_MORE_INFO.value)
 
+    # Provider failure (credit lack, rate limit, etc.) short-circuits
+    # the route entirely — close the investigation instead of waking a
+    # human reviewer on what is fundamentally an infrastructure
+    # problem. The runs worker re-reads ``verdict_error`` and reports
+    # the run as ``failed`` so no HIL row is created downstream.
+    if state.get("verdict_error"):
+        logger.warning(
+            "routing_from_verdict_provider_error",
+            category=(state.get("verdict_error") or {}).get("category"),
+            decision="forcing_close_no_hil",
+        )
+        return "close_investigation"
+
     logger.debug("routing_from_verdict", decision=decision)
 
     if decision == VerdictDecision.ESCALATE.value:
