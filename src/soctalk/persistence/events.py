@@ -36,6 +36,7 @@ class EventType(str, Enum):
     # Human-in-the-loop
     HUMAN_REVIEW_REQUESTED = "human.review_requested"
     HUMAN_DECISION_RECEIVED = "human.decision_received"
+    HUMAN_REVIEW_EXPIRED = "human.review_expired"
 
     # TheHive integration
     THEHIVE_CASE_CREATED = "thehive.case_created"

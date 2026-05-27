@@ -88,6 +88,9 @@ spec:
           volumeMounts:
             - name: ossec-data
               mountPath: /var/ossec/data
+            - name: local-rules
+              mountPath: /var/ossec/etc/rules/local_rules.xml
+              subPath: local_rules.xml
           readinessProbe:
             tcpSocket:
               port: 1514
@@ -98,6 +101,13 @@ spec:
               port: 1514
             initialDelaySeconds: 120
             periodSeconds: 30
+      volumes:
+        - name: local-rules
+          configMap:
+            name: {{ include "wazuh.fullname" . }}-manager-local-rules
+            items:
+              - key: local_rules.xml
+                path: local_rules.xml
   volumeClaimTemplates:
     - metadata:
         name: ossec-data

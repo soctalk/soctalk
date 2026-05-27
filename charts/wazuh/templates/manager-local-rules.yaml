@@ -1,0 +1,157 @@
+{{/*
+SocTalk attack-simulator rules.
+
+The endpoints ship a simulator at /opt/scripts/run-attack.sh that emits
+"SOCTALK_ATTACK <TTP_ID>: <desc>" lines to /var/log/attack-simulator/syslog.log.
+The agent tails that path, but the manager needs matching rules to alert on it.
+
+Design:
+  - Rule 100200 is the base CHAIN ROOT. It matches any SOCTALK_ATTACK line at
+    level 0 with <noalert>, so it never emits an alert on its own — it only
+    enables child rules to chain off it via <if_sid>.
+  - Per-TTP rules (100210-100217, 100220-100225) match specific TTP tokens and
+    emit at level 12 (high-sev TTPs) or 13 (critical-sev TTPs).
+  - Rule 100299 is the catch-all for SOCTALK_ATTACK lines that don't match any
+    specific TTP rule. It emits at level 6 so discovery/recon techniques surface
+    in the alert stream but don't auto-escalate to HIL.
+
+  This avoids the prior behaviour where every TTP fired the level-12 base rule,
+  producing the generic "MITRE ATT&CK technique executed" title in HIL.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wazuh.fullname" . }}-manager-local-rules
+  labels:
+    {{- include "wazuh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: manager
+data:
+  local_rules.xml: |
+    <group name="local,syslog,sshd,">
+
+      <rule id="100001" level="5">
+        <if_sid>5716</if_sid>
+        <srcip>1.1.1.1</srcip>
+        <description>sshd: authentication failed from IP 1.1.1.1.</description>
+        <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+      </rule>
+
+    </group>
+
+    <group name="soctalk,attack_simulator,mitre,">
+
+      <!-- Chain root: matches every SOCTALK_ATTACK line, but emits nothing.
+           Specific TTP rules chain off this. -->
+      <rule id="100200" level="0">
+        <if_sid>1002</if_sid>
+        <match>SOCTALK_ATTACK</match>
+        <description>SocTalk attack-simulator chain root (no alert).</description>
+        <options>no_log</options>
+      </rule>
+
+      <!-- High-confidence TP variant with srcip + sha256 IOCs in the line. -->
+      <rule id="100201" level="13">
+        <if_sid>100200</if_sid>
+        <match>SOCTALK_ATTACK_TP</match>
+        <description>Attack simulator: high-confidence TP with IOCs.</description>
+        <group>mitre,attack_simulator,tp,</group>
+      </rule>
+
+      <!-- Per-TTP rules: each matches a distinct MITRE technique token. -->
+      <rule id="100210" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1110</match>
+        <description>MITRE T1110 brute force technique simulated.</description>
+        <group>mitre,brute_force,T1110,</group>
+      </rule>
+      <rule id="100211" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1098</match>
+        <description>MITRE T1098 account manipulation simulated.</description>
+        <group>mitre,privilege_escalation,T1098,</group>
+      </rule>
+      <rule id="100212" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1547</match>
+        <description>MITRE T1547 boot/logon autostart persistence simulated.</description>
+        <group>mitre,persistence,T1547,</group>
+      </rule>
+      <rule id="100213" level="13">
+        <if_sid>100200</if_sid>
+        <match>T1014</match>
+        <description>MITRE T1014 rootkit behaviour simulated.</description>
+        <group>mitre,defense_evasion,T1014,</group>
+      </rule>
+      <rule id="100214" level="13">
+        <if_sid>100200</if_sid>
+        <match>T1055</match>
+        <description>MITRE T1055 process injection attempt simulated.</description>
+        <group>mitre,defense_evasion,T1055,</group>
+      </rule>
+      <rule id="100215" level="13">
+        <if_sid>100200</if_sid>
+        <match>T1071.001</match>
+        <description>MITRE T1071.001 web shell indicators simulated.</description>
+        <group>mitre,command_and_control,T1071,</group>
+      </rule>
+      <rule id="100216" level="13">
+        <if_sid>100200</if_sid>
+        <match>MALWARE</match>
+        <description>Ransomware-style behaviour simulated.</description>
+        <group>mitre,impact,malware,</group>
+      </rule>
+      <rule id="100217" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1027</match>
+        <description>MITRE T1027 obfuscated command execution (base64 decode + run).</description>
+        <group>mitre,defense_evasion,T1027,</group>
+      </rule>
+
+      <!-- High-sev TTPs that previously fell through to the generic chain root. -->
+      <rule id="100220" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1053.003</match>
+        <description>MITRE T1053.003 scheduled task / cron job simulated.</description>
+        <group>mitre,persistence,T1053,</group>
+      </rule>
+      <rule id="100221" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1548.003</match>
+        <description>MITRE T1548.003 sudo abuse simulated.</description>
+        <group>mitre,privilege_escalation,T1548,</group>
+      </rule>
+      <rule id="100222" level="13">
+        <if_sid>100200</if_sid>
+        <match>T1059.SHELL</match>
+        <description>MITRE T1059.004 reverse shell pattern simulated.</description>
+        <group>mitre,execution,T1059,reverse_shell,</group>
+      </rule>
+      <rule id="100223" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1105</match>
+        <description>MITRE T1105 ingress tool transfer simulated.</description>
+        <group>mitre,command_and_control,T1105,</group>
+      </rule>
+      <rule id="100224" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1046</match>
+        <description>MITRE T1046 network service discovery simulated.</description>
+        <group>mitre,discovery,T1046,</group>
+      </rule>
+      <rule id="100225" level="12">
+        <if_sid>100200</if_sid>
+        <match>T1560.001</match>
+        <description>MITRE T1560.001 data archive (exfil staging) simulated.</description>
+        <group>mitre,collection,T1560,</group>
+      </rule>
+
+      <!-- Catch-all for SOCTALK_ATTACK lines without a specific TTP rule
+           (discovery / recon TTPs). Surfaces in the alert stream but at
+           level 6 so it does not auto-escalate to HIL. -->
+      <rule id="100299" level="6">
+        <if_sid>100200</if_sid>
+        <description>Attack simulator: low-severity technique (discovery / recon).</description>
+        <group>mitre,attack_simulator,discovery,</group>
+      </rule>
+
+    </group>

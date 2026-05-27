@@ -266,3 +266,49 @@ async def record_human_decision_received(
             sql += " AND tenant_id = :t"
             params["t"] = str(tenant_id)
         await session.execute(text(sql), params)
+
+
+async def record_human_review_expired(
+    session: AsyncSession,
+    *,
+    review_id: UUID,
+    investigation_id: UUID,
+    tenant_id: UUID,
+    reason: str | None,
+    reviewer: str | None,
+) -> None:
+    """Persist a HIL review expiration: append the event + flip the queue row.
+
+    Used for administrative cleanup (operator pruning stale reviews from the
+    queue) and for the future timeout-driven path. Different from
+    ``HUMAN_DECISION_RECEIVED`` because no analyst made a decision — the row
+    was retired without a verdict.
+    """
+    await _append_event_v1(
+        session,
+        aggregate_id=investigation_id,
+        tenant_id=tenant_id,
+        event_type=EventType.HUMAN_REVIEW_EXPIRED,
+        data={
+            "reason": reason,
+            "reviewer": reviewer,
+        },
+    )
+    await session.execute(
+        text(
+            """
+            UPDATE pending_reviews
+               SET status = 'expired',
+                   feedback = COALESCE(:reason, feedback),
+                   reviewer = COALESCE(:reviewer, reviewer),
+                   responded_at = COALESCE(responded_at, now())
+             WHERE id = :rid AND tenant_id = :t
+            """
+        ),
+        {
+            "reason": reason,
+            "reviewer": reviewer,
+            "rid": str(review_id),
+            "t": str(tenant_id),
+        },
+    )

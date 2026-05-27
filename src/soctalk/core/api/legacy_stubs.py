@@ -409,6 +409,80 @@ async def review_request_info(
     )
 
 
+class _ExpireBody(BaseModel):
+    reason: str | None = None
+
+
+@router.post("/api/review/{review_id}/expire", response_model=_ReviewActionResponse)
+async def review_expire(
+    review_id: str, body: _ExpireBody, request: Request
+) -> _ReviewActionResponse:
+    """Retire a pending review without an analyst verdict.
+
+    Used for operator-driven cleanup (stale or duplicate queue items) and
+    for the future timeout-driven expiration job. Distinct from
+    approve/reject/request-info: emits ``HUMAN_REVIEW_EXPIRED`` rather
+    than ``HUMAN_DECISION_RECEIVED``, so the audit trail shows the row
+    was retired administratively, not adjudicated.
+
+    Authorization: MSSP-level roles (platform_admin, mssp_admin) can
+    expire any tenant's review. Tenant-scoped roles can only expire
+    their own; ``_resolve_pending_review`` enforces both via the same
+    role-aware session pattern used by the other actions.
+    """
+    from uuid import UUID
+
+    from fastapi import HTTPException
+
+    from soctalk.core.ir.review_events import record_human_review_expired
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import (
+        get_app_sessionmaker,
+        get_mssp_sessionmaker,
+    )
+
+    identity = current_identity(request)
+    review = await _resolve_pending_review(review_id, identity)
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
+
+    tenant_uuid = UUID(review["tenant_id"]) if review["tenant_id"] else None
+    if tenant_uuid is None:
+        raise HTTPException(500, "review missing tenant_id")
+
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            await record_human_review_expired(
+                s,
+                review_id=UUID(review_id),
+                investigation_id=UUID(review["investigation_id"]),
+                tenant_id=tenant_uuid,
+                reason=body.reason,
+                reviewer=identity.email,
+            )
+            await s.commit()
+    else:
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                await record_human_review_expired(
+                    s,
+                    review_id=UUID(review_id),
+                    investigation_id=UUID(review["investigation_id"]),
+                    tenant_id=tenant_uuid,
+                    reason=body.reason,
+                    reviewer=identity.email,
+                )
+                await s.commit()
+    return _ReviewActionResponse(
+        success=True,
+        review_id=review_id,
+        new_status="expired",
+        investigation_id=review["investigation_id"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # /api/analytics/* — empty defaults
 # ---------------------------------------------------------------------------
