@@ -588,11 +588,17 @@ async def _ai_behavior(session, days: int) -> dict[str, Any]:
             p,
         )
     ).all()
+    # Frontend ApexCharts config reads ``range_label`` on each bucket
+    # (analytics/+page.svelte#L73). Keep the key name aligned.
     confidence_distribution = [
-        {"bucket": f"{(r[0] - 1) / 10:.1f}-{r[0] / 10:.1f}", "count": int(r[1])}
+        {"range_label": f"{(r[0] - 1) / 10:.1f}-{r[0] / 10:.1f}", "count": int(r[1])}
         for r in rows
     ]
-    # Daily decision trend.
+    # Daily decision trend — frontend expects per-day rows with
+    # decision counts pivoted into columns (close/escalate/needs_more_info/
+    # suspicious), one chart series per column. The long-form
+    # (day, decision, count) was rejected at render time because the
+    # chart map() reads ``t.close`` etc. directly.
     daily = (
         await session.execute(
             _t(
@@ -610,15 +616,26 @@ async def _ai_behavior(session, days: int) -> dict[str, Any]:
             p,
         )
     ).all()
-    decision_trends = [
-        {
-            "day": (r[0].isoformat() if r[0] else None),
-            "decision": r[1],
-            "count": int(r[2]),
-        }
-        for r in daily
-    ]
+    trends_by_day: dict[str, dict[str, Any]] = {}
+    for day, decision, n in daily:
+        key = day.isoformat() if day else "unknown"
+        bucket = trends_by_day.setdefault(
+            key,
+            {
+                "day": key,
+                "close": 0,
+                "escalate": 0,
+                "needs_more_info": 0,
+                "suspicious": 0,
+            },
+        )
+        col = (decision or "").replace("-", "_")
+        if col in bucket:
+            bucket[col] = int(n)
+    decision_trends = [trends_by_day[k] for k in sorted(trends_by_day.keys())]
     # Escalation breakdown — top severity buckets for escalated reviews.
+    # Frontend reads ``reason`` (string, used for color-coding by
+    # severity name) and ``percentage`` (0-1).
     breakdown = (
         await session.execute(
             _t(
@@ -634,8 +651,16 @@ async def _ai_behavior(session, days: int) -> dict[str, Any]:
             p,
         )
     ).all()
+    breakdown_total = sum(int(r[1]) for r in breakdown) or 1
     escalation_breakdown = [
-        {"severity": r[0], "count": int(r[1])} for r in breakdown
+        {
+            # Title-case so the frontend's substring checks
+            # (``includes('Critical')`` etc.) for colour mapping hit.
+            "reason": (r[0] or "Unknown").title(),
+            "count": int(r[1]),
+            "percentage": int(r[1]) / breakdown_total,
+        }
+        for r in breakdown
     ]
     avg_by = (
         await session.execute(
