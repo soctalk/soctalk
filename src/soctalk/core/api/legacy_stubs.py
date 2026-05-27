@@ -191,6 +191,146 @@ async def review_pending(
     )
 
 
+class _ReviewActionResponse(BaseModel):
+    success: bool = True
+    review_id: str
+    new_status: str
+    investigation_id: str
+
+
+async def _resolve_pending_review(review_id: str) -> dict[str, Any] | None:
+    from sqlalchemy import text
+
+    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+    sm = get_mssp_sessionmaker()
+    async with sm() as s:
+        r = (
+            await s.execute(
+                text(
+                    "SELECT id::text, investigation_id::text, tenant_id::text, status "
+                    "FROM pending_reviews WHERE id = :rid"
+                ),
+                {"rid": review_id},
+            )
+        ).mappings().first()
+        return dict(r) if r else None
+
+
+async def _close_review_and_apply(
+    review_id: str,
+    new_review_status: str,
+    inv_action: str,
+    feedback: str | None,
+    reviewer: str | None,
+) -> _ReviewActionResponse:
+    """Common path for approve/reject/request-info.
+
+    inv_action is one of:
+      - ``"escalate"``: investigation stays active, severity already at 12
+      - ``"close"``: investigation closes as auto-rejected FP
+      - ``"hold"``: investigation stays active, no change
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+
+    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+    review = await _resolve_pending_review(review_id)
+    if review is None:
+        raise HTTPException(404, "review not found")
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
+
+    sm = get_mssp_sessionmaker()
+    async with sm() as s:
+        await s.execute(
+            text(
+                """
+                UPDATE pending_reviews
+                   SET status = :new_status,
+                       feedback = :feedback,
+                       reviewer = :reviewer,
+                       responded_at = now()
+                 WHERE id = :rid
+                """
+            ),
+            {
+                "new_status": new_review_status,
+                "feedback": feedback,
+                "reviewer": reviewer,
+                "rid": review_id,
+            },
+        )
+        if inv_action == "close":
+            await s.execute(
+                text(
+                    """
+                    UPDATE investigations
+                       SET status = 'auto_closed_fp',
+                           closed_at = now(),
+                           close_reason = COALESCE(:reason, close_reason),
+                           updated_at = now()
+                     WHERE id = :inv
+                    """
+                ),
+                {"reason": feedback, "inv": review["investigation_id"]},
+            )
+        await s.commit()
+
+    return _ReviewActionResponse(
+        success=True,
+        review_id=review_id,
+        new_status=new_review_status,
+        investigation_id=review["investigation_id"],
+    )
+
+
+class _ApproveBody(BaseModel):
+    feedback: str | None = None
+
+
+@router.post("/api/review/{review_id}/approve", response_model=_ReviewActionResponse)
+async def review_approve(
+    review_id: str, body: _ApproveBody, request: Request
+) -> _ReviewActionResponse:
+    """Analyst approved the AI verdict — investigation stays escalated."""
+    ident = current_identity(request)
+    reviewer = ident.get("email") if ident else None
+    return await _close_review_and_apply(
+        review_id, "approved", "escalate", body.feedback, reviewer
+    )
+
+
+@router.post("/api/review/{review_id}/reject", response_model=_ReviewActionResponse)
+async def review_reject(
+    review_id: str, body: _ApproveBody, request: Request
+) -> _ReviewActionResponse:
+    """Analyst overrode the AI verdict — close as false positive."""
+    ident = current_identity(request)
+    reviewer = ident.get("email") if ident else None
+    return await _close_review_and_apply(
+        review_id, "rejected", "close", body.feedback, reviewer
+    )
+
+
+class _RequestInfoBody(BaseModel):
+    questions: list[str] = []
+
+
+@router.post("/api/review/{review_id}/request-info", response_model=_ReviewActionResponse)
+async def review_request_info(
+    review_id: str, body: _RequestInfoBody, request: Request
+) -> _ReviewActionResponse:
+    """Analyst requested additional information — investigation stays open."""
+    ident = current_identity(request)
+    reviewer = ident.get("email") if ident else None
+    feedback = "Questions: " + " | ".join(body.questions) if body.questions else None
+    return await _close_review_and_apply(
+        review_id, "info_requested", "hold", feedback, reviewer
+    )
+
+
 # ---------------------------------------------------------------------------
 # /api/analytics/* — empty defaults
 # ---------------------------------------------------------------------------
