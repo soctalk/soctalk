@@ -126,47 +126,63 @@ class _PendingReviewList(BaseModel):
 
 @router.get("/api/review/pending", response_model=_PendingReviewList)
 async def review_pending(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> _PendingReviewList:
     """List pending HIL reviews from the V1 pending_reviews table.
 
-    Uses the MSSP-role session (BYPASSRLS) so MSSP / platform admins see
-    rows across tenants. Tenant-scoped users see only their tenant's
-    rows because the underlying SELECT filters on the session's tenant
-    context — but mssp_admin / platform_admin reach this from the
-    operator console where cross-tenant visibility is the intent.
+    Role-aware tenant scoping:
+      - MSSP / platform admins → BYPASSRLS session, cross-tenant view.
+      - Tenant-scoped users → app-role session with ``tenant_context``,
+        RLS restricts the SELECT to their own tenant.
     """
     from sqlalchemy import text
 
-    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import (
+        get_app_sessionmaker,
+        get_mssp_sessionmaker,
+    )
 
-    sm = get_mssp_sessionmaker()
+    identity = current_identity(request)
     offset = (page - 1) * page_size
-    async with sm() as s:
-        total = (
-            await s.execute(
-                text("SELECT count(*) FROM pending_reviews WHERE status = 'pending'")
+    count_sql = text(
+        "SELECT count(*) FROM pending_reviews WHERE status = 'pending'"
+    )
+    list_sql = text(
+        """
+        SELECT id::text, investigation_id::text, status, title, description,
+               max_severity, alert_count, malicious_count, suspicious_count,
+               clean_count, findings, enrichments, misp_context, ai_decision,
+               ai_confidence, ai_assessment, ai_recommendation,
+               timeout_seconds, created_at, expires_at
+        FROM pending_reviews
+        WHERE status = 'pending'
+        ORDER BY created_at DESC
+        OFFSET :off LIMIT :lim
+        """
+    )
+
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            total = (await s.execute(count_sql)).scalar_one()
+            rows = (
+                await s.execute(list_sql, {"off": offset, "lim": page_size})
+            ).mappings().all()
+    else:
+        if identity.tenant_id is None:
+            return _PendingReviewList(
+                items=[], total=0, page=page, page_size=page_size, has_more=False
             )
-        ).scalar_one()
-        rows = (
-            await s.execute(
-                text(
-                    """
-                    SELECT id::text, investigation_id::text, status, title, description,
-                           max_severity, alert_count, malicious_count, suspicious_count,
-                           clean_count, findings, enrichments, misp_context, ai_decision,
-                           ai_confidence, ai_assessment, ai_recommendation,
-                           timeout_seconds, created_at, expires_at
-                    FROM pending_reviews
-                    WHERE status = 'pending'
-                    ORDER BY created_at DESC
-                    OFFSET :off LIMIT :lim
-                    """
-                ),
-                {"off": offset, "lim": page_size},
-            )
-        ).mappings().all()
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                total = (await s.execute(count_sql)).scalar_one()
+                rows = (
+                    await s.execute(list_sql, {"off": offset, "lim": page_size})
+                ).mappings().all()
 
     def _iso(value: Any) -> str | None:
         if value is None:
@@ -218,91 +234,118 @@ class _ReviewActionResponse(BaseModel):
     investigation_id: str
 
 
-async def _resolve_pending_review(review_id: str) -> dict[str, Any] | None:
-    from sqlalchemy import text
-
-    from soctalk.core.tenancy.db import get_mssp_sessionmaker
-
-    sm = get_mssp_sessionmaker()
-    async with sm() as s:
-        r = (
-            await s.execute(
-                text(
-                    "SELECT id::text, investigation_id::text, tenant_id::text, status "
-                    "FROM pending_reviews WHERE id = :rid"
-                ),
-                {"rid": review_id},
-            )
-        ).mappings().first()
-        return dict(r) if r else None
+_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
 
 
-async def _close_review_and_apply(
-    review_id: str,
-    new_review_status: str,
-    inv_action: str,
-    feedback: str | None,
-    reviewer: str | None,
-) -> _ReviewActionResponse:
-    """Common path for approve/reject/request-info.
+async def _resolve_pending_review(
+    review_id: str, identity: "UserIdentity"
+) -> dict[str, Any]:
+    """Resolve a review with role-aware tenant scoping.
 
-    inv_action is one of:
-      - ``"escalate"``: investigation stays active, severity already at 12
-      - ``"close"``: investigation closes as auto-rejected FP
-      - ``"hold"``: investigation stays active, no change
+    MSSP-level roles (``platform_admin``, ``mssp_admin``) see all
+    tenants' rows via the BYPASSRLS MSSP session. Tenant-level roles
+    (``analyst``, ``tenant_admin``, ``customer_viewer``) are scoped to
+    their own ``tenant_id`` via the RLS-subject app session with
+    ``tenant_context`` set.
+
+    Raises HTTP 404 if the review is not found within the caller's
+    tenant scope (i.e. cross-tenant lookups by tenant users fail with
+    the same code path as truly missing rows — never disclose
+    existence across tenants).
     """
     from fastapi import HTTPException
     from sqlalchemy import text
 
-    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import (
+        get_app_sessionmaker,
+        get_mssp_sessionmaker,
+    )
 
-    review = await _resolve_pending_review(review_id)
-    if review is None:
+    sql = (
+        "SELECT id::text, investigation_id::text, tenant_id::text, status "
+        "FROM pending_reviews WHERE id = :rid"
+    )
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            r = (
+                await s.execute(text(sql), {"rid": review_id})
+            ).mappings().first()
+    else:
+        if identity.tenant_id is None:
+            raise HTTPException(403, "tenant scope required")
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                r = (
+                    await s.execute(text(sql), {"rid": review_id})
+                ).mappings().first()
+    if r is None:
         raise HTTPException(404, "review not found")
-    if review["status"] != "pending":
-        raise HTTPException(409, f"review already {review['status']}")
+    return dict(r)
 
-    sm = get_mssp_sessionmaker()
-    async with sm() as s:
-        await s.execute(
-            text(
-                """
-                UPDATE pending_reviews
-                   SET status = :new_status,
-                       feedback = :feedback,
-                       reviewer = :reviewer,
-                       responded_at = now()
-                 WHERE id = :rid
-                """
-            ),
-            {
-                "new_status": new_review_status,
-                "feedback": feedback,
-                "reviewer": reviewer,
-                "rid": review_id,
-            },
-        )
-        if inv_action == "close":
-            await s.execute(
-                text(
-                    """
-                    UPDATE investigations
-                       SET status = 'auto_closed_fp',
-                           closed_at = now(),
-                           close_reason = COALESCE(:reason, close_reason),
-                           updated_at = now()
-                     WHERE id = :inv
-                    """
-                ),
-                {"reason": feedback, "inv": review["investigation_id"]},
+
+async def _apply_review_decision(
+    review_id: str,
+    investigation_id: str,
+    tenant_id: str | None,
+    identity: "UserIdentity",
+    decision: str,
+    feedback: str | None,
+) -> _ReviewActionResponse:
+    """Common path for approve/reject/request-info.
+
+    Routes through ``record_human_decision_received`` which appends
+    the canonical ``HUMAN_DECISION_RECEIVED`` event to the event log
+    and performs the V1-schema side effects (pending_reviews status
+    flip, investigation close on reject) in one transaction.
+    """
+    from uuid import UUID
+
+    from soctalk.core.ir.review_events import (
+        _DECISION_TO_REVIEW_STATUS,
+        record_human_decision_received,
+    )
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import (
+        get_app_sessionmaker,
+        get_mssp_sessionmaker,
+    )
+
+    tenant_uuid = UUID(tenant_id) if tenant_id else None
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            await record_human_decision_received(
+                s,
+                review_id=UUID(review_id),
+                investigation_id=UUID(investigation_id),
+                tenant_id=tenant_uuid,
+                decision=decision,
+                feedback=feedback,
+                reviewer=identity.email,
             )
-        await s.commit()
-
+            await s.commit()
+    else:
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                await record_human_decision_received(
+                    s,
+                    review_id=UUID(review_id),
+                    investigation_id=UUID(investigation_id),
+                    tenant_id=tenant_uuid,
+                    decision=decision,
+                    feedback=feedback,
+                    reviewer=identity.email,
+                )
+                await s.commit()
     return _ReviewActionResponse(
         success=True,
         review_id=review_id,
-        new_status=new_review_status,
-        investigation_id=review["investigation_id"],
+        new_status=_DECISION_TO_REVIEW_STATUS.get(decision, decision),
+        investigation_id=investigation_id,
     )
 
 
@@ -315,9 +358,15 @@ async def review_approve(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst approved the AI verdict — investigation stays escalated."""
-    reviewer = current_identity(request).email
-    return await _close_review_and_apply(
-        review_id, "approved", "escalate", body.feedback, reviewer
+    from fastapi import HTTPException
+
+    identity = current_identity(request)
+    review = await _resolve_pending_review(review_id, identity)
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
+    return await _apply_review_decision(
+        review_id, review["investigation_id"], review["tenant_id"], identity,
+        "approve", body.feedback,
     )
 
 
@@ -326,9 +375,15 @@ async def review_reject(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst overrode the AI verdict — close as false positive."""
-    reviewer = current_identity(request).email
-    return await _close_review_and_apply(
-        review_id, "rejected", "close", body.feedback, reviewer
+    from fastapi import HTTPException
+
+    identity = current_identity(request)
+    review = await _resolve_pending_review(review_id, identity)
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
+    return await _apply_review_decision(
+        review_id, review["investigation_id"], review["tenant_id"], identity,
+        "reject", body.feedback,
     )
 
 
@@ -341,10 +396,16 @@ async def review_request_info(
     review_id: str, body: _RequestInfoBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst requested additional information — investigation stays open."""
-    reviewer = current_identity(request).email
+    from fastapi import HTTPException
+
+    identity = current_identity(request)
+    review = await _resolve_pending_review(review_id, identity)
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
     feedback = "Questions: " + " | ".join(body.questions) if body.questions else None
-    return await _close_review_and_apply(
-        review_id, "info_requested", "hold", feedback, reviewer
+    return await _apply_review_decision(
+        review_id, review["investigation_id"], review["tenant_id"], identity,
+        "more_info", feedback,
     )
 
 

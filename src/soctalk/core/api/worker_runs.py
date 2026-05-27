@@ -77,6 +77,9 @@ class CompletePayload(BaseModel):
         default=None, pattern=r"^(close_fp|escalate|leave_open)$"
     )
     verdict_summary: str | None = Field(default=None, max_length=1024)
+    verdict_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    findings: list[str] = Field(default_factory=list)
+    enrichments: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/runs/claim", response_model=ClaimedRun | None)
@@ -301,72 +304,26 @@ async def complete_run(
             )
             case_changed = (r.rowcount or 0) > 0
         elif payload.status == "completed" and payload.disposition == "escalate":
-            r = await db.execute(
-                text(
-                    """
-                    UPDATE investigations
-                       SET severity = GREATEST(severity, 12),
-                           summary = COALESCE(:reason, summary),
-                           updated_at = now()
-                     WHERE id = :c
-                       AND tenant_id = :t
-                       AND status = 'active'
-                    """
-                ),
-                {
-                    "reason": payload.verdict_summary,
-                    "c": str(investigation_id),
-                    "t": str(tenant_id),
-                },
+            # Event-sourced HIL request: appends the canonical event
+            # AND performs the V1-schema side effects (severity bump +
+            # pending_reviews queue row) in the same transaction. See
+            # ``soctalk.core.ir.review_events`` for the why behind
+            # not using the legacy projector.
+            from soctalk.core.ir.review_events import (
+                record_human_review_requested,
             )
-            case_changed = (r.rowcount or 0) > 0
-            # Create the dashboard review-queue row so the analyst sees
-            # this investigation in /reviews. The L2 worker is a
-            # separate process from L1's projector and emits no events
-            # back to it, so the legacy ``HUMAN_REVIEW_REQUESTED``
-            # projection path never fires. Doing it transactionally
-            # here keeps the queue row and the severity bump
-            # consistent.
-            if case_changed:
-                await db.execute(
-                    text(
-                        """
-                        INSERT INTO pending_reviews (
-                            id, investigation_id, status, title, description,
-                            max_severity, alert_count, malicious_count,
-                            suspicious_count, clean_count, findings,
-                            enrichments, ai_decision, ai_assessment,
-                            timeout_seconds, created_at, tenant_id
-                        )
-                        SELECT
-                            gen_random_uuid(), i.id, 'pending', i.title,
-                            COALESCE(:reason, 'Routed to HIL — verdict needs analyst review.'),
-                            CASE
-                                WHEN i.severity >= 12 THEN 'critical'
-                                WHEN i.severity >= 10 THEN 'high'
-                                WHEN i.severity >= 7  THEN 'medium'
-                                ELSE 'low'
-                            END,
-                            1, 0, 0, 0,
-                            ARRAY[]::text[], '{}'::jsonb,
-                            'escalate',
-                            COALESCE(:reason, ''),
-                            3600, now(), :t
-                        FROM investigations i
-                        WHERE i.id = :c AND i.tenant_id = :t
-                          AND NOT EXISTS (
-                              SELECT 1 FROM pending_reviews pr
-                              WHERE pr.investigation_id = i.id
-                                AND pr.status = 'pending'
-                          )
-                        """
-                    ),
-                    {
-                        "reason": payload.verdict_summary,
-                        "c": str(investigation_id),
-                        "t": str(tenant_id),
-                    },
-                )
+
+            await record_human_review_requested(
+                db,
+                investigation_id=investigation_id,
+                tenant_id=tenant_id,
+                reason=payload.verdict_summary,
+                verdict_decision="escalate",
+                verdict_confidence=payload.verdict_confidence,
+                findings=payload.findings,
+                enrichments=payload.enrichments,
+            )
+            case_changed = True
     logger.info(
         "case_run_completed",
         run_id=str(run_id),

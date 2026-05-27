@@ -104,6 +104,85 @@ def _verdict_summary(final: dict[str, Any]) -> str | None:
     return None
 
 
+def _verdict_confidence(final: dict[str, Any]) -> float | None:
+    """Float in [0, 1] from the reasoning LLM verdict, or None."""
+    verdict = final.get("verdict") or {}
+    conf = verdict.get("confidence")
+    if conf is None:
+        return None
+    try:
+        f = float(conf)
+        return max(0.0, min(1.0, f))
+    except (TypeError, ValueError):
+        return None
+
+
+def _verdict_findings(final: dict[str, Any]) -> list[str]:
+    """Extract analyst-readable findings from the verdict + investigation state.
+
+    Combines the verdict's ``key_evidence`` (LLM-asserted facts), any
+    investigation-level findings (from the wazuh_worker correlation), and
+    falls back to ``gaps_in_evidence`` when the verdict was ``needs_more_info``
+    so the analyst sees *what the AI was missing*, not just an empty list.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    verdict = final.get("verdict") or {}
+    for k in ("key_evidence", "gaps_in_evidence", "assumptions_made"):
+        for item in verdict.get(k) or []:
+            s = str(item).strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s[:300])
+    inv = final.get("investigation") or {}
+    for f in inv.get("findings") or []:
+        # ``findings`` from wazuh_worker is a list of dicts with
+        # ``description`` and ``severity``.
+        if isinstance(f, dict):
+            desc = f.get("description") or ""
+            sev = f.get("severity") or ""
+            line = f"[{sev}] {desc}".strip() if sev else desc
+        else:
+            line = str(f)
+        line = line.strip()
+        if line and line not in seen:
+            seen.add(line)
+            out.append(line[:300])
+    return out[:20]
+
+
+def _verdict_enrichments(final: dict[str, Any]) -> dict[str, Any]:
+    """Pull observable + enrichment context for the review queue row.
+
+    Includes Cortex / MISP outputs when present, plus a summary of
+    observables flagged by upstream workers.
+    """
+    out: dict[str, Any] = {}
+    inv = final.get("investigation") or {}
+    if inv.get("enrichments"):
+        out["analyzer_results"] = inv["enrichments"][:20]
+    if inv.get("observables"):
+        out["observables"] = [
+            {
+                "type": o.get("type"),
+                "value": o.get("value"),
+                "verdict": o.get("verdict"),
+            }
+            for o in (inv["observables"] or [])[:20]
+            if isinstance(o, dict)
+        ]
+    verdict = final.get("verdict") or {}
+    if verdict.get("threat_assessment"):
+        out["threat_assessment"] = str(verdict["threat_assessment"])[:600]
+    if verdict.get("evidence_strength"):
+        out["evidence_strength"] = str(verdict["evidence_strength"])
+    if verdict.get("potential_impact"):
+        out["potential_impact"] = str(verdict["potential_impact"])
+    if verdict.get("urgency"):
+        out["urgency"] = str(verdict["urgency"])
+    return out
+
+
 def _wazuh_level_to_severity(level: int) -> str:
     if level >= 12:
         return "critical"
@@ -351,6 +430,9 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
             "last_error": last_error,
             "disposition": disposition,
             "verdict_summary": verdict_summary,
+            "verdict_confidence": _verdict_confidence(final),
+            "findings": _verdict_findings(final),
+            "enrichments": _verdict_enrichments(final),
         },
         timeout=15.0,
     )
