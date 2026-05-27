@@ -91,25 +91,35 @@ async def overview(request: Request) -> MetricsOverview:
                 """
                 SELECT
                   count(*) FILTER (WHERE c.status = 'active')           AS open_count,
-                  count(*) FILTER (WHERE c.status = 'active'
-                                   AND EXISTS (
-                                     SELECT 1 FROM investigation_runs cr
-                                     WHERE cr.investigation_id = c.id
-                                       AND cr.last_error IS NOT NULL
-                                   ))                                    AS pending_reviews,
+                  -- Pending HIL reviews. The V1 schema stores these as
+                  -- ``pending_reviews`` rows; the prior code counted
+                  -- investigations with a failed run, which is
+                  -- unrelated and always read as 0 against the V1 IR
+                  -- model. Subquery rather than a JOIN so the FILTERed
+                  -- outer count() over ``investigations`` isn't
+                  -- inflated by the join cardinality.
+                  (SELECT count(*)::int FROM pending_reviews pr
+                     WHERE pr.status = 'pending')                       AS pending_reviews,
                   count(*) FILTER (WHERE c.opened_at >= date_trunc('day', now())) AS opened_today,
                   count(*) FILTER (WHERE c.closed_at IS NOT NULL
                                    AND c.closed_at >= date_trunc('day', now()))   AS closed_today,
                   count(*) FILTER (WHERE c.status = 'auto_closed_fp'
                                    AND c.closed_at >= date_trunc('day', now()))   AS auto_closed_today,
-                  -- Escalations = cases whose terminal verdict was
-                  -- "escalate" today. The severity KPI alone (>=12)
-                  -- includes cases that opened critical but haven't
-                  -- been adjudicated, which would falsely show as
-                  -- escalated verdicts on the dashboard.
-                  count(*) FILTER (WHERE c.status IN ('escalated', 'closed_tp')
-                                   AND c.closed_at IS NOT NULL
-                                   AND c.closed_at >= date_trunc('day', now()))   AS escalations_today,
+                  -- Escalations today = investigations whose AI
+                  -- escalated and were adjudicated today. The prior
+                  -- ``status IN ('escalated','closed_tp')`` check
+                  -- referenced V0 status values; V1 uses ``active`` /
+                  -- ``auto_closed_fp`` and stores the escalation
+                  -- signal on ``pending_reviews.ai_decision``. Count
+                  -- investigations closed today that went through an
+                  -- AI escalation at some point.
+                  count(*) FILTER (WHERE c.closed_at IS NOT NULL
+                                   AND c.closed_at >= date_trunc('day', now())
+                                   AND EXISTS (
+                                     SELECT 1 FROM pending_reviews pr
+                                     WHERE pr.investigation_id = c.id
+                                       AND pr.ai_decision = 'escalate'
+                                   ))                                   AS escalations_today,
                   -- Severity buckets are rendered in the UI as
                   -- "Open by Severity" and divided by open_count, so
                   -- only count cases that are still active. Without
