@@ -320,6 +320,53 @@ async def complete_run(
                 },
             )
             case_changed = (r.rowcount or 0) > 0
+            # Create the dashboard review-queue row so the analyst sees
+            # this investigation in /reviews. The L2 worker is a
+            # separate process from L1's projector and emits no events
+            # back to it, so the legacy ``HUMAN_REVIEW_REQUESTED``
+            # projection path never fires. Doing it transactionally
+            # here keeps the queue row and the severity bump
+            # consistent.
+            if case_changed:
+                await db.execute(
+                    text(
+                        """
+                        INSERT INTO pending_reviews (
+                            id, investigation_id, status, title, description,
+                            max_severity, alert_count, malicious_count,
+                            suspicious_count, clean_count, findings,
+                            enrichments, ai_decision, ai_assessment,
+                            timeout_seconds, created_at, tenant_id
+                        )
+                        SELECT
+                            gen_random_uuid(), i.id, 'pending', i.title,
+                            COALESCE(:reason, 'Routed to HIL — verdict needs analyst review.'),
+                            CASE
+                                WHEN i.severity >= 12 THEN 'critical'
+                                WHEN i.severity >= 10 THEN 'high'
+                                WHEN i.severity >= 7  THEN 'medium'
+                                ELSE 'low'
+                            END,
+                            1, 0, 0, 0,
+                            ARRAY[]::text[], '{}'::jsonb,
+                            'escalate',
+                            COALESCE(:reason, ''),
+                            3600, now(), :t
+                        FROM investigations i
+                        WHERE i.id = :c AND i.tenant_id = :t
+                          AND NOT EXISTS (
+                              SELECT 1 FROM pending_reviews pr
+                              WHERE pr.investigation_id = i.id
+                                AND pr.status = 'pending'
+                          )
+                        """
+                    ),
+                    {
+                        "reason": payload.verdict_summary,
+                        "c": str(investigation_id),
+                        "t": str(tenant_id),
+                    },
+                )
     logger.info(
         "case_run_completed",
         run_id=str(run_id),

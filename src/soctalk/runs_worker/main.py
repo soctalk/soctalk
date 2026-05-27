@@ -78,10 +78,13 @@ def _disposition_from_final(final: dict[str, Any], run_status: str) -> str:
     if decision == "close":
         return "close_fp"
     if decision == "needs_more_info":
-        # High supervisor confidence + "need more info" = escalate to
-        # human; the agent saw real signal but isn't authorised to
-        # auto-resolve. Low confidence = no signal worth a human.
-        return "escalate" if sup_conf >= 0.7 else "leave_open"
+        # ``needs_more_info`` is the AI explicitly asking for analyst
+        # review — escalate unconditionally. Previously this required
+        # supervisor confidence >= 0.7, but in practice a verdict that
+        # cannot auto-resolve always benefits from a human gate;
+        # leaving low-confidence cases as ``leave_open`` strands them
+        # in the queue with no resolution path.
+        return "escalate"
 
     # No verdict — supervisor short-circuited.
     if sup_action == "CLOSE":
