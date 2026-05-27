@@ -18,7 +18,7 @@ Side-effecting routes (POST /review/{id}/approve, etc.) intentionally
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -488,91 +488,337 @@ async def review_expire(
 # ---------------------------------------------------------------------------
 
 
-def _empty_kpis() -> dict[str, Any]:
+async def _analytics_session_for(identity: "UserIdentity"):
+    """Same role-aware session pattern as the audit endpoints."""
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import get_app_sessionmaker, get_mssp_sessionmaker
+
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            yield s
+    else:
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                yield s
+
+
+async def _kpis(session, days: int) -> dict[str, Any]:
+    from sqlalchemy import text as _t
+
+    p = {"d": int(days)}
+    inv = (
+        await session.execute(
+            _t(
+                """
+                SELECT
+                    COUNT(*)::int                                   AS total,
+                    COUNT(*) FILTER (WHERE status = 'auto_closed_fp')::int AS auto_closed,
+                    COUNT(*) FILTER (WHERE status != 'active' AND closed_at IS NOT NULL)::int AS closed_any,
+                    AVG(EXTRACT(EPOCH FROM (closed_at - opened_at)))
+                        FILTER (WHERE closed_at IS NOT NULL)        AS mean_decision_s
+                FROM investigations
+                WHERE created_at >= now() - make_interval(days => :d)
+                """
+            ),
+            p,
+        )
+    ).mappings().first() or {}
+    pr = (
+        await session.execute(
+            _t(
+                """
+                SELECT
+                    COUNT(*)::int                                       AS total_reviews,
+                    COUNT(*) FILTER (WHERE ai_decision = 'escalate')::int AS ai_escalated,
+                    AVG(ai_confidence) FILTER (WHERE ai_confidence IS NOT NULL) AS avg_conf,
+                    COUNT(*) FILTER (WHERE ai_confidence >= 0.8)::int   AS high_conf,
+                    COUNT(*) FILTER (WHERE status = 'rejected')::int    AS overridden
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                """
+            ),
+            p,
+        )
+    ).mappings().first() or {}
+
+    total = int(inv.get("total") or 0)
+    total_reviews = int(pr.get("total_reviews") or 0)
+    ai_escalated = int(pr.get("ai_escalated") or 0)
+    overridden = int(pr.get("overridden") or 0)
     return {
-        "auto_close_rate": 0.0,
-        "escalation_rate": 0.0,
-        "human_override_rate": 0.0,
-        "mean_time_to_decision_seconds": None,
-        "total_investigations": 0,
-        "auto_closed_count": 0,
-        "escalated_count": 0,
-        "human_reviewed_count": 0,
-        "avg_ai_confidence": None,
-        "high_confidence_rate": 0.0,
+        "auto_close_rate": (int(inv.get("auto_closed") or 0) / total) if total else 0.0,
+        "escalation_rate": (ai_escalated / total) if total else 0.0,
+        "human_override_rate": (overridden / ai_escalated) if ai_escalated else 0.0,
+        "mean_time_to_decision_seconds": (
+            float(inv["mean_decision_s"]) if inv.get("mean_decision_s") else None
+        ),
+        "total_investigations": total,
+        "auto_closed_count": int(inv.get("auto_closed") or 0),
+        "escalated_count": ai_escalated,
+        "human_reviewed_count": total_reviews,
+        "avg_ai_confidence": (
+            float(pr["avg_conf"]) if pr.get("avg_conf") is not None else None
+        ),
+        "high_confidence_rate": (
+            (int(pr.get("high_conf") or 0) / total_reviews) if total_reviews else 0.0
+        ),
     }
 
 
-def _empty_ai_behavior() -> dict[str, Any]:
+async def _ai_behavior(session, days: int) -> dict[str, Any]:
+    from sqlalchemy import text as _t
+
+    p = {"d": int(days)}
+    # Confidence histogram in 10 buckets.
+    rows = (
+        await session.execute(
+            _t(
+                """
+                SELECT width_bucket(ai_confidence, 0.0, 1.0001, 10) AS bucket,
+                       COUNT(*)::int                                 AS n
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                  AND ai_confidence IS NOT NULL
+                GROUP BY bucket
+                ORDER BY bucket
+                """
+            ),
+            p,
+        )
+    ).all()
+    confidence_distribution = [
+        {"bucket": f"{(r[0] - 1) / 10:.1f}-{r[0] / 10:.1f}", "count": int(r[1])}
+        for r in rows
+    ]
+    # Daily decision trend.
+    daily = (
+        await session.execute(
+            _t(
+                """
+                SELECT date_trunc('day', created_at) AS day,
+                       ai_decision,
+                       COUNT(*)::int AS n
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                  AND ai_decision IS NOT NULL
+                GROUP BY day, ai_decision
+                ORDER BY day
+                """
+            ),
+            p,
+        )
+    ).all()
+    decision_trends = [
+        {
+            "day": (r[0].isoformat() if r[0] else None),
+            "decision": r[1],
+            "count": int(r[2]),
+        }
+        for r in daily
+    ]
+    # Escalation breakdown — top severity buckets for escalated reviews.
+    breakdown = (
+        await session.execute(
+            _t(
+                """
+                SELECT max_severity, COUNT(*)::int AS n
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                  AND ai_decision = 'escalate'
+                GROUP BY max_severity
+                ORDER BY n DESC
+                """
+            ),
+            p,
+        )
+    ).all()
+    escalation_breakdown = [
+        {"severity": r[0], "count": int(r[1])} for r in breakdown
+    ]
+    avg_by = (
+        await session.execute(
+            _t(
+                """
+                SELECT ai_decision, AVG(ai_confidence)::float AS c
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                  AND ai_confidence IS NOT NULL
+                  AND ai_decision IS NOT NULL
+                GROUP BY ai_decision
+                """
+            ),
+            p,
+        )
+    ).all()
+    avg_confidence_by_decision = {
+        r[0]: float(r[1]) for r in avg_by if r[1] is not None
+    }
     return {
-        "confidence_distribution": [],
-        "decision_trends": [],
-        "escalation_breakdown": [],
-        "avg_confidence_by_decision": {},
+        "confidence_distribution": confidence_distribution,
+        "decision_trends": decision_trends,
+        "escalation_breakdown": escalation_breakdown,
+        "avg_confidence_by_decision": avg_confidence_by_decision,
     }
 
 
-def _empty_human_review() -> dict[str, Any]:
+async def _human_review(session, days: int) -> dict[str, Any]:
+    from sqlalchemy import text as _t
+
+    p = {"d": int(days)}
+    row = (
+        await session.execute(
+            _t(
+                """
+                SELECT
+                    COUNT(*)::int                                       AS total,
+                    COUNT(*) FILTER (WHERE status = 'approved')::int    AS approved,
+                    COUNT(*) FILTER (WHERE status = 'rejected')::int    AS rejected,
+                    COUNT(*) FILTER (WHERE status = 'info_requested')::int AS info_requested,
+                    COUNT(*) FILTER (WHERE status = 'expired')::int     AS expired,
+                    COUNT(*) FILTER (WHERE status = 'pending')::int     AS pending,
+                    AVG(EXTRACT(EPOCH FROM (responded_at - created_at)))
+                        FILTER (WHERE responded_at IS NOT NULL)         AS avg_review_s,
+                    COUNT(*) FILTER (
+                        WHERE ai_decision = 'escalate' AND status = 'approved'
+                    )::int                                              AS ai_agreed,
+                    COUNT(*) FILTER (
+                        WHERE ai_decision = 'escalate' AND status = 'rejected'
+                    )::int                                              AS ai_overridden
+                FROM pending_reviews
+                WHERE created_at >= now() - make_interval(days => :d)
+                """
+            ),
+            p,
+        )
+    ).mappings().first() or {}
+    total = int(row.get("total") or 0)
+    agreed = int(row.get("ai_agreed") or 0)
+    overridden = int(row.get("ai_overridden") or 0)
     return {
-        "total_reviews": 0,
-        "approved": 0,
-        "rejected": 0,
-        "info_requested": 0,
-        "expired": 0,
-        "pending": 0,
-        "approval_rate": 0.0,
-        "rejection_rate": 0.0,
-        "avg_review_time_seconds": None,
-        "ai_agreed_count": 0,
-        "ai_overridden_count": 0,
-        "override_rate": 0.0,
+        "total_reviews": total,
+        "approved": int(row.get("approved") or 0),
+        "rejected": int(row.get("rejected") or 0),
+        "info_requested": int(row.get("info_requested") or 0),
+        "expired": int(row.get("expired") or 0),
+        "pending": int(row.get("pending") or 0),
+        "approval_rate": (int(row.get("approved") or 0) / total) if total else 0.0,
+        "rejection_rate": (int(row.get("rejected") or 0) / total) if total else 0.0,
+        "avg_review_time_seconds": (
+            float(row["avg_review_s"]) if row.get("avg_review_s") else None
+        ),
+        "ai_agreed_count": agreed,
+        "ai_overridden_count": overridden,
+        "override_rate": (
+            overridden / (agreed + overridden) if (agreed + overridden) else 0.0
+        ),
     }
 
 
-def _empty_outcomes() -> dict[str, Any]:
+async def _outcomes(session, days: int) -> dict[str, Any]:
+    from sqlalchemy import text as _t
+
+    p = {"d": int(days)}
+    row = (
+        await session.execute(
+            _t(
+                """
+                SELECT
+                    COUNT(*)::int                                                          AS total_closed,
+                    AVG(EXTRACT(EPOCH FROM (closed_at - opened_at)))                       AS avg_s,
+                    percentile_cont(0.5) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (closed_at - opened_at))
+                    )                                                                      AS p50_s,
+                    percentile_cont(0.9) WITHIN GROUP (
+                        ORDER BY EXTRACT(EPOCH FROM (closed_at - opened_at))
+                    )                                                                      AS p90_s,
+                    COUNT(*) FILTER (WHERE status = 'auto_closed_fp')::int                 AS fp,
+                    COUNT(*) FILTER (WHERE close_reason ILIKE '%true%positive%'
+                                       OR close_reason ILIKE '%confirmed%')::int           AS tp,
+                    COUNT(*) FILTER (WHERE close_reason ILIKE '%suspicious%')::int         AS susp,
+                    COUNT(*) FILTER (WHERE reopen_count > 0)::int                          AS reopened
+                FROM investigations
+                WHERE closed_at IS NOT NULL
+                  AND closed_at >= now() - make_interval(days => :d)
+                """
+            ),
+            p,
+        )
+    ).mappings().first() or {}
+    total_closed = int(row.get("total_closed") or 0)
     return {
-        "total_closed": 0,
-        "avg_resolution_time_seconds": None,
-        "p50_resolution_time_seconds": None,
-        "p90_resolution_time_seconds": None,
-        "closed_as_false_positive": 0,
-        "closed_as_true_positive": 0,
-        "closed_as_suspicious": 0,
-        "reopen_rate": 0.0,
+        "total_closed": total_closed,
+        "avg_resolution_time_seconds": (
+            float(row["avg_s"]) if row.get("avg_s") else None
+        ),
+        "p50_resolution_time_seconds": (
+            float(row["p50_s"]) if row.get("p50_s") else None
+        ),
+        "p90_resolution_time_seconds": (
+            float(row["p90_s"]) if row.get("p90_s") else None
+        ),
+        "closed_as_false_positive": int(row.get("fp") or 0),
+        "closed_as_true_positive": int(row.get("tp") or 0),
+        "closed_as_suspicious": int(row.get("susp") or 0),
+        "reopen_rate": (
+            (int(row.get("reopened") or 0) / total_closed) if total_closed else 0.0
+        ),
     }
 
 
 @router.get("/api/analytics/summary")
-async def analytics_summary(days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "period_start": now,
-        "period_end": now,
-        "executive_kpis": _empty_kpis(),
-        "ai_behavior": _empty_ai_behavior(),
-        "human_review": _empty_human_review(),
-        "outcomes": _empty_outcomes(),
-    }
+async def analytics_summary(
+    request: Request, days: int = Query(7, ge=1, le=90)
+) -> dict[str, Any]:
+    identity = current_identity(request)
+    period_end = datetime.now(timezone.utc)
+    period_start = period_end.replace(microsecond=0) - timedelta(days=days)
+    async for s in _analytics_session_for(identity):
+        return {
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "executive_kpis": await _kpis(s, days),
+            "ai_behavior": await _ai_behavior(s, days),
+            "human_review": await _human_review(s, days),
+            "outcomes": await _outcomes(s, days),
+        }
 
 
 @router.get("/api/analytics/kpis")
-async def analytics_kpis(days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
-    return _empty_kpis()
+async def analytics_kpis(
+    request: Request, days: int = Query(7, ge=1, le=90)
+) -> dict[str, Any]:
+    identity = current_identity(request)
+    async for s in _analytics_session_for(identity):
+        return await _kpis(s, days)
 
 
 @router.get("/api/analytics/ai-behavior")
-async def analytics_ai_behavior(days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
-    return _empty_ai_behavior()
+async def analytics_ai_behavior(
+    request: Request, days: int = Query(7, ge=1, le=90)
+) -> dict[str, Any]:
+    identity = current_identity(request)
+    async for s in _analytics_session_for(identity):
+        return await _ai_behavior(s, days)
 
 
 @router.get("/api/analytics/human-review")
-async def analytics_human_review(days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
-    return _empty_human_review()
+async def analytics_human_review(
+    request: Request, days: int = Query(7, ge=1, le=90)
+) -> dict[str, Any]:
+    identity = current_identity(request)
+    async for s in _analytics_session_for(identity):
+        return await _human_review(s, days)
 
 
 @router.get("/api/analytics/outcomes")
-async def analytics_outcomes(days: int = Query(7, ge=1, le=90)) -> dict[str, Any]:
-    return _empty_outcomes()
+async def analytics_outcomes(
+    request: Request, days: int = Query(7, ge=1, le=90)
+) -> dict[str, Any]:
+    identity = current_identity(request)
+    async for s in _analytics_session_for(identity):
+        return await _outcomes(s, days)
 
 
 # ---------------------------------------------------------------------------
