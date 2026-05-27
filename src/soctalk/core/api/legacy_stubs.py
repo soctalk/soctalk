@@ -89,12 +89,26 @@ async def events_stream(request: Request) -> StreamingResponse:
 
 
 # ---------------------------------------------------------------------------
-# /api/review/pending — empty list
+# /api/review/pending — bridged to the V1 pending_reviews table
 # ---------------------------------------------------------------------------
 
 
+class _PendingReviewItem(BaseModel):
+    id: str
+    investigation_id: str
+    title: str
+    description: str
+    max_severity: str
+    alert_count: int
+    ai_decision: str | None = None
+    ai_confidence: float | None = None
+    ai_assessment: str | None = None
+    created_at: str
+    expires_at: str | None = None
+
+
 class _PendingReviewList(BaseModel):
-    items: list[dict[str, Any]] = []
+    items: list[_PendingReviewItem] = []
     total: int = 0
     page: int = 1
     page_size: int = 50
@@ -106,7 +120,75 @@ async def review_pending(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ) -> _PendingReviewList:
-    return _PendingReviewList(items=[], total=0, page=page, page_size=page_size)
+    """List pending HIL reviews from the V1 pending_reviews table.
+
+    Uses the MSSP-role session (BYPASSRLS) so MSSP / platform admins see
+    rows across tenants. Tenant-scoped users see only their tenant's
+    rows because the underlying SELECT filters on the session's tenant
+    context — but mssp_admin / platform_admin reach this from the
+    operator console where cross-tenant visibility is the intent.
+    """
+    from sqlalchemy import text
+
+    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+    sm = get_mssp_sessionmaker()
+    offset = (page - 1) * page_size
+    async with sm() as s:
+        total = (
+            await s.execute(
+                text("SELECT count(*) FROM pending_reviews WHERE status = 'pending'")
+            )
+        ).scalar_one()
+        rows = (
+            await s.execute(
+                text(
+                    """
+                    SELECT id::text, investigation_id::text, title, description,
+                           max_severity, alert_count, ai_decision, ai_confidence,
+                           ai_assessment, created_at, expires_at
+                    FROM pending_reviews
+                    WHERE status = 'pending'
+                    ORDER BY created_at DESC
+                    OFFSET :off LIMIT :lim
+                    """
+                ),
+                {"off": offset, "lim": page_size},
+            )
+        ).mappings().all()
+
+    def _iso(value: Any) -> str | None:
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
+    items = [
+        _PendingReviewItem(
+            id=r["id"],
+            investigation_id=r["investigation_id"],
+            title=r["title"],
+            description=r["description"],
+            max_severity=r["max_severity"],
+            alert_count=int(r["alert_count"] or 0),
+            ai_decision=r["ai_decision"],
+            ai_confidence=(
+                float(r["ai_confidence"]) if r["ai_confidence"] is not None else None
+            ),
+            ai_assessment=r["ai_assessment"],
+            created_at=_iso(r["created_at"]) or "",
+            expires_at=_iso(r["expires_at"]),
+        )
+        for r in rows
+    ]
+    return _PendingReviewList(
+        items=items,
+        total=int(total or 0),
+        page=page,
+        page_size=page_size,
+        has_more=(offset + len(items)) < int(total or 0),
+    )
 
 
 # ---------------------------------------------------------------------------
