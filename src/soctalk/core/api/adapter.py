@@ -112,6 +112,7 @@ class AdapterEvent(BaseModel):
     initial_iocs: list[IngestedIOC] = Field(default_factory=list)
     ts: datetime | None = None
     description: str | None = Field(default=None, max_length=1024)
+    title: str | None = Field(default=None, max_length=255)
     raw: dict[str, Any] | None = None
 
 
@@ -149,6 +150,7 @@ async def ingest_events(payload: IngestBatch, request: Request) -> dict[str, Any
                 source_event_id=ev.source_event_id,
                 ts=ev.ts or datetime.now(timezone.utc),
                 description=ev.description,
+                title=ev.title,
             )
             results.append(outcome)
     return {"ingested": len(results), "outcomes": results}

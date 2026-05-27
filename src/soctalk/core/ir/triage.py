@@ -435,6 +435,7 @@ async def triage_event(
     source_event_id: str,
     ts: datetime | None = None,
     description: str | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Main triage entry: raw event → alert → investigation or auto-close.
 
@@ -523,7 +524,7 @@ async def triage_event(
 
     # All other bands: create an investigation.
     investigation_id = await promote_alert_to_case(
-        db, tenant_id=tenant_id, alert_id=alert_id
+        db, tenant_id=tenant_id, alert_id=alert_id, title=title
     )
     return {
         "alert_id": str(alert_id),

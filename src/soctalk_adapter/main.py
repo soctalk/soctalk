@@ -135,6 +135,43 @@ def _extract_iocs(text: str) -> list[dict]:
     return out[:32]
 
 
+_NAME_KV_RE = re.compile(r"\bname=([A-Za-z0-9_\-.]+)")
+_FIM_FILE_RE = re.compile(r"File '([^']+)' (?:was )?(?:modified|added|deleted|changed)", re.I)
+_USERID_KV_RE = re.compile(r"\b(?:USER|user|uid)=([A-Za-z0-9_\-.]+)")
+_IP_RE = re.compile(r"\b(?:from|src ip|source)\s*[=:]?\s*((?:\d{1,3}\.){3}\d{1,3})", re.I)
+
+
+def _extract_subject(full_log: str) -> str | None:
+    """Best-effort extraction of the alert's primary subject from
+    Wazuh's ``full_log`` line. Handles common useradd / groupadd / FIM
+    / authentication patterns. Returns ``None`` if no obvious subject
+    found — the title falls back to rule description only.
+    """
+    if not full_log:
+        return None
+    for rx in (_FIM_FILE_RE, _NAME_KV_RE, _USERID_KV_RE, _IP_RE):
+        m = rx.search(full_log)
+        if m:
+            return m.group(1)[:80]
+    return None
+
+
+def _compose_title(rule_desc: str, agent_name: str | None, subject: str | None) -> str:
+    """Compose an analyst-friendly title: ``{rule_desc}[: subject][ on agent]``.
+
+    Examples:
+      - "New user added: attacker_test on linux-ep-0"
+      - "Integrity checksum changed: /etc/passwd on linux-ep-0"
+      - "Authentication failure on linux-ep-0"
+    """
+    base = (rule_desc or "Wazuh alert").strip().rstrip(".")
+    if subject:
+        base = f"{base}: {subject}"
+    if agent_name:
+        base = f"{base} on {agent_name}"
+    return base[:255]
+
+
 def _hit_to_event(hit: dict) -> dict | None:
     src = hit.get("_source") or {}
     source_id = src.get("id") or hit.get("_id")
@@ -144,12 +181,14 @@ def _hit_to_event(hit: dict) -> dict | None:
     agent = src.get("agent") or {}
     full_log = src.get("full_log") or ""
     rule_desc = rule.get("description") or ""
+    agent_name = agent.get("name") if isinstance(agent, dict) else None
     asset_ids: list[str] = []
     if isinstance(agent, dict) and agent.get("id"):
         asset_ids.append(agent["id"][:64])
-    if isinstance(agent, dict) and agent.get("name"):
-        asset_ids.append(agent["name"][:64])
+    if agent_name:
+        asset_ids.append(agent_name[:64])
     description = (full_log or rule_desc).strip()[:1024]
+    title = _compose_title(rule_desc, agent_name, _extract_subject(full_log))
     return {
         "source_event_id": str(source_id)[:128],
         "source": "wazuh",
@@ -159,6 +198,7 @@ def _hit_to_event(hit: dict) -> dict | None:
         "initial_iocs": _extract_iocs(f"{rule_desc} {full_log}"),
         "ts": src.get("@timestamp") or src.get("timestamp"),
         "description": description,
+        "title": title,
         "raw": {
             "rule_description": rule_desc[:512],
             "rule_groups": rule.get("groups") or [],
