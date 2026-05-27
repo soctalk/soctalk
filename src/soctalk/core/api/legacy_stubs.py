@@ -315,8 +315,7 @@ async def review_approve(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst approved the AI verdict — investigation stays escalated."""
-    ident = current_identity(request)
-    reviewer = ident.get("email") if ident else None
+    reviewer = current_identity(request).email
     return await _close_review_and_apply(
         review_id, "approved", "escalate", body.feedback, reviewer
     )
@@ -327,8 +326,7 @@ async def review_reject(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst overrode the AI verdict — close as false positive."""
-    ident = current_identity(request)
-    reviewer = ident.get("email") if ident else None
+    reviewer = current_identity(request).email
     return await _close_review_and_apply(
         review_id, "rejected", "close", body.feedback, reviewer
     )
@@ -343,8 +341,7 @@ async def review_request_info(
     review_id: str, body: _RequestInfoBody, request: Request
 ) -> _ReviewActionResponse:
     """Analyst requested additional information — investigation stays open."""
-    ident = current_identity(request)
-    reviewer = ident.get("email") if ident else None
+    reviewer = current_identity(request).email
     feedback = "Questions: " + " | ".join(body.questions) if body.questions else None
     return await _close_review_and_apply(
         review_id, "info_requested", "hold", feedback, reviewer
