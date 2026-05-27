@@ -713,13 +713,17 @@ async def audit_stats(
     from sqlalchemy import text as _t
 
     identity = current_identity(request)
-    params = {"h": f"{hours} hours"}
+    # ``hours`` is already bounded to [1, 720] by Query(...). Construct
+    # the interval via ``make_interval`` rather than ``(:h)::interval``
+    # because asyncpg can't cast a bind param to ``interval`` directly
+    # (server-side parser sees ``$1`` before it has a target type).
+    params = {"h": int(hours)}
     async for s in _audit_session_for(identity):
         total = (
             await s.execute(
                 _t(
                     "SELECT COUNT(*) FROM events "
-                    "WHERE timestamp >= now() - (:h)::interval"
+                    "WHERE timestamp >= now() - make_interval(hours => :h)"
                 ),
                 params,
             )
@@ -728,7 +732,7 @@ async def audit_stats(
             await s.execute(
                 _t(
                     "SELECT COUNT(DISTINCT aggregate_id) FROM events "
-                    "WHERE timestamp >= now() - (:h)::interval"
+                    "WHERE timestamp >= now() - make_interval(hours => :h)"
                 ),
                 params,
             )
@@ -737,7 +741,7 @@ async def audit_stats(
             await s.execute(
                 _t(
                     "SELECT event_type, COUNT(*) FROM events "
-                    "WHERE timestamp >= now() - (:h)::interval "
+                    "WHERE timestamp >= now() - make_interval(hours => :h) "
                     "GROUP BY event_type"
                 ),
                 params,
@@ -748,7 +752,7 @@ async def audit_stats(
                 _t(
                     "SELECT date_trunc('hour', timestamp) AS h, COUNT(*) "
                     "FROM events "
-                    "WHERE timestamp >= now() - (:h)::interval "
+                    "WHERE timestamp >= now() - make_interval(hours => :h) "
                     "GROUP BY h ORDER BY h"
                 ),
                 params,
