@@ -580,13 +580,49 @@ async def analytics_outcomes(days: int = Query(7, ge=1, le=90)) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
+async def _audit_session_for(identity: "UserIdentity"):
+    """Return a session + scoping context appropriate for the caller.
+
+    MSSP-level roles use the BYPASSRLS session so they see every
+    tenant's audit trail. Tenant-level roles use the RLS-subject
+    session with ``tenant_context`` so their audit query is naturally
+    scoped to their own tenant_id by the events_tenant_isolation
+    policy on the ``events`` table.
+
+    Yields ``(session, needs_commit)`` — read-only here so the caller
+    never commits, but the shape mirrors the write helpers above for
+    readability.
+    """
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import get_app_sessionmaker, get_mssp_sessionmaker
+
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            yield s
+    else:
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                yield s
+
+
 @router.get("/api/audit/event-types")
-async def audit_event_types() -> dict[str, list[str]]:
-    return {"event_types": []}
+async def audit_event_types(request: Request) -> dict[str, list[str]]:
+    """Distinct event types present in the audit log — drives the UI filter."""
+    from sqlalchemy import text as _t
+
+    identity = current_identity(request)
+    async for s in _audit_session_for(identity):
+        rows = (
+            await s.execute(_t("SELECT DISTINCT event_type FROM events ORDER BY event_type"))
+        ).all()
+        return {"event_types": [r[0] for r in rows]}
 
 
 @router.get("/api/audit")
 async def audit_list(
+    request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     event_type: str | None = None,
@@ -595,31 +631,201 @@ async def audit_list(
     end_date: str | None = None,
     investigation_id: str | None = None,
 ) -> dict[str, Any]:
-    return {"items": [], "total": 0, "page": page, "page_size": page_size, "has_more": False}
+    """Paginated audit log query against the ``events`` table.
+
+    Filters are AND-composed; missing filters are dropped from the
+    WHERE. ``total`` is a separate COUNT(*) over the same predicate so
+    the frontend pager works. Tenant scoping is handled by either
+    BYPASSRLS (MSSP) or the events RLS policy (tenant).
+    """
+    from sqlalchemy import text as _t
+
+    identity = current_identity(request)
+    conds: list[str] = []
+    params: dict[str, Any] = {}
+    if event_type:
+        conds.append("event_type = :et")
+        params["et"] = event_type
+    if aggregate_type:
+        conds.append("aggregate_type = :at")
+        params["at"] = aggregate_type
+    if investigation_id:
+        conds.append("aggregate_id::text = :aid")
+        params["aid"] = investigation_id
+    if start_date:
+        conds.append("timestamp >= :sd")
+        params["sd"] = start_date
+    if end_date:
+        conds.append("timestamp <= :ed")
+        params["ed"] = end_date
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+
+    offset = (page - 1) * page_size
+    params["lim"] = page_size
+    params["off"] = offset
+
+    async for s in _audit_session_for(identity):
+        total = (
+            await s.execute(_t(f"SELECT COUNT(*) FROM events{where}"), params)
+        ).scalar_one()
+        rows = (
+            await s.execute(
+                _t(
+                    f"""
+                    SELECT id::text, aggregate_id::text, aggregate_type, event_type,
+                           version, timestamp, data
+                    FROM events{where}
+                    ORDER BY timestamp DESC
+                    LIMIT :lim OFFSET :off
+                    """
+                ),
+                params,
+            )
+        ).mappings().all()
+        items = [
+            {
+                "id": r["id"],
+                "aggregate_id": r["aggregate_id"],
+                "aggregate_type": r["aggregate_type"],
+                "event_type": r["event_type"],
+                "version": int(r["version"]),
+                "timestamp": (
+                    r["timestamp"].isoformat() if r["timestamp"] else None
+                ),
+                "data": r["data"],
+            }
+            for r in rows
+        ]
+        return {
+            "items": items,
+            "total": int(total or 0),
+            "page": page,
+            "page_size": page_size,
+            "has_more": (offset + len(items)) < int(total or 0),
+        }
 
 
 @router.get("/api/audit/stats")
-async def audit_stats(hours: int = Query(24, ge=1, le=720)) -> dict[str, Any]:
-    return {
-        "period_hours": hours,
-        "total_events": 0,
-        "unique_investigations": 0,
-        "events_by_type": {},
-        "events_by_hour": {},
-    }
+async def audit_stats(
+    request: Request, hours: int = Query(24, ge=1, le=720)
+) -> dict[str, Any]:
+    """Aggregate counters for the audit dashboard."""
+    from sqlalchemy import text as _t
+
+    identity = current_identity(request)
+    params = {"h": f"{hours} hours"}
+    async for s in _audit_session_for(identity):
+        total = (
+            await s.execute(
+                _t(
+                    "SELECT COUNT(*) FROM events "
+                    "WHERE timestamp >= now() - (:h)::interval"
+                ),
+                params,
+            )
+        ).scalar_one()
+        uniq = (
+            await s.execute(
+                _t(
+                    "SELECT COUNT(DISTINCT aggregate_id) FROM events "
+                    "WHERE timestamp >= now() - (:h)::interval"
+                ),
+                params,
+            )
+        ).scalar_one()
+        by_type = (
+            await s.execute(
+                _t(
+                    "SELECT event_type, COUNT(*) FROM events "
+                    "WHERE timestamp >= now() - (:h)::interval "
+                    "GROUP BY event_type"
+                ),
+                params,
+            )
+        ).all()
+        by_hour = (
+            await s.execute(
+                _t(
+                    "SELECT date_trunc('hour', timestamp) AS h, COUNT(*) "
+                    "FROM events "
+                    "WHERE timestamp >= now() - (:h)::interval "
+                    "GROUP BY h ORDER BY h"
+                ),
+                params,
+            )
+        ).all()
+        return {
+            "period_hours": hours,
+            "total_events": int(total or 0),
+            "unique_investigations": int(uniq or 0),
+            "events_by_type": {r[0]: int(r[1]) for r in by_type},
+            "events_by_hour": {
+                (r[0].isoformat() if r[0] else ""): int(r[1]) for r in by_hour
+            },
+        }
 
 
 @router.get("/api/audit/investigation/{investigation_id}")
-async def audit_investigation(investigation_id: str, limit: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
-    return {
-        "investigation_id": investigation_id,
-        "title": None,
-        "status": "unknown",
-        "phase": "unknown",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "events": [],
-        "total_events": 0,
-    }
+async def audit_investigation(
+    investigation_id: str,
+    request: Request,
+    limit: int = Query(200, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Per-investigation event timeline for the case-detail audit tab."""
+    from sqlalchemy import text as _t
+
+    identity = current_identity(request)
+    async for s in _audit_session_for(identity):
+        inv = (
+            await s.execute(
+                _t(
+                    "SELECT title, status, created_at FROM investigations "
+                    "WHERE id::text = :id"
+                ),
+                {"id": investigation_id},
+            )
+        ).mappings().first()
+        rows = (
+            await s.execute(
+                _t(
+                    """
+                    SELECT id::text, aggregate_type, event_type, version,
+                           timestamp, data
+                    FROM events
+                    WHERE aggregate_id::text = :id
+                    ORDER BY version ASC
+                    LIMIT :lim
+                    """
+                ),
+                {"id": investigation_id, "lim": limit},
+            )
+        ).mappings().all()
+        events = [
+            {
+                "id": r["id"],
+                "aggregate_type": r["aggregate_type"],
+                "event_type": r["event_type"],
+                "version": int(r["version"]),
+                "timestamp": (
+                    r["timestamp"].isoformat() if r["timestamp"] else None
+                ),
+                "data": r["data"],
+            }
+            for r in rows
+        ]
+        return {
+            "investigation_id": investigation_id,
+            "title": inv["title"] if inv else None,
+            "status": inv["status"] if inv else "unknown",
+            "phase": "unknown",
+            "created_at": (
+                inv["created_at"].isoformat()
+                if inv and inv["created_at"]
+                else datetime.now(timezone.utc).isoformat()
+            ),
+            "events": events,
+            "total_events": len(events),
+        }
 
 
 # ---------------------------------------------------------------------------
