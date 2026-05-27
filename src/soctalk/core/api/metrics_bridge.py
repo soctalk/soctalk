@@ -77,14 +77,44 @@ class HourlyMetricsResponse(BaseModel):
     total_hours: int
 
 
+_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
+
+
 @router.get("/overview", response_model=MetricsOverview)
 async def overview(request: Request) -> MetricsOverview:
     _require_authed(request)
-    db = _db(request)
 
-    # Single round-trip rollup. RLS filters to the session's tenant
-    # scope; for cross-tenant MSSP audience, no app.current_tenant_id
-    # is set and the policies open the gate.
+    # Dashboard rollup picks one of two sessions based on role.
+    # The shared request session uses the RLS-subject ``soctalk_app``
+    # role, and the tenant policies on ``pending_reviews`` / ``alerts``
+    # are *fail-closed*: when ``app.current_tenant_id`` is unset (the
+    # cross-tenant MSSP scope) zero rows are visible. The prior code
+    # assumed the policies opened the gate in that case, which is why
+    # the dashboard widget read "0 pending reviews" for an MSSP login
+    # while 13 rows existed in the table. Route MSSP-level callers
+    # through the BYPASSRLS session so cross-tenant aggregates work;
+    # tenant-bound callers keep the request session that's already
+    # RLS-scoped to their home tenant by the middleware.
+    identity = current_identity(request)
+    role = getattr(identity, "role", None) if identity else None
+
+    if role in _MSSP_LEVEL_ROLES:
+        from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+        sm = get_mssp_sessionmaker()
+        async with sm() as db:
+            return await _overview_with(db)
+    else:
+        return await _overview_with(_db(request))
+
+
+async def _overview_with(db: AsyncSession) -> MetricsOverview:
+    """The actual rollup query, parametrised on the session.
+
+    Split out from ``overview`` so the role branch above can pass
+    either the request-bound (RLS) session or a BYPASSRLS session
+    without duplicating the SQL.
+    """
     row = (
         await db.execute(
             text(
@@ -153,13 +183,6 @@ async def overview(request: Request) -> MetricsOverview:
         )
     ).mappings().first()
 
-    # Verdict breakdown is rendered on the dashboard as "Verdicts
-    # Today" — the UI's labels and bar colors are keyed on the legacy
-    # decision names (``escalate``, ``auto_close``, ``close``), and
-    # it shows the empty state only when the dict has no entries.
-    # Use those keys directly and omit zero-count buckets so a fresh
-    # install reads as "No verdicts yet today" instead of "0
-    # escalated, 0 auto-closed".
     auto_closed_today = int(row["auto_closed_today"] or 0)
     escalations_today = int(row["escalations_today"] or 0)
     verdicts: dict[str, int] = {}
@@ -168,10 +191,6 @@ async def overview(request: Request) -> MetricsOverview:
     if auto_closed_today:
         verdicts["auto_close"] = auto_closed_today
 
-    # Severity buckets: empty dict on a fresh install (or any scope
-    # with no open cases) so the dashboard can render its empty
-    # state. With four-zero-valued buckets the UI divides by
-    # ``open_investigations`` and produces NaN%.
     open_count = int(row["open_count"] or 0)
     if open_count == 0:
         sev: dict[str, int] = {}
@@ -183,7 +202,6 @@ async def overview(request: Request) -> MetricsOverview:
             "low": int(row["low_total"] or 0),
         }
 
-    # Avg time-to-verdict over today's closed cases.
     ttv_row = (
         await db.execute(
             text(
