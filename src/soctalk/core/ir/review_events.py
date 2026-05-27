@@ -37,7 +37,55 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.persistence.events import EventType
-from soctalk.persistence.store import EventStore
+
+
+async def _append_event_v1(
+    session: AsyncSession,
+    *,
+    aggregate_id: UUID,
+    tenant_id: UUID,
+    event_type: EventType,
+    data: dict[str, Any],
+) -> None:
+    """V1-shape append: includes tenant_id (legacy ORM model omits it).
+
+    The legacy ``EventStore.append()`` uses SQLModel that doesn't declare
+    ``tenant_id`` — the column was added in a V1 migration but the model
+    wasn't updated. RLS then rejects the insert because the new row's
+    ``tenant_id`` is NULL while the session's ``app.current_tenant_id``
+    is set. Raw INSERT lets us pass tenant_id without touching the
+    shared model and breaking other call sites.
+    """
+    row = (
+        await session.execute(
+            text(
+                "SELECT COALESCE(MAX(version), 0) AS v "
+                "FROM events WHERE aggregate_id = :a"
+            ),
+            {"a": str(aggregate_id)},
+        )
+    ).mappings().first()
+    next_version = int(row["v"]) + 1
+    await session.execute(
+        text(
+            """
+            INSERT INTO events (
+                id, aggregate_id, aggregate_type, event_type, version,
+                timestamp, data, event_metadata, tenant_id
+            ) VALUES (
+                gen_random_uuid(), :a, 'Investigation', :et, :v,
+                now(), CAST(:d AS jsonb), '{}'::jsonb, :t
+            )
+            """
+        ),
+        {
+            "a": str(aggregate_id),
+            "et": event_type.value,
+            "v": next_version,
+            "d": json.dumps(data),
+            "t": str(tenant_id),
+        },
+    )
 
 
 _DECISION_TO_REVIEW_STATUS = {
@@ -68,9 +116,10 @@ async def record_human_review_requested(
     enrichments_dict = dict(enrichments or {})
 
     # 1. Audit trail. Single source of truth.
-    store = EventStore(session)
-    await store.append(
+    await _append_event_v1(
+        session,
         aggregate_id=investigation_id,
+        tenant_id=tenant_id,
         event_type=EventType.HUMAN_REVIEW_REQUESTED,
         data={
             "reason": reason,
@@ -163,10 +212,14 @@ async def record_human_decision_received(
     """
     review_status = _DECISION_TO_REVIEW_STATUS.get(decision, decision)
 
-    # 1. Audit trail.
-    store = EventStore(session)
-    await store.append(
+    # 1. Audit trail. We require tenant_id for V1 RLS-safe insert; the
+    #    caller resolves it from the analyst's identity.
+    if tenant_id is None:
+        raise ValueError("tenant_id required for HUMAN_DECISION_RECEIVED")
+    await _append_event_v1(
+        session,
         aggregate_id=investigation_id,
+        tenant_id=tenant_id,
         event_type=EventType.HUMAN_DECISION_RECEIVED,
         data={
             "decision": decision,

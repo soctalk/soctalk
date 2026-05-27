@@ -1,0 +1,4 @@
+services:
+  frontend:
+    ports: !override
+      - "15173:5173"
