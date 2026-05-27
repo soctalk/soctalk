@@ -36,7 +36,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.models.enums import EventType
+from soctalk.persistence.events import EventType
 from soctalk.persistence.store import EventStore
 
 
