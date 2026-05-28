@@ -13,7 +13,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CLUSTER_NAME="${CLUSTER_NAME:-soctalk-local}"
 KCFG="${PWD}/.kube/config"
 
-if k3d cluster list -o json 2>/dev/null | grep -q "\"name\": \"${CLUSTER_NAME}\""; then
+if k3d cluster list -o json 2>/dev/null \
+    | jq -e --arg n "${CLUSTER_NAME}" '.[] | select(.name == $n)' >/dev/null; then
   k3d cluster delete "${CLUSTER_NAME}"
 else
   echo "cluster ${CLUSTER_NAME} not present"
