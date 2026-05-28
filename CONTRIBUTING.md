@@ -103,6 +103,80 @@ emit a combined config.
 
 ---
 
+## Layer C: deploying SocTalk on the local k3d cluster
+
+The slim k3d profile (``scripts/local-up.sh``) runs vanilla Flannel +
+nginx-ingress, no Cilium, no cert-manager — the simplest cluster shape
+that the ``soctalk-system`` chart will install onto. Use it for
+end-to-end iteration on the multi-tenant control plane without
+spending time fighting with CNI tooling.
+
+### One-time prerequisites
+
+1. **Add the dev hostnames to ``/etc/hosts``** so the browser can reach
+   the cluster's nginx-ingress through ``127.0.0.1:8080``:
+
+   ```
+   127.0.0.1   devlab.soctalk.local customer.soctalk.local
+   ```
+
+   These hostnames match ``ingress.hostnames.{mssp,customer}`` in
+   ``dev/values.local.yaml``. If you change them in the values file,
+   change them in ``/etc/hosts`` too.
+
+2. **(Optional) LLM API key.** Triage / orchestrator pods boot without
+   one, but any code path that hits the LLM will fail. Either edit
+   ``dev/values.local.yaml`` locally and leave the change unstaged, or
+   pass at install time via ``--set llm.apiKey=sk-...`` (see step 3
+   below).
+
+### Bring it up
+
+```bash
+./scripts/local-up.sh             # k3d cluster + nginx-ingress (~2 min)
+just system-up                     # build images, k3d image import, helm install
+kubectl -n soctalk-system get pods -w
+```
+
+Visit ``http://devlab.soctalk.local:8080`` once all pods are Ready.
+Login uses the bootstrap admin credentials in ``dev/values.local.yaml``
+(default: ``admin@devlab.local`` / ``dev-admin-pw-12345``).
+
+### Inner dev loop
+
+After a code change in ``src/soctalk/``:
+
+```bash
+just system-reload                # rebuild, re-import, kubectl rollout restart
+```
+
+This skips ``helm upgrade`` (chart values unchanged) and just rolls
+the deployments so they pick up the new image. ~30 seconds.
+
+### Teardown
+
+```bash
+just system-down                   # helm uninstall + kubectl delete ns
+./scripts/local-down.sh            # also tear down the k3d cluster
+```
+
+### What's in ``dev/values.local.yaml``
+
+| Field | Why it's overridden |
+|---|---|
+| ``install.{msspId, installId}`` | Fixed dev UUIDs (``dec0de00-…``) so the bootstrap row is stable across re-installs. |
+| ``install.bootstrapAdmin.{email,password}`` | First-login credentials. Dev-only — production installs MUST use ``existingSecret``. |
+| ``image.registry`` / ``image.tag`` | Matches the ``cr.lab.atricore.io`` registry prefix ``just build-*`` produces; ``k3d image import`` loads these into containerd so the registry doesn't need to be reachable. |
+| ``ingress.className: nginx`` | Chart default is ``traefik`` (for k3s's bundled controller, which ``local-up.sh`` doesn't install). |
+| ``ingress.tls.{secretName,issuerRef}: ''`` | No cert-manager in the local profile → no TLS issuer. |
+| ``auth.cookieSecure: false`` | Plain HTTP origins. |
+| ``auth.publicOriginOverride`` | CSRF needs the port-suffixed origin the browser actually sends. |
+| ``networkPolicy.cilium: false`` | No Cilium → don't create ``CiliumNetworkPolicy`` resources. |
+| ``preInstallCheck.enabled: false`` | Chart's pre-install Job otherwise aborts because Cilium + cert-manager are missing. |
+| ``llm.apiKey: ''`` | Set locally; never committed. |
+
+---
+
 ## Running tests
 
 ```bash

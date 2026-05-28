@@ -79,8 +79,10 @@ in pkgs.mkShell {
     # Docker itself is NOT Nix-managed — the host must provide it
     # (Docker Desktop / Colima / native dockerd on Linux).
     pkgs.kubectl
+    pkgs.kubecolor
     pkgs.kubernetes-helm
     pkgs.k3d
+    pkgs.k9s
 
     # For building MCP servers locally (optional)
     pkgs.rustc

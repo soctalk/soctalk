@@ -142,3 +142,58 @@ integration-test *EXTRA="tests/v1":
         export DATABASE_URL_APP=postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk; \
         export DATABASE_URL_MSSP=postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk; \
         .venv/bin/pytest -m integration {{EXTRA}}'
+
+# ---------------------------------------------------------------------------
+# Layer C — deploy SocTalk into the local k3d cluster.
+# ---------------------------------------------------------------------------
+#
+# Prerequisites:
+#   - scripts/local-up.sh has been run (cluster ``soctalk-local`` is up)
+#   - dev/values.local.yaml exists (committed; LLM key NOT committed —
+#     see the file header for how to inject one)
+#
+# First-light flow:
+#   just system-up
+#   # add /etc/hosts entries (see CONTRIBUTING.md "Layer C: deploying
+#   # SocTalk on the local k3d cluster")
+#   # open http://devlab.soctalk.local:8080 in a browser
+#
+# Inner dev loop after a code change:
+#   just system-reload
+#
+# Done for the day:
+#   just system-down
+
+# Build SocTalk images, import into the soctalk-local cluster, helm install / upgrade
+system-up:
+    just build-all
+    k3d image import \
+        cr.lab.atricore.io/soctalk-api:latest \
+        cr.lab.atricore.io/soctalk-orchestrator:latest \
+        cr.lab.atricore.io/soctalk-frontend:latest \
+        --cluster soctalk-local
+    helm upgrade --install soctalk-system charts/soctalk-system \
+        --namespace soctalk-system --create-namespace \
+        -f dev/values.local.yaml \
+        --wait
+    @echo ""
+    @echo "soctalk-system installed. Watch:"
+    @echo "  kubectl -n soctalk-system get pods -w"
+    @echo ""
+    @echo "UI:  http://devlab.soctalk.local:8080  (requires /etc/hosts)"
+
+# Rebuild images, re-import, rolling-restart deployments (skips helm)
+system-reload:
+    just build-all
+    k3d image import \
+        cr.lab.atricore.io/soctalk-api:latest \
+        cr.lab.atricore.io/soctalk-orchestrator:latest \
+        cr.lab.atricore.io/soctalk-frontend:latest \
+        --cluster soctalk-local
+    kubectl -n soctalk-system rollout restart deploy
+    kubectl -n soctalk-system rollout status deploy --timeout=3m
+
+# Helm-uninstall the release and delete the namespace
+system-down:
+    -helm -n soctalk-system uninstall soctalk-system
+    -kubectl delete ns soctalk-system --ignore-not-found
