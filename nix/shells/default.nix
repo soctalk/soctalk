@@ -141,6 +141,7 @@ in pkgs.mkShell {
     echo ""
     echo "  Kubernetes (Layer C, multi-tenant local stack):"
     echo "    ./scripts/dev-up.sh          # Create k3d cluster + Cilium + cert-manager"
+    echo "    ./scripts/dev-down.sh        # Tear down the k3d cluster + drop .kube/config"
     echo "    ./scripts/local-up.sh        # Slim k3d (no Cilium) for fast iteration"
     echo "    ./scripts/local-down.sh      # Tear down the local k3d cluster"
     echo "    helm install soctalk-system charts/soctalk-system ...   # Install control plane"
