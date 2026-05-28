@@ -32,35 +32,13 @@ router = APIRouter(prefix="/api/internal/worker", tags=["internal-worker"])
 LEASE_TTL_SECONDS = 60
 
 
-def _tenant_daily_token_cap() -> int:
-    """Per-tenant rolling 24h token ceiling enforced at claim time.
-
-    Acts as a circuit breaker against runaway alert volume — independent
-    of the per-run cap which can be defeated by a flood of cheap runs.
-    Default ``10_000_000`` (10M tokens, ~$50 at Sonnet mixed rates).
-    Override via ``SOCTALK_TENANT_DAILY_TOKEN_CAP``.
-    """
-    raw = os.getenv("SOCTALK_TENANT_DAILY_TOKEN_CAP", "")
-    try:
-        v = int(raw) if raw else 10_000_000
-    except ValueError:
-        v = 10_000_000
-    return v if v > 0 else 10_000_000
-
-
-def _tenant_daily_dollar_cap() -> float:
-    """Per-tenant rolling 24h dollar ceiling.
-
-    Companion to the token cap — whichever bites first stops claims for
-    the rest of the UTC day. Default ``50.0``. Override via
-    ``SOCTALK_TENANT_DAILY_DOLLAR_CAP``.
-    """
-    raw = os.getenv("SOCTALK_TENANT_DAILY_DOLLAR_CAP", "")
-    try:
-        v = float(raw) if raw else 50.0
-    except ValueError:
-        v = 50.0
-    return v if v > 0 else 50.0
+# Tenant daily spend cap helpers moved to ``soctalk.core.cost`` so the
+# chat handler can enforce the same ceiling. Re-export for back-compat.
+from soctalk.core.cost import (  # noqa: E402
+    assert_tenant_daily_cap_ok,
+    tenant_daily_dollar_cap as _tenant_daily_dollar_cap,
+    tenant_daily_token_cap as _tenant_daily_token_cap,
+)
 
 
 def _db(request: Request) -> AsyncSession:
@@ -136,50 +114,13 @@ async def claim_run(request: Request) -> ClaimedRun | None:
 
     async with tenant_context(db, tenant_id):
         # Circuit breaker: refuse to claim new runs once the tenant has
-        # blown through its rolling 24h spend ceiling. This is the only
-        # guard that bites *across* runs — the per-run cap can't see a
-        # flood of cheap runs adding up.
-        #
-        # Window keyed on *when the spend happened*, not when the row
-        # was inserted. Precedence:
-        #   1. ``ended_at`` — set when the run completes/fails.
-        #   2. ``lease_expires_at`` — refreshed by every heartbeat
-        #      (currently ~30s cadence). For long-running active runs
-        #      this is the only timestamp that stays current; without
-        #      it, a run that has been live for >24h would fall outside
-        #      the window and let its accumulated spend dodge the cap.
-        #   3. ``claimed_at`` — for runs claimed but no heartbeat yet.
-        #   4. ``started_at`` — last-resort, queued/unclaimed rows
-        #      (where tokens_used is 0 anyway, so harmless).
-        daily = (
-            await db.execute(
-                text(
-                    """
-                    SELECT COALESCE(SUM(tokens_used), 0)::bigint AS tokens,
-                           COALESCE(SUM(dollars_used), 0)::float AS dollars
-                    FROM investigation_runs
-                    WHERE tenant_id = :t
-                      AND COALESCE(ended_at, lease_expires_at, claimed_at, started_at)
-                          >= now() - interval '24 hours'
-                    """
-                ),
-                {"t": str(tenant_id)},
-            )
-        ).mappings().first()
-        token_cap = _tenant_daily_token_cap()
-        dollar_cap = _tenant_daily_dollar_cap()
-        if daily is not None and (
-            int(daily["tokens"]) >= token_cap
-            or float(daily["dollars"]) >= dollar_cap
-        ):
-            logger.warning(
-                "tenant_daily_cap_hit",
-                tenant_id=str(tenant_id),
-                tokens_24h=int(daily["tokens"]),
-                token_cap=token_cap,
-                dollars_24h=round(float(daily["dollars"]), 4),
-                dollar_cap=dollar_cap,
-            )
+        # blown through its rolling 24h spend ceiling. Shared with the
+        # chat path via ``soctalk.core.cost.assert_tenant_daily_cap_ok``
+        # so a busy chat session can't dodge the worker's cap and a
+        # flood of runs can't dodge the chat handler's cap.
+        if await assert_tenant_daily_cap_ok(
+            db, tenant_id, source="worker_claim"
+        ) is None:
             return None
 
         row = (

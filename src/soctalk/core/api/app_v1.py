@@ -24,6 +24,7 @@ from soctalk.core.agents import api as agents_routes
 from soctalk.core.api import adapter as adapter_routes
 from soctalk.core.api import auth as auth_routes
 from soctalk.core.api import branding as branding_routes
+from soctalk.core.api import chat as chat_routes
 from soctalk.core.api import health as health_routes
 from soctalk.core.api import ir as ir_routes
 from soctalk.core.api import llm_config as llm_routes
@@ -184,6 +185,9 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(legacy_stubs_routes.router)
     # L2-agent wire protocol (bearer-token auth, no session cookie).
     app.include_router(agents_routes.router)
+
+    # AI SOC analyst chat (per-investigation dock + global /chat).
+    app.include_router(chat_routes.router)
 
     # Native IR (AI-led) — enabled by default, always mounted.
     app.include_router(ir_routes.mssp_investigations_router)
