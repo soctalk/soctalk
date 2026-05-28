@@ -71,12 +71,36 @@ log "Installing Cilium ${CILIUM_VERSION}"
 helm repo add cilium https://helm.cilium.io/ >/dev/null
 helm repo update cilium >/dev/null
 
-# Determine k3s API server IP for kubeProxyReplacement
+# Determine k3s API server IP for kubeProxyReplacement.
+#
+# Two pitfalls Go templates / k3d hand us:
+#
+#   1. ``-f '{{.NetworkSettings.Networks.bridge.IPAddress}}'`` returns
+#      the literal string ``<no value>`` (NOT empty, NOT error) when
+#      the container is not on the ``bridge`` network. k3d puts the
+#      cluster on a custom network ``k3d-<CLUSTER_NAME>``, so the
+#      first inspect always returns ``<no value>``. Bash ``||`` does
+#      not fall through because the command itself succeeded.
+#
+#   2. ``{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}``
+#      concatenates IPs without separators when there are multiple
+#      networks, producing an invalid joined string.
+#
+# Filter ``<no value>`` explicitly, emit a newline per IP in the range,
+# pick the first non-empty one, and fail loud if the result is not a
+# valid IPv4 dotted quad — silently installing Cilium with a bogus
+# ``k8sServiceHost`` masquerades as success but breaks the entire CNI.
 API_IP="$(docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-    -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' 2>/dev/null || \
-    docker inspect "k3d-${CLUSTER_NAME}-server-0" \
-    -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')"
-API_IP="${API_IP:-127.0.0.1}"
+    -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' 2>/dev/null)"
+if [[ -z "$API_IP" || "$API_IP" == "<no value>" ]]; then
+    API_IP="$(docker inspect "k3d-${CLUSTER_NAME}-server-0" \
+        -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' \
+        | awk 'NF{print; exit}')"
+fi
+if [[ ! "$API_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    die "could not determine k3s API IP for cilium k8sServiceHost (got: '${API_IP}')"
+fi
+log "Cilium k8sServiceHost: ${API_IP}"
 
 helm upgrade --install cilium cilium/cilium --version "${CILIUM_VERSION}" \
     --namespace kube-system \
