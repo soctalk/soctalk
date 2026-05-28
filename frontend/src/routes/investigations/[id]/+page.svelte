@@ -5,6 +5,9 @@
 	import { api, type Investigation, type InvestigationTimelineEvent } from '$lib/api/client';
 	import { addToast, isCustomerScope } from '$lib/stores';
 	import { formatStatus, formatPhase, formatSeverity, formatDecision, formatDuration, formatEventType } from '$lib/utils/formatters';
+	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
+
+	let chatOpen = false;
 
 	let investigation: Investigation | null = null;
 	let events: InvestigationTimelineEvent[] = [];
@@ -292,6 +295,26 @@
 <svelte:head>
 	<title>{investigation?.title || 'Investigation'} - SocTalk</title>
 </svelte:head>
+
+{#if !loading && investigation}
+	<!-- Floating "Ask AI" trigger; opens the chat dock as an overlay. -->
+	<button
+		type="button"
+		class="chat-launcher btn variant-filled-primary"
+		on:click={() => (chatOpen = !chatOpen)}
+		title="Ask the SOC AI about this investigation"
+	>
+		<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+		</svg>
+		{chatOpen ? 'Close chat' : 'Ask AI'}
+	</button>
+	{#if chatOpen}
+		<aside class="chat-dock">
+			<ChatPanel investigationId={investigation.id} />
+		</aside>
+	{/if}
+{/if}
 
 {#if loading}
 	<div class="flex items-center justify-center h-64">
@@ -687,3 +710,31 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.chat-launcher {
+		position: fixed;
+		bottom: 1.5rem;
+		right: 1.5rem;
+		z-index: 60;
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+	}
+	.chat-dock {
+		position: fixed;
+		bottom: 5rem;
+		right: 1.5rem;
+		width: min(420px, calc(100vw - 3rem));
+		height: min(70vh, 640px);
+		z-index: 55;
+		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+		border-radius: 0.75rem;
+		overflow: hidden;
+	}
+	@media (max-width: 640px) {
+		.chat-dock {
+			right: 0.75rem;
+			bottom: 4.5rem;
+			width: calc(100vw - 1.5rem);
+		}
+	}
+</style>
