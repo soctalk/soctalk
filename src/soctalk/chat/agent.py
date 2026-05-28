@@ -67,8 +67,10 @@ from soctalk.chat.tools import (
 
 
 def _active_tools() -> list[ChatTool]:
-    """Read-only DB tools + dynamically-bound MCP tools."""
-    return [*AVAILABLE_TOOLS, *build_mcp_chat_tools()]
+    """Read-only DB tools + native Wazuh primitives + MCP-bound tools."""
+    from soctalk.chat.wazuh_primitives import WAZUH_CHAT_TOOLS
+
+    return [*AVAILABLE_TOOLS, *WAZUH_CHAT_TOOLS, *build_mcp_chat_tools()]
 
 
 def _find_tool(name: str, pool: list[ChatTool]) -> ChatTool | None:
