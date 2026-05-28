@@ -95,6 +95,19 @@ async def _lifespan(app: FastAPI):
         )
         logger.info("provisioning_worker_enabled")
 
+    # Bind MCP clients (Wazuh / Cortex / TheHive / MISP) for the chat
+    # agent's tool surface. Env-driven config — same vars the
+    # runs-worker uses (WAZUH_URL, WAZUH_API_USERNAME / PASSWORD, …).
+    # Failure is non-fatal: chat falls back to DB-only tools and the
+    # agent will say "I don't have a tool for that" rather than 500.
+    try:
+        from soctalk.mcp import bind_clients as _bind_mcp_clients
+
+        await _bind_mcp_clients()
+        logger.info("api_mcp_clients_bound")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_mcp_clients_skipped", err=str(e)[:200])
+
     reaper_stop = asyncio.Event()
     reaper_task = asyncio.create_task(
         _lease_reaper_loop(reaper_stop), name="lease-reaper"

@@ -57,13 +57,25 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.chat import actions, prompts, sse
+from soctalk.chat.mcp_tools import build_mcp_chat_tools
 from soctalk.chat.tools import (
     AVAILABLE_TOOLS,
     ChatTool,
     ToolResult,
-    find_tool,
     get_investigation,
 )
+
+
+def _active_tools() -> list[ChatTool]:
+    """Read-only DB tools + dynamically-bound MCP tools."""
+    return [*AVAILABLE_TOOLS, *build_mcp_chat_tools()]
+
+
+def _find_tool(name: str, pool: list[ChatTool]) -> ChatTool | None:
+    for t in pool:
+        if t.name == name:
+            return t
+    return None
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
 from soctalk.llm import create_chat_model
@@ -268,7 +280,7 @@ async def _dispatch_tool(
 # ---------------------------------------------------------------------------
 
 
-def _tool_specs_for_binding() -> list[dict[str, Any]]:
+def _tool_specs_for_binding(pool: list[ChatTool]) -> list[dict[str, Any]]:
     """Render tool schemas in the LangChain ``tool`` format."""
     return [
         {
@@ -279,7 +291,7 @@ def _tool_specs_for_binding() -> list[dict[str, Any]]:
                 "parameters": t.schema,
             },
         }
-        for t in AVAILABLE_TOOLS
+        for t in pool
     ]
 
 
@@ -435,8 +447,11 @@ async def run_turn(
         temperature=0.2,
         max_tokens=2048,
     )
+    # Snapshot the active toolset for this turn — read-only DB tools
+    # plus whatever MCP servers (Wazuh, Cortex, …) are currently bound.
+    active_pool = _active_tools()
     try:
-        llm = llm.bind_tools(_tool_specs_for_binding())
+        llm = llm.bind_tools(_tool_specs_for_binding(active_pool))
     except (AttributeError, TypeError):
         # Some providers don't support bind_tools; the loop still
         # works as a chat-only agent without tool calls.
@@ -548,7 +563,7 @@ async def run_turn(
                 call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 call_id = call_id or str(uuid4())
 
-                tool = find_tool(tname or "")
+                tool = _find_tool(tname or "", active_pool)
                 yield sse.tool_call(call_id, tname or "", targs or {})
 
                 if tool is None:
