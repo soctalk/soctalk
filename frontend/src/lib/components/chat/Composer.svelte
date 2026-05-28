@@ -47,7 +47,7 @@
 		rows="1"
 		{disabled}
 		class="textarea flex-1 resize-none"
-		style="min-height: 38px; max-height: 160px;"
+		style="min-height: 38px; max-height: 160px; padding: 0.5rem 0.875rem; line-height: 1.4;"
 	></textarea>
 	<button
 		type="submit"
