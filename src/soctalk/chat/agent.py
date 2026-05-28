@@ -407,6 +407,28 @@ async def run_turn(
     history = await _load_history(db, ctx.conversation_id)
     messages = _build_messages(history, system_prompt=system_prompt)
 
+    # Defensive: ensure the CURRENT user message is in the list. The
+    # handler persists ``ctx.user_text`` to chat_messages BEFORE
+    # invoking ``run_turn`` and the middleware commits the row well
+    # before this stream session's transaction begins — but pgbouncer
+    # / asyncpg pool reuse + SQLAlchemy session snapshotting can in
+    # rare cases hand us a session whose snapshot pre-dates the
+    # commit, returning empty ``history`` and producing
+    # ``messages: [SystemMessage]``. Anthropic rejects that with 400
+    # ("at least one message is required"). Appending ctx.user_text
+    # when history's last user message isn't ours costs us nothing on
+    # the happy path and saves the turn from silently failing.
+    last_user_text = next(
+        (
+            (r.get("content") or {}).get("text")
+            for r in reversed(history)
+            if r["role"] == "user"
+        ),
+        None,
+    )
+    if last_user_text != ctx.user_text:
+        messages.append(HumanMessage(content=ctx.user_text))
+
     # 3. Set up the model with tools.
     app_config = get_config()
     llm = create_chat_model(
