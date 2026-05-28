@@ -29,7 +29,7 @@ let
     alembic
     psycopg2
     greenlet
-    
+
     # Type stubs
     types-requests
   ]);
@@ -72,6 +72,16 @@ in pkgs.mkShell {
     pkgs.git
     pkgs.just
 
+    # Kubernetes tooling (Layer C — multi-tenant local stack on k3d).
+    # See scripts/dev-up.sh for the cluster-bring-up procedure these
+    # tools drive (k3d cluster + Cilium CNI + cert-manager), and the
+    # README "Multi-tenant deployment" section for the architecture.
+    # Docker itself is NOT Nix-managed — the host must provide it
+    # (Docker Desktop / Colima / native dockerd on Linux).
+    pkgs.kubectl
+    pkgs.kubernetes-helm
+    pkgs.k3d
+
     # For building MCP servers locally (optional)
     pkgs.rustc
     pkgs.cargo
@@ -103,6 +113,9 @@ in pkgs.mkShell {
     echo "Node.js: $(node --version)"
     echo "pnpm: $(pnpm --version)"
     echo "PostgreSQL client: $(psql --version | head -1)"
+    echo "kubectl: $(kubectl version --client -o json 2>/dev/null | jq -r .clientVersion.gitVersion 2>/dev/null || kubectl version --client --short 2>/dev/null | head -1)"
+    echo "helm: $(helm version --short 2>/dev/null)"
+    echo "k3d: $(k3d version 2>/dev/null | head -1)"
     echo ""
     echo "Commands:"
     echo "  Backend:"
@@ -125,6 +138,14 @@ in pkgs.mkShell {
     echo "    just build-all               # Build all images"
     echo "    just run                     # Run all services"
     echo "    just                         # Show all targets"
+    echo ""
+    echo "  Kubernetes (Layer C, multi-tenant local stack):"
+    echo "    ./scripts/dev-up.sh          # Create k3d cluster + Cilium + cert-manager"
+    echo "    ./scripts/local-up.sh        # Slim k3d (no Cilium) for fast iteration"
+    echo "    ./scripts/local-down.sh      # Tear down the local k3d cluster"
+    echo "    helm install soctalk-system charts/soctalk-system ...   # Install control plane"
+    echo "    kubectl -n soctalk-system get pods                      # Watch boot"
+    echo "    kubectl get ns                                          # See tenant-* namespaces"
     echo ""
     echo "  Nix:"
     echo "    nix build .#soctalk-api      # Build API package"
