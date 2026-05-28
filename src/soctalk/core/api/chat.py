@@ -317,7 +317,27 @@ async def delete_conversation(conv_id: str, request: Request) -> dict[str, bool]
 async def post_message(
     conv_id: str, body: _PostMessageBody, request: Request
 ) -> StreamingResponse:
-    """Append a user message and stream the assistant's reply."""
+    """Append a user message and stream the assistant's reply.
+
+    Session lifecycle is subtle:
+
+    * Pre-stream reads/writes (lock the conversation row, daily cap
+      check, persist the user message, pre-load investigation summary)
+      happen on the **request-bound session**. The middleware commits
+      this session when the route returns 200, which releases the FOR
+      UPDATE lock — fine, the lock's job is done by then.
+    * The streaming agent loop runs on a **fresh session** opened
+      inside the stream generator. Reusing the request session here
+      blew up with ``asyncpg.InterfaceError: another operation in
+      progress`` because the middleware's commit fires the moment the
+      route returns the StreamingResponse, while the agent is still
+      mid-query.
+
+    Role-aware: MSSP-level callers get a BYPASSRLS session for the
+    stream (so the agent's read tools can answer cross-tenant
+    questions); tenant-level callers get an app session with
+    ``tenant_context`` pinned to their home tenant.
+    """
     identity = current_identity(request)
     db = _db(request)
 
@@ -386,14 +406,9 @@ async def post_message(
         except Exception:  # noqa: BLE001
             summary = None
 
-    # Commit so the user row is visible to the streaming generator
-    # (which uses a separate session would otherwise see nothing —
-    # in fact we reuse this session, but committing here releases the
-    # FOR UPDATE lock; we'll re-take it inside run_turn? Simpler:
-    # leave the lock held and stream from this same session.
-    # SQLAlchemy autoflushes on next execute so the row is visible
-    # within this transaction.
-
+    # Capture pre-stream context (the agent only needs values, not the
+    # request session itself — by the time _stream() runs the
+    # middleware has already committed and the session is closing).
     ctx = TurnContext(
         conversation_id=conv_uuid,
         tenant_id=tenant_id,
@@ -408,20 +423,59 @@ async def post_message(
         user_text=body.text,
     )
 
+    is_mssp = identity.role in MSSP_LEVEL_ROLES
+
     async def _stream() -> Any:
+        from soctalk.core.tenancy.context import tenant_context
+        from soctalk.core.tenancy.db import (
+            get_app_sessionmaker,
+            get_mssp_sessionmaker,
+        )
+
+        # Fresh session for the agent loop — the request-bound session
+        # has been (or is about to be) committed by the middleware on
+        # the 200 response. Reusing it triggers asyncpg's "another
+        # operation in progress" InterfaceError mid-stream.
+        if is_mssp:
+            sm = get_mssp_sessionmaker()
+            tctx = None
+        else:
+            sm = get_app_sessionmaker()
+            tctx = identity.tenant_id
+
         try:
-            disco_task = asyncio.create_task(_poll_disconnect(request, ctx))
-            try:
-                async for frame in run_turn(db, ctx):
-                    yield frame
-            finally:
-                ctx.disconnected.set()
-                disco_task.cancel()
+            async with sm() as stream_db:
+                if tctx is not None:
+                    async with tenant_context(stream_db, tctx):
+                        async for frame in _run_with_disconnect(
+                            request, ctx, stream_db
+                        ):
+                            yield frame
+                        await stream_db.commit()
+                else:
+                    async for frame in _run_with_disconnect(
+                        request, ctx, stream_db
+                    ):
+                        yield frame
+                    await stream_db.commit()
         except asyncio.CancelledError:
             ctx.disconnected.set()
             raise
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+async def _run_with_disconnect(
+    request: Request, ctx: TurnContext, db: AsyncSession
+) -> Any:
+    """Wrap ``run_turn`` with the disconnect-poller task lifecycle."""
+    disco_task = asyncio.create_task(_poll_disconnect(request, ctx))
+    try:
+        async for frame in run_turn(db, ctx):
+            yield frame
+    finally:
+        ctx.disconnected.set()
+        disco_task.cancel()
 
 
 async def _poll_disconnect(request: Request, ctx: TurnContext) -> None:
