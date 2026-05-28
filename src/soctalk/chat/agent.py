@@ -447,7 +447,20 @@ async def run_turn(
             turn_dollars_this_call = float(state["dollars_used"])
             total_turn_dollars += turn_dollars_this_call
 
-            response_text = response.content or ""
+            # Anthropic-via-LangChain returns ``response.content`` as
+            # *either* a plain string (text-only turn) or a list of
+            # content blocks (text + tool_use mixed). Flatten to a
+            # single string so the action-block regex + delta stream
+            # work uniformly.
+            raw_content = response.content
+            if isinstance(raw_content, list):
+                response_text = "".join(
+                    b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
+                    else (b if isinstance(b, str) else "")
+                    for b in raw_content
+                )
+            else:
+                response_text = raw_content or ""
             tool_calls = getattr(response, "tool_calls", None) or []
 
             # Update message list with the model's response for the
