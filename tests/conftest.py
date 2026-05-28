@@ -1,5 +1,19 @@
-"""Pytest fixtures for soctalk tests."""
+"""Pytest fixtures for soctalk tests.
 
+Module-level side effect: default ``DATABASE_URL_ADMIN/APP/MSSP`` to the
+local integration Postgres on port 5432 if the caller didn't set them.
+Matches the URL shape that ``just integration-up`` provisions and that CI
+exports in ``.github/workflows/v1-ci.yml``.
+
+The V1 RLS / IR test files read these vars via their own ``_url()`` helpers.
+Two provisioning test files (``test_provisioning_controller.py``,
+``test_provisioning_k3d_live.py``) carry a stale port-5444 default in
+their local helpers; setting the env vars here overrides those stale
+defaults so ``patagon_check`` and other bare-``pytest`` invocations talk
+to the same Postgres the rest of the suite uses.
+"""
+
+import os
 from datetime import datetime
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
@@ -7,6 +21,20 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+os.environ.setdefault(
+    "DATABASE_URL_ADMIN",
+    "postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk",
+)
+os.environ.setdefault(
+    "DATABASE_URL_APP",
+    "postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk",
+)
+os.environ.setdefault(
+    "DATABASE_URL_MSSP",
+    "postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk",
+)
 
 from soctalk.persistence.events import EventType
 from soctalk.persistence.models import (

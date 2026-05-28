@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -249,7 +249,10 @@ class AgentJobEvent(SQLModel, table=True):
             ForeignKey("agent_jobs.id", ondelete="CASCADE"), nullable=False
         )
     )
-    seq: int = Field(sa_column=Column(nullable=False))
+    # Explicit ``Integer`` type matches the migration's ``sa.Integer()`` and
+    # lets ``SQLModel.metadata.create_all`` emit DDL when the model is loaded
+    # alongside legacy tests that hand-build the schema (vs. running alembic).
+    seq: int = Field(sa_column=Column(Integer, nullable=False))
     event_type: str = Field(sa_column=Column(Text, nullable=False))
     timestamp: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)

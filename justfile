@@ -77,3 +77,68 @@ push-all:
 # Build and push all images
 release: build-all push-all
     @echo "Release complete!"
+
+# ---------------------------------------------------------------------------
+# Integration testing — local Postgres with the three V1 SocTalk roles.
+# ---------------------------------------------------------------------------
+#
+# The V1 RLS / migration / IR integration tests under tests/v1/ require:
+#   - postgres:16-alpine on port 5432
+#   - three roles (soctalk_admin CREATEROLE, soctalk_app, soctalk_mssp BYPASSRLS)
+#   - alembic migrations applied up to head
+#
+# CI bootstraps these inline in .github/workflows/v1-ci.yml. These recipes
+# stand up the same shape locally so ``pytest -m integration`` sees what CI
+# sees.
+#
+# Each Python-invoking recipe runs through ``direnv exec .`` to load the
+# Nix dev shell's environment (Python, psql, libstdc++ via LD_LIBRARY_PATH,
+# etc.). The dev shell hook in nix/shells/default.nix is responsible for
+# setting LD_LIBRARY_PATH; recipes here do not duplicate that.
+
+# Brings up two containers:
+#   - soctalk-postgres on 5432  (V1 multi-tenant suite; 3 roles + migrations)
+#   - soctalk-postgres-test on 5433 (legacy single-tenant recovery suite;
+#                                    docker-compose.test.yml, ephemeral)
+
+# Start integration Postgres (3 SocTalk roles + head migration; idempotent)
+integration-up:
+    docker compose up -d postgres
+    docker compose -f docker-compose.test.yml up -d
+    scripts/wait-for-pg.sh
+    CONTAINER=soctalk-postgres-test PGUSER=soctalk_test PGDATABASE=soctalk_test \
+        scripts/wait-for-pg.sh
+    docker exec -i soctalk-postgres psql -U soctalk -d soctalk -v ON_ERROR_STOP=1 \
+        < scripts/pg-bootstrap-roles.sql
+    @direnv exec . bash -c '\
+        export DATABASE_URL=postgresql+psycopg2://soctalk_admin:soctalk_admin@localhost:5432/soctalk; \
+        .venv/bin/alembic upgrade head'
+    @echo ""
+    @echo "Integration Postgres ready:"
+    @echo "  localhost:5432  V1 multi-tenant (3 roles, migrations applied)"
+    @echo "    soctalk_admin / soctalk_admin   (DDL, RLS-subject)"
+    @echo "    soctalk_app   / soctalk_app     (runtime, RLS-subject)"
+    @echo "    soctalk_mssp  / soctalk_mssp    (BYPASSRLS)"
+    @echo "  localhost:5433  legacy single-tenant (tmpfs, schema created per test)"
+    @echo "    soctalk_test  / soctalk_test    (superuser)"
+    @echo ""
+    @echo "Run tests with:  just integration-test"
+
+# Stop integration Postgres (preserves data volume)
+integration-down:
+    docker compose stop postgres
+    docker compose -f docker-compose.test.yml stop
+
+# Destroy integration Postgres + data volume (next integration-up re-bootstraps)
+integration-wipe:
+    docker compose down postgres
+    docker compose -f docker-compose.test.yml down
+    docker volume rm soctalk_postgres_data 2>/dev/null || true
+
+# Run V1 integration tests against the local Postgres (defaults to tests/v1; pass paths/flags to narrow)
+integration-test *EXTRA="tests/v1":
+    @direnv exec . bash -c '\
+        export DATABASE_URL_ADMIN=postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk; \
+        export DATABASE_URL_APP=postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk; \
+        export DATABASE_URL_MSSP=postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk; \
+        .venv/bin/pytest -m integration {{EXTRA}}'

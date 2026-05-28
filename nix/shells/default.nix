@@ -145,17 +145,42 @@ in pkgs.mkShell {
     export OPENSSL_DIR="${pkgs.openssl.dev}"
     export OPENSSL_LIB_DIR="${pkgs.openssl.out}/lib"
     export OPENSSL_INCLUDE_DIR="${pkgs.openssl.dev}/include"
+
+    # Make NIX_LD_LIBRARY_PATH effective for every command run inside the
+    # dev shell. Scoped to the shell hook (not the mkShell env block) so
+    # it does NOT propagate to ``nix`` invocations made from outside the
+    # shell. Required for the SQLAlchemy greenlet C extension and any
+    # other wheel whose .so has NEEDED libstdc++.so.6. See CONTRIBUTING.md
+    # "Working with the Nix dev shell" for the runtime invariant this
+    # enforces and for the discipline rule that tools like opencode must
+    # be launched from inside this shell. The double-single-quote prefix
+    # below is Nix escape syntax to pass the bash parameter-expansion
+    # through to the runtime shell verbatim.
+    export LD_LIBRARY_PATH="$NIX_LD_LIBRARY_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   '';
 
   # Environment variables
   RUST_LOG = "info";
   SOCTALK_LOG_LEVEL = "DEBUG";
   
-  # Note: We intentionally do NOT set LD_LIBRARY_PATH globally as it breaks
-  # system tools like `nix`. If you need it for pip install, set it locally:
-  #   LD_LIBRARY_PATH=$NIX_LD_LIBRARY_PATH pip install ...
-  
-  # For packages that need native libs during pip install
+  # LD_LIBRARY_PATH scope policy:
+  #
+  # We deliberately set ``LD_LIBRARY_PATH`` inside the ``shellHook`` (above),
+  # NOT here in the ``mkShell`` env attribute block. The mkShell variant
+  # would bake the var into the derivation, so any process that inherits
+  # the dev-shell env — including ``nix`` invocations themselves — would
+  # see the foreign libstdc++ on their search path. ``nix`` is a
+  # statically-shipped binary that does not tolerate that well.
+  #
+  # Scoping the export to the shellHook keeps the var out of the
+  # derivation while still ensuring every command an engineer runs in
+  # the shell (pytest, alembic, the API server, opencode) inherits it
+  # and can resolve libstdc++.so.6. ``nix`` from outside this shell is
+  # unaffected.
+  #
+  # ``NIX_LD_LIBRARY_PATH`` (below) is the set of libraries the shellHook
+  # turns into ``LD_LIBRARY_PATH``. Add new entries here when a Python
+  # wheel's C extension fails to resolve a new NEEDED library.
   NIX_LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
     pkgs.stdenv.cc.cc.lib
     pkgs.openssl
