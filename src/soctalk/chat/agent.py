@@ -116,7 +116,14 @@ class TurnContext:
 async def _load_history(
     db: AsyncSession, conversation_id: UUID
 ) -> list[dict[str, Any]]:
-    """Pull the conversation log in insertion order."""
+    """Pull the conversation log in insertion order.
+
+    JSONB columns come back from asyncpg as *str* when accessed via
+    raw ``text()`` SQL (no SQLAlchemy column type info). Deserialise
+    explicitly so downstream ``content.get('text')`` works — without
+    this the agent silently dropped every user message and Anthropic
+    rejected the turn with ``messages: at least one message is required``.
+    """
     rows = (
         await db.execute(
             text(
@@ -130,7 +137,17 @@ async def _load_history(
             {"cid": str(conversation_id)},
         )
     ).mappings().all()
-    return [dict(r) for r in rows]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        c = d.get("content")
+        if isinstance(c, str):
+            try:
+                d["content"] = json.loads(c)
+            except (TypeError, ValueError):
+                d["content"] = {}
+        out.append(d)
+    return out
 
 
 def _summarise_tool_row(row: dict[str, Any]) -> str:
