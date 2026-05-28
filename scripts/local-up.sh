@@ -14,8 +14,7 @@
 #
 # Usage:
 #   scripts/local-up.sh
-#   export KUBECONFIG=$PWD/kubeconfig.local
-#   kubectl get nodes
+#   kubectl get nodes        # .envrc already exports KUBECONFIG=$PWD/.kube/config
 #
 # Tear down:
 #   scripts/local-down.sh
@@ -27,7 +26,13 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CLUSTER_NAME="${CLUSTER_NAME:-soctalk-local}"
-KCFG="${PWD}/kubeconfig.local"
+# Project-local kubeconfig. ``.envrc`` exports KUBECONFIG to the same
+# path so commands in any direnv-allowed shell talk to this cluster
+# without explicit overrides. Older versions of this script wrote to
+# ``./kubeconfig.local`` at the repo root; ``.kube/config`` is the new
+# canonical location shared with scripts/dev-up.sh.
+mkdir -p "${PWD}/.kube"
+KCFG="${PWD}/.kube/config"
 CONFIG="scripts/k3d-local.yaml"
 
 if k3d cluster list -o json 2>/dev/null | grep -q "\"name\": \"${CLUSTER_NAME}\""; then

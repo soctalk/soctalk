@@ -67,6 +67,30 @@ inherits its parent's environment. Concretely:
 | `opencode` | The same dev shell. `cd` into the project, then `direnv allow` (one-time), then `opencode`. If opencode is started from a desktop launcher or a terminal that did not enter the dev shell, it will not have `LD_LIBRARY_PATH` set and `patagon_check` (which spawns `pytest`) will fail with the libstdc++ ImportError. Restart opencode from inside the dev shell to recover. |
 | `just` recipes | Inside or outside the dev shell — the `integration-*` recipes wrap their Python invocations in `direnv exec .` so they self-bootstrap. |
 
+### Project-local Kubernetes config
+
+The dev shell auto-exports `KUBECONFIG=$PWD/.kube/config` (see `.envrc`).
+Every cluster operation invoked from inside the project — `k3d cluster
+create`, `helm install`, `kubectl …` — reads and writes that file. The
+user's `~/.kube/config` is left alone.
+
+* `scripts/dev-up.sh` (full k3d + Cilium + cert-manager) and
+  `scripts/local-up.sh` (slim k3d) both materialise the cluster's
+  kubeconfig into `$PWD/.kube/config`. They no longer touch
+  `~/.kube/config`.
+* `scripts/local-down.sh` and `k3d cluster delete <name>` remove the
+  cluster; the kubeconfig file is left for inspection (delete manually
+  with `rm .kube/config` if you want a clean slate).
+* `starship` (or any prompt that reads `kubectl config current-context`)
+  only shows the cluster badge while you're in the project directory.
+* Outside the project, `KUBECONFIG` is unset and `kubectl` falls back to
+  `~/.kube/config`, which is whatever lab/cloud context you had before.
+
+If you want to merge a project-local cluster into your normal kubeconfig
+on an ad-hoc basis, set `KUBECONFIG=$PWD/.kube/config:~/.kube/config`
+for that one command and `kubectl config view --merge --flatten` will
+emit a combined config.
+
 ### Troubleshooting
 
 | Symptom | Diagnosis | Fix |

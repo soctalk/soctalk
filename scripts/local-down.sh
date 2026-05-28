@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CLUSTER_NAME="${CLUSTER_NAME:-soctalk-local}"
-KCFG="${PWD}/kubeconfig.local"
+KCFG="${PWD}/.kube/config"
 
 if k3d cluster list -o json 2>/dev/null | grep -q "\"name\": \"${CLUSTER_NAME}\""; then
   k3d cluster delete "${CLUSTER_NAME}"

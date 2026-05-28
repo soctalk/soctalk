@@ -77,6 +77,9 @@ backups/
 result
 result-*
 
-# Local k3d profile (scripts/local-up.sh) writes a self-contained kubeconfig here.
-# Lab access uses the user's normal ~/.kube/config; nothing committed.
-/kubeconfig.local
+# Project-local kubeconfig directory. ``.envrc`` exports
+# ``KUBECONFIG=$PWD/.kube/config`` so every cluster operation
+# (``k3d cluster create``, ``helm install``, ``kubectl ...``) writes
+# here instead of the user's ~/.kube/config. Both scripts/dev-up.sh
+# and scripts/local-up.sh emit into this directory.
+/.kube/
