@@ -212,23 +212,21 @@ def _build_messages(
                 # Older assistant — still keep, but trimmed.
                 out.append(AIMessage(content=text_val[:400]))
         elif role == "tool":
-            # Always summarise tool calls from prior turns as a system
-            # note rather than emitting a ``ToolMessage``. Anthropic
-            # requires every ``tool_result`` block to be preceded by
-            # the assistant message containing the matching
-            # ``tool_use`` block. We DON'T persist the assistant's raw
-            # tool_use intent (only its text reply) — so reconstructing
-            # the chain would always orphan the tool_result and
-            # Anthropic rejects the turn with 400. The summary
-            # preserves the *information* the model needs to remember
-            # without forcing the brittle ordering reconstruction.
-            #
-            # In-turn tool calls (within the same ``run_turn``
-            # iteration) DO get proper ToolMessage round-trips because
-            # they're appended directly to ``messages`` after the
-            # corresponding response — those flow via a different code
-            # path and don't come from this history rebuild.
-            out.append(SystemMessage(content=_summarise_tool_row(row)))
+            # Drop tool rows from the history-replay entirely. Reasons:
+            # 1. Anthropic forbids ``tool_result`` blocks that aren't
+            #    immediately preceded by the matching ``tool_use``
+            #    block from the assistant — we don't persist tool_use
+            #    intents in chat_messages, so we can't reconstruct the
+            #    chain.
+            # 2. ``SystemMessage`` workaround for the summary is itself
+            #    rejected by langchain-anthropic with
+            #    ``ValueError: Received multiple non-consecutive system
+            #    messages`` — only ONE system message is allowed and
+            #    it must lead.
+            # The assistant's text reply for the prior turn *already*
+            # incorporates the tool result; dropping the raw tool row
+            # loses nothing the model can't recover via a fresh call.
+            continue
         elif role == "system":
             # In-line system note (rare; e.g. budget warning). Preserve.
             out.append(SystemMessage(content=content.get("text") or ""))
