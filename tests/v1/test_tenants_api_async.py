@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from soctalk.core.tenancy.models import (
+    IntegrationConfig,
     Organization,
     ProvisioningJob,
     Tenant,
@@ -232,3 +233,58 @@ async def test_decommission_is_idempotent_under_double_call(
         )
     ).scalars().all()
     assert len(jobs) == 1
+
+
+async def test_provided_profile_persists_external_wazuh_fields(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """The 'provided' deployment profile lets a tenant point at an
+    external Wazuh deployment. The five new IntegrationConfig.wazuh_*
+    credential / endpoint columns must round-trip via Postgres so the
+    renderer (next feature) can read them back when building the
+    adapter values.
+    """
+    tenant = Tenant(
+        slug=f"pv{uuid4().hex[:8]}",
+        display_name="Provided-SIEM Tenant",
+        state=TenantState.PENDING.value,
+        profile="provided",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.flush()
+
+    integration = IntegrationConfig(
+        tenant_id=tenant.id,
+        wazuh_enabled=True,
+        wazuh_username="soctalk-adapter",
+        wazuh_password_plain="s3cret-pw-" + uuid4().hex,
+        wazuh_api_token_plain="tok-" + uuid4().hex,
+        wazuh_indexer_url="https://indexer.example.com:9200",
+        wazuh_api_url="https://wazuh.example.com:55000",
+    )
+    mssp_session.add(integration)
+    await mssp_session.commit()
+
+    # Drop ORM cache so we hit the DB on the next read.
+    mssp_session.expunge_all()
+
+    read_back = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+
+    assert read_back.wazuh_username == integration.wazuh_username
+    assert read_back.wazuh_password_plain == integration.wazuh_password_plain
+    assert read_back.wazuh_api_token_plain == integration.wazuh_api_token_plain
+    assert read_back.wazuh_indexer_url == integration.wazuh_indexer_url
+    assert read_back.wazuh_api_url == integration.wazuh_api_url
+
+    # Tenant.profile also round-trips with the new enum value.
+    tenant_read = (
+        await mssp_session.execute(select(Tenant).where(Tenant.id == tenant.id))
+    ).scalar_one()
+    assert tenant_read.profile == "provided"

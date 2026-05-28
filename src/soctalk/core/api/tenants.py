@@ -71,7 +71,7 @@ class TenantOnboard(BaseModel):
     slug: str = Field(..., pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", max_length=63)
     display_name: str = Field(..., min_length=1, max_length=255)
     # Step 2 — deployment profile
-    profile: str = Field(..., pattern=r"^(poc|persistent)$")
+    profile: str = Field(..., pattern=r"^(poc|persistent|provided)$")
     # Step 3 — branding + contact (all optional, defaults handled server-side)
     branding_app_name: str | None = Field(default=None, max_length=255)
     branding_logo_url: str | None = Field(default=None, max_length=500)

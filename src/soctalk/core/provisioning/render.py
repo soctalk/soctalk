@@ -24,7 +24,7 @@ from typing import Any, Literal
 from soctalk.core.tenancy.models import BrandingConfig, IntegrationConfig, Tenant
 
 
-Profile = Literal["poc", "persistent", "legacy"]
+Profile = Literal["poc", "persistent", "provided", "legacy"]
 
 
 def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:

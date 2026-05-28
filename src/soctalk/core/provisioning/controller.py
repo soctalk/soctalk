@@ -289,7 +289,7 @@ class TenantController:
         integration = await self._load_integration(tenant.id)
         branding = await self._load_branding(tenant.id)
 
-        profile: Profile = tenant.profile if tenant.profile in ("poc", "persistent") else "poc"
+        profile: Profile = tenant.profile if tenant.profile in ("poc", "persistent", "provided") else "poc"
         ctx = _StepContext(
             tenant=tenant,
             organization=org,

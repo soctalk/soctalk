@@ -30,7 +30,7 @@ async function _request<T>(endpoint: string, init: RequestInit = {}): Promise<T>
 	return (await r.json()) as T;
 }
 
-export type TenantProfile = 'poc' | 'persistent' | 'legacy';
+export type TenantProfile = 'poc' | 'persistent' | 'provided' | 'legacy';
 
 export type TenantState =
 	| 'pending'
@@ -56,7 +56,7 @@ export interface Tenant {
 export interface TenantOnboard {
 	slug: string;
 	display_name: string;
-	profile: 'poc' | 'persistent';
+	profile: 'poc' | 'persistent' | 'provided';
 	branding_app_name?: string | null;
 	branding_logo_url?: string | null;
 	branding_primary_color?: string | null;

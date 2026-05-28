@@ -142,7 +142,9 @@ class Tenant(SQLModel, table=True):
     display_name: str = Field(max_length=255)
     state: str = Field(default=TenantState.PENDING.value, max_length=32)
     # Deployment profile: 'poc' (ephemeral), 'persistent' (single-node
-    # durable), or 'legacy' (pre-wizard tenants — don't re-derive).
+    # durable), 'provided' (tenant brings their own external Wazuh; SocTalk
+    # only deploys the adapter + runs-worker), or 'legacy' (pre-wizard
+    # tenants — don't re-derive).
     profile: str = Field(default="poc", max_length=16)
     # Association back to the install's Organization row.
     organization_id: UUID = Field(
@@ -228,6 +230,16 @@ class IntegrationConfig(SQLModel, table=True):
     # -wazuh-indexer and :55000 → :9200. See docs/mssp-chat-plan.md.
     wazuh_indexer_url: str | None = Field(default=None, max_length=500)
     wazuh_verify_ssl: bool = Field(default=True)
+    # External Wazuh credentials (populated only for the ``provided`` profile,
+    # where the tenant brings their own Wazuh deployment rather than having
+    # SocTalk provision one in-namespace). Plaintext storage mirrors the
+    # existing ``llm_api_key_plain`` compromise; KMS/Fernet hardening is
+    # tracked as a cross-column follow-up.
+    wazuh_username: str | None = Field(default=None, max_length=255)
+    wazuh_password_plain: str | None = Field(default=None, max_length=4096)
+    wazuh_api_token_plain: str | None = Field(default=None, max_length=4096)
+    wazuh_indexer_url: str | None = Field(default=None, max_length=500)
+    wazuh_api_url: str | None = Field(default=None, max_length=500)
     # TheHive
     thehive_enabled: bool = Field(default=True)
     thehive_url: str | None = Field(default=None, max_length=500)
