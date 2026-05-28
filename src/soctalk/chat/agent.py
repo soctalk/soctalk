@@ -212,18 +212,23 @@ def _build_messages(
                 # Older assistant — still keep, but trimmed.
                 out.append(AIMessage(content=text_val[:400]))
         elif role == "tool":
-            if keep_full:
-                # Most recent tool result — pass full structured result.
-                out.append(
-                    ToolMessage(
-                        content=json.dumps(content.get("result") or {}, default=str),
-                        tool_call_id=content.get("call_id", "older"),
-                    )
-                )
-            else:
-                # Evictable — replace with one-line summary as a system
-                # message (avoids the tool_call_id round-trip).
-                out.append(SystemMessage(content=_summarise_tool_row(row)))
+            # Always summarise tool calls from prior turns as a system
+            # note rather than emitting a ``ToolMessage``. Anthropic
+            # requires every ``tool_result`` block to be preceded by
+            # the assistant message containing the matching
+            # ``tool_use`` block. We DON'T persist the assistant's raw
+            # tool_use intent (only its text reply) — so reconstructing
+            # the chain would always orphan the tool_result and
+            # Anthropic rejects the turn with 400. The summary
+            # preserves the *information* the model needs to remember
+            # without forcing the brittle ordering reconstruction.
+            #
+            # In-turn tool calls (within the same ``run_turn``
+            # iteration) DO get proper ToolMessage round-trips because
+            # they're appended directly to ``messages`` after the
+            # corresponding response — those flow via a different code
+            # path and don't come from this history rebuild.
+            out.append(SystemMessage(content=_summarise_tool_row(row)))
         elif role == "system":
             # In-line system note (rare; e.g. budget warning). Preserve.
             out.append(SystemMessage(content=content.get("text") or ""))
