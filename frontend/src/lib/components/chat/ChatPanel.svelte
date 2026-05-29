@@ -3,30 +3,47 @@
   and reused full-bleed on /chat. Owns one chat store instance.
 
   Props:
-    investigationId  string | null  — pre-load conversation for this case
+    conversationId   string | null  — load this exact conversation by id.
+                                      Takes precedence over investigationId
+                                      (the /chat list uses this).
+    investigationId  string | null  — pre-load any active conversation for
+                                      this case (or create one).
     height           string         — CSS height (defaults to 100%)
 -->
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
 	import { createChatStore } from '$lib/stores/chat';
 	import Composer from './Composer.svelte';
-	import CostFooter from './CostFooter.svelte';
 	import MessageList from './MessageList.svelte';
 
+	export let conversationId: string | null = null;
 	export let investigationId: string | null = null;
 	export let height = '100%';
 
 	const chat = createChatStore();
 	const { state } = chat;
+	// Lets the parent (/chat page) refresh its conversation list after
+	// a turn — picks up mutations like set_fleet_focus changing the
+	// row's focused_tenant_slug so the list badge updates.
+	const dispatch = createEventDispatcher<{ turnend: void }>();
 
 	onMount(async () => {
-		await chat.open(investigationId);
+		// conversationId beats investigationId: the /chat list passes a
+		// specific id when the user clicks a row. The dock on the
+		// investigation page omits it and lets ``open()`` find/create
+		// the active conversation for that case.
+		if (conversationId) {
+			await chat.openExisting(conversationId);
+		} else {
+			await chat.open(investigationId);
+		}
 	});
 
 	onDestroy(() => chat.close());
 
 	async function handleSend(event: CustomEvent<{ text: string }>) {
 		await chat.send(event.detail.text);
+		dispatch('turnend');
 	}
 
 	async function handleConfirm(event: CustomEvent<{ messageId: string }>) {
@@ -60,6 +77,12 @@
 				<span class="badge variant-soft-tertiary text-xs">
 					Case {$state.conversation.investigation_id.slice(0, 8)}
 				</span>
+			{:else if $state.conversation?.scope === 'mssp_fleet' && $state.conversation?.focused_tenant_slug}
+				<span class="badge variant-filled-secondary text-xs">
+					Focused on {$state.conversation.focused_tenant_slug}
+				</span>
+			{:else if $state.conversation?.scope === 'mssp_fleet'}
+				<span class="badge variant-soft-secondary text-xs">Fleet</span>
 			{/if}
 		</div>
 		{#if $state.streaming}
@@ -83,15 +106,9 @@
 
 	<Composer
 		disabled={$state.streaming || !$state.conversation}
+		scope={$state.conversation?.scope ?? 'tenant'}
 		on:send={handleSend}
 	/>
-
-	{#if $state.usage || $state.conversation}
-		<CostFooter
-			conv={$state.conversation}
-			usage={$state.usage}
-		/>
-	{/if}
 </div>
 
 <style>

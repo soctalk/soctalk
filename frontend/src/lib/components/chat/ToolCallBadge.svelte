@@ -10,20 +10,49 @@
 
 	let expanded = false;
 
+	// Pull the _tenant envelope (added by the agent dispatcher in
+	// fleet-scope conversations) so the badge can show "@ acme-corp".
+	// Tenant-scope results don't carry it (would be redundant).
+	$: tenantSlug = (() => {
+		const data = (result as { data?: unknown })?.data ?? result;
+		if (data && typeof data === 'object') {
+			const env = (data as Record<string, unknown>)._tenant;
+			if (env && typeof env === 'object') {
+				return String((env as Record<string, unknown>).slug ?? '');
+			}
+		}
+		return '';
+	})();
+
 	function summarise(): string {
 		if (result === undefined) return 'running…';
-		const data = (result as { data?: unknown })?.data ?? result;
+		const raw = (result as { data?: unknown })?.data ?? result;
+		// Strip the _tenant envelope before summarising — when the
+		// agent wraps a list as {"_tenant": ..., "rows": [...]}, the
+		// row count is on .rows; bare-list responses keep the
+		// original shape.
+		const data = (() => {
+			if (raw && typeof raw === 'object' && '_tenant' in (raw as object)) {
+				const r = (raw as Record<string, unknown>).rows;
+				return r !== undefined ? r : raw;
+			}
+			return raw;
+		})();
 		if (Array.isArray(data)) return `${data.length} rows${truncated ? ', truncated' : ''}`;
 		if (data && typeof data === 'object') {
 			const obj = data as Record<string, unknown>;
 			if (obj.error) return `error: ${String(obj.error).slice(0, 60)}`;
-			return Object.keys(obj).slice(0, 3).join(', ');
+			return Object.keys(obj).filter(k => k !== '_tenant').slice(0, 3).join(', ');
 		}
 		return String(data).slice(0, 60);
 	}
 
 	function shortArgs(): string {
-		const entries = Object.entries(args).slice(0, 2);
+		const entries = Object.entries(args)
+			// Hide tenant_slug from the arg display — it shows up in the
+			// "@ slug" badge already; printing it twice is noise.
+			.filter(([k]) => k !== 'tenant_slug')
+			.slice(0, 2);
 		return entries.map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 24)}`).join(', ');
 	}
 </script>
@@ -48,6 +77,9 @@
 		/>
 	</svg>
 	<span class="font-mono">{name}({shortArgs()})</span>
+	{#if tenantSlug}
+		<span class="badge variant-soft-secondary text-xs ml-1">@ {tenantSlug}</span>
+	{/if}
 	<span class="opacity-70 ml-1">→ {summarise()}</span>
 	{#if truncated}<span class="badge variant-soft-warning text-xs ml-1">truncated</span>{/if}
 </button>

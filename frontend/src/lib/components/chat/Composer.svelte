@@ -6,6 +6,10 @@
 	import { createEventDispatcher, tick } from 'svelte';
 
 	export let disabled = false;
+	// Scope of the parent conversation. Drives the placeholder so a
+	// fleet chat hints the user to mention tenant names ("acme-corp")
+	// while a tenant chat stays neutral.
+	export let scope: 'tenant' | 'mssp_fleet' = 'tenant';
 
 	const dispatch = createEventDispatcher<{ send: { text: string } }>();
 	let value = '';
@@ -43,7 +47,11 @@
 		bind:value
 		on:input={autosize}
 		on:keydown={handleKeydown}
-		placeholder={disabled ? 'Waiting for response…' : 'Ask the SOC analyst…'}
+		placeholder={disabled
+			? 'Waiting for response…'
+			: scope === 'mssp_fleet'
+				? 'Ask about any tenant. Use tenant slugs (e.g. "acme-corp") to scope queries.'
+				: 'Ask the SOC analyst…'}
 		rows="1"
 		{disabled}
 		class="textarea flex-1 resize-none"

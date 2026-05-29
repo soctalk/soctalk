@@ -21,7 +21,17 @@ import { get, writable, type Writable } from 'svelte/store';
 
 export interface ConversationRow {
 	id: string;
-	tenant_id: string;
+	// Nullable: fleet-scope conversations carry tenant_id=null.
+	tenant_id: string | null;
+	// 'tenant' for tenant-bound chats (customer roles + MSSP-pinned),
+	// 'mssp_fleet' for cross-tenant MSSP chats. Immutable for the
+	// conversation's lifetime.
+	scope: 'tenant' | 'mssp_fleet';
+	// Soft focus for fleet conversations — settable mid-chat via the
+	// agent's ``set_fleet_focus`` tool. NULL until first set; the
+	// API also surfaces the joined slug for UI rendering.
+	focused_tenant_id: string | null;
+	focused_tenant_slug: string | null;
 	created_by_user_id: string;
 	investigation_id: string | null;
 	title: string | null;

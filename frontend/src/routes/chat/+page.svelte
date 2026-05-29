@@ -1,20 +1,23 @@
 <!--
-  Global /chat — two-pane layout. Left: conversation list (recent +
-  pinned + the "+ New" button). Right: active chat panel.
+  Global /chat — two-pane layout. Left: conversation list. Right: active panel.
 
-  For Phase 3, the global chat starts a non-investigation conversation
-  (no investigation_id) — the agent uses its tools to retrieve context
-  on demand. MSSP users without a current_tenant pin will get a 400
-  from the backend explaining they need to Open SOC first.
+  Single "+ New" button. The backend picks the right scope from the
+  caller's role: MSSP-level → fleet-scope (the agent narrows via
+  set_fleet_focus mid-chat), customer/tenant-bound → tenant-scope.
+  Conversation rows show the focused tenant slug when the fleet agent
+  has set one, otherwise the scope badge ("Fleet" / "Tenant" / case).
 -->
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
-	import { isMsspScope } from '$lib/stores';
 
 	interface ConversationRow {
 		id: string;
 		title: string | null;
+		tenant_id: string | null;
+		scope: 'tenant' | 'mssp_fleet';
+		focused_tenant_id: string | null;
+		focused_tenant_slug: string | null;
 		investigation_id: string | null;
 		model_name: string;
 		status: string;
@@ -47,6 +50,8 @@
 
 	async function newConversation() {
 		try {
+			// No scope sent: the backend defaults to fleet for MSSP roles
+			// and tenant for customer roles. Single button, single intent.
 			const res = await fetch('/api/chat/conversations', {
 				method: 'POST',
 				credentials: 'same-origin',
@@ -76,7 +81,11 @@
 	<aside class="conv-list">
 		<div class="flex items-center justify-between mb-3">
 			<h2 class="text-base font-semibold">Conversations</h2>
-			<button class="btn btn-sm variant-filled-primary" on:click={newConversation}>
+			<button
+				class="btn btn-sm variant-filled-primary"
+				on:click={newConversation}
+				title="Start a new chat"
+			>
 				+ New
 			</button>
 		</div>
@@ -85,17 +94,10 @@
 			<div class="alert variant-soft-error text-xs p-2">{error}</div>
 		{/if}
 
-		{#if $isMsspScope}
-			<div class="text-xs opacity-70 mb-2">
-				Cross-tenant scope: pin a tenant via <a href="/tenants" class="anchor">Open SOC</a>
-				to start a global chat.
-			</div>
-		{/if}
-
 		{#if loading && conversations.length === 0}
 			<div class="text-xs opacity-60">Loading…</div>
 		{:else if conversations.length === 0}
-			<div class="text-xs opacity-60">No conversations yet. Start one with <strong>+ New</strong>.</div>
+			<div class="text-xs opacity-60">No conversations yet.</div>
 		{:else}
 			<ul class="space-y-1">
 				{#each conversations as c (c.id)}
@@ -107,14 +109,20 @@
 							on:click={() => (activeId = c.id)}
 						>
 							<div class="font-medium truncate">{c.title ?? '(untitled)'}</div>
-							<div class="text-xs opacity-60 flex items-center gap-2">
+							<div class="text-xs opacity-60 flex items-center gap-2 flex-wrap">
 								{#if c.investigation_id}
 									<span class="badge variant-soft-tertiary text-xs">
 										case:{c.investigation_id.slice(0, 6)}
 									</span>
+								{:else if c.scope === 'mssp_fleet' && c.focused_tenant_slug}
+									<span class="badge variant-filled-secondary text-xs">
+										{c.focused_tenant_slug}
+									</span>
+								{:else if c.scope === 'mssp_fleet'}
+									<span class="badge variant-soft-secondary text-xs">Fleet</span>
+								{:else}
+									<span class="badge variant-soft-tertiary text-xs">Tenant</span>
 								{/if}
-								<span>${c.total_dollars.toFixed(3)}</span>
-								<span class="opacity-60">·</span>
 								<span>{new Date(c.created_at).toLocaleDateString()}</span>
 							</div>
 						</button>
@@ -127,7 +135,11 @@
 	<div class="chat-pane flex-1">
 		{#if activeId}
 			{#key activeId}
-				<ChatPanel investigationId={null} />
+				<ChatPanel
+					conversationId={activeId}
+					investigationId={null}
+					on:turnend={loadList}
+				/>
 			{/key}
 		{:else}
 			<div class="card variant-soft p-8 text-center h-full flex items-center justify-center">
