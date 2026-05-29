@@ -42,7 +42,13 @@ class Conversation(SQLModel, table=True):
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    tenant_id: UUID = Field(sa_column=Column(PGUUID(as_uuid=True), nullable=False))
+    # tenant_id is NULL for fleet-scope conversations (scope='mssp_fleet');
+    # required for tenant-scope. The CHECK ck_conversations_scope enforces
+    # the relationship — see v1_0013_mssp_chat_scope.py.
+    tenant_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(PGUUID(as_uuid=True), nullable=True),
+    )
     created_by_user_id: UUID = Field(
         sa_column=Column(PGUUID(as_uuid=True), nullable=False)
     )
@@ -52,6 +58,17 @@ class Conversation(SQLModel, table=True):
     )
     title: str | None = Field(default=None)
     model_name: str = Field()
+    # tenant | mssp_fleet — immutable for the conversation's lifetime.
+    scope: str = Field(default="tenant", max_length=16)
+    # Soft per-conversation focus for fleet-scope chats. NULL when no
+    # focus set; set via the ``set_fleet_focus`` agent tool. Distinct
+    # from ``tenant_id`` — that's the hard binding for tenant scope;
+    # this is the dispatcher's default for ``target_tenant_id`` when
+    # the model omits ``tenant_slug``. See v1_0014_chat_focused_tenant.
+    focused_tenant_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(PGUUID(as_uuid=True), nullable=True),
+    )
     # active | closed | budget_exhausted
     status: str = Field(default="active", max_length=32)
     # BIGINT (see migration comment).
@@ -95,7 +112,11 @@ class ChatMessage(SQLModel, table=True):
     conversation_id: UUID = Field(
         sa_column=Column(PGUUID(as_uuid=True), nullable=False)
     )
-    tenant_id: UUID = Field(sa_column=Column(PGUUID(as_uuid=True), nullable=False))
+    # NULL when the parent conversation is fleet-scope.
+    tenant_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(PGUUID(as_uuid=True), nullable=True),
+    )
     role: str = Field(max_length=16)
     content: dict[str, Any] = Field(
         default_factory=dict,

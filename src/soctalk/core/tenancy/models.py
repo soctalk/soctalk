@@ -222,6 +222,11 @@ class IntegrationConfig(SQLModel, table=True):
     # Wazuh
     wazuh_enabled: bool = Field(default=True)
     wazuh_url: str | None = Field(default=None, max_length=500)
+    # Indexer Service is distinct from the Manager Service in the wazuh
+    # chart (wazuh-<slug>-wazuh-indexer:9200 vs ...-wazuh-manager:55000).
+    # NULL ⇒ chat resolver derives by substituting -wazuh-manager →
+    # -wazuh-indexer and :55000 → :9200. See docs/mssp-chat-plan.md.
+    wazuh_indexer_url: str | None = Field(default=None, max_length=500)
     wazuh_verify_ssl: bool = Field(default=True)
     # TheHive
     thehive_enabled: bool = Field(default=True)

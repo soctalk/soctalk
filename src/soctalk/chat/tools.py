@@ -13,10 +13,19 @@ Each tool returns a ``ToolResult`` carrying:
   re-call when ``truncated`` is set, rather than guessing the missing
   rows.
 
-Adding a new tool: implement an ``async def fn(identity, ...)``
-helper, decorate with ``@chat_tool(name, description, schema)``, and
-add to ``AVAILABLE_TOOLS``. The agent loop introspects the schemas
-when binding the model.
+Tenant targeting (since the MSSP chat work):
+
+* Tenant-targeted tools take a ``tenant_slug`` argument. In tenant-scope
+  conversations the dispatcher fills it in from ``ctx.tenant_id`` and
+  the model can omit it; in fleet-scope (``scope='mssp_fleet'``) the
+  model MUST supply it or the tool returns an error result.
+* The dispatcher pre-resolves ``tenant_slug`` to ``target_tenant_id``
+  (passed as a private kwarg so the model never sees a UUID) and adds
+  a ``_tenant`` envelope to the result in fleet scope.
+
+Fleet roll-ups (``fleet_only=True`` on ChatTool) are only registered
+when ``ctx.scope == 'mssp_fleet'``; tenant-bound chats can't accidentally
+peek at the fleet without explicitly opening one.
 """
 
 from __future__ import annotations
@@ -32,7 +41,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from soctalk.core.tenancy.auth import UserIdentity
 
 
-MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin"})
+MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "analyst"})
+
+
+class TenantSlugRequired(ValueError):
+    """Raised by the dispatcher when fleet scope + missing slug arg."""
+
+
+class TenantSlugMismatch(ValueError):
+    """Raised by the dispatcher when tenant scope + caller passes a
+    different slug than the conversation's tenant."""
+
+
+class TenantSlugUnknown(ValueError):
+    """Raised when the slug doesn't resolve to a tenant row."""
 
 # 8 KB serialised result ceiling. Tool results get stuffed back into
 # the LLM context on the next turn, so an unbounded query that returns
@@ -127,33 +149,82 @@ async def chat_session_for(identity: UserIdentity) -> AsyncSession:
 
 
 # -----------------------------------------------------------------------------
+# Tenant slug resolution (used by the agent dispatcher pre-call)
+# -----------------------------------------------------------------------------
+
+
+# Shared JSON-Schema fragment for the optional tenant_slug arg.
+# Tenant-targeted tools merge this into their ``properties`` dict so the
+# model gets the same description everywhere.
+_TENANT_SLUG_PROP: dict[str, Any] = {
+    "tenant_slug": {
+        "type": "string",
+        "description": (
+            "Slug of the tenant to query. Required in fleet-scope "
+            "conversations (no implicit tenant); omit in tenant-scope "
+            "conversations (defaults to the conversation's tenant)."
+        ),
+    }
+}
+
+
+async def resolve_tenant_slug(
+    db: AsyncSession, slug: str
+) -> tuple[UUID, str, str]:
+    """Look up (tenant_id, slug, display_name) for a slug.
+
+    Caller is expected to run this against an MSSP-audience or
+    BYPASSRLS session (tenant slug lookup is metadata, doesn't gate on
+    the tenant's RLS). Raises ``TenantSlugUnknown`` on miss.
+    """
+    row = (
+        await db.execute(
+            text(
+                "SELECT id::text, slug, display_name "
+                "FROM tenants WHERE slug = :s LIMIT 1"
+            ),
+            {"s": slug},
+        )
+    ).mappings().first()
+    if row is None:
+        raise TenantSlugUnknown(f"unknown tenant_slug: {slug!r}")
+    return (UUID(row["id"]), row["slug"], row["display_name"] or row["slug"])
+
+
+# -----------------------------------------------------------------------------
 # Tool implementations
 # -----------------------------------------------------------------------------
 
 
 async def get_investigation(
-    db: AsyncSession, *, investigation_id: str
+    db: AsyncSession,
+    *,
+    investigation_id: str,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
-    """Full investigation row + active pending_review + last 10 alerts + last 20 events."""
+    """Full investigation row + active pending_review + last 10 alerts + last 20 events.
+
+    ``target_tenant_id`` is injected by the dispatcher when fleet-scope
+    callers pass ``tenant_slug``; if set, the investigation row must
+    belong to that tenant or the tool returns "not found in tenant".
+    """
     try:
         iid = UUID(investigation_id)
     except (TypeError, ValueError):
         return _enforce_size({"error": "invalid investigation_id"})
 
-    inv = (
-        await db.execute(
-            text(
-                """
-                SELECT id::text, tenant_id::text, short_id, title, status,
-                       severity, summary, opened_at, closed_at, close_reason,
-                       reopen_count, visibility
-                FROM investigations
-                WHERE id = :id
-                """
-            ),
-            {"id": str(iid)},
-        )
-    ).mappings().first()
+    inv_sql = """
+        SELECT id::text, tenant_id::text, short_id, title, status,
+               severity, summary, opened_at, closed_at, close_reason,
+               reopen_count, visibility
+        FROM investigations
+        WHERE id = :id
+    """
+    inv_params: dict[str, Any] = {"id": str(iid)}
+    if target_tenant_id is not None:
+        inv_sql += " AND tenant_id = :tid"
+        inv_params["tid"] = str(target_tenant_id)
+    inv = (await db.execute(text(inv_sql), inv_params)).mappings().first()
     if inv is None:
         return _enforce_size({"error": "investigation not found"})
 
@@ -220,24 +291,22 @@ async def list_pending_reviews(
     *,
     status: str = "pending",
     limit: int = 20,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """List recent pending HIL reviews matching the given status."""
     limit = max(1, min(50, limit))
-    rows = (
-        await db.execute(
-            text(
-                """
-                SELECT id::text, investigation_id::text, status, title,
-                       max_severity, ai_decision, ai_confidence, created_at
-                FROM pending_reviews
-                WHERE status = :s
-                ORDER BY created_at DESC
-                LIMIT :n
-                """
-            ),
-            {"s": status, "n": limit},
-        )
-    ).mappings().all()
+    conds = ["status = :s"]
+    params: dict[str, Any] = {"s": status, "n": limit}
+    if target_tenant_id is not None:
+        conds.append("tenant_id = :tid")
+        params["tid"] = str(target_tenant_id)
+    sql = (
+        "SELECT id::text, investigation_id::text, status, title, "
+        "max_severity, ai_decision, ai_confidence, created_at "
+        "FROM pending_reviews WHERE " + " AND ".join(conds)
+        + " ORDER BY created_at DESC LIMIT :n"
+    )
+    rows = (await db.execute(text(sql), params)).mappings().all()
     return _enforce_size([dict(r) for r in rows])
 
 
@@ -248,12 +317,16 @@ async def recent_alerts(
     severity_min: int | None = None,
     hours: int = 24,
     limit: int = 50,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Recent alerts, optionally filtered by rule and minimum severity."""
     hours = max(1, min(168, hours))
     limit = max(1, min(100, limit))
     conds = ["first_event_at >= now() - make_interval(hours => :h)"]
     params: dict[str, Any] = {"h": hours, "n": limit}
+    if target_tenant_id is not None:
+        conds.append("tenant_id = :tid")
+        params["tid"] = str(target_tenant_id)
     if rule_id:
         conds.append("rule_id = :rid")
         params["rid"] = rule_id
@@ -277,12 +350,16 @@ async def audit_trail(
     event_type: str | None = None,
     hours: int = 72,
     limit: int = 100,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Recent events from the audit log."""
     hours = max(1, min(720, hours))
     limit = max(1, min(200, limit))
     conds = ["timestamp >= now() - make_interval(hours => :h)"]
     params: dict[str, Any] = {"h": hours, "n": limit}
+    if target_tenant_id is not None:
+        conds.append("tenant_id = :tid")
+        params["tid"] = str(target_tenant_id)
     if investigation_id:
         conds.append("aggregate_id = :aid")
         params["aid"] = investigation_id
@@ -298,28 +375,45 @@ async def audit_trail(
     return _enforce_size([dict(r) for r in rows])
 
 
-async def tenant_stats(db: AsyncSession, *, days: int = 7) -> ToolResult:
-    """Rolled-up tenant activity over the last ``days`` days."""
+async def tenant_stats(
+    db: AsyncSession,
+    *,
+    days: int = 7,
+    target_tenant_id: UUID | None = None,
+) -> ToolResult:
+    """Rolled-up tenant activity over the last ``days`` days.
+
+    In tenant scope, RLS already pins to the caller's tenant; the
+    dispatcher still injects ``target_tenant_id`` so we can additionally
+    AND it for defense in depth on MSSP-BYPASS sessions.
+    """
     days = max(1, min(90, days))
+    if target_tenant_id is not None:
+        tid_clause = "AND tenant_id = '" + str(target_tenant_id) + "'"
+    else:
+        tid_clause = ""
     row = (
         await db.execute(
             text(
-                """
+                f"""
                 SELECT
                   (SELECT COUNT(*)::int FROM alerts
-                     WHERE first_event_at >= now() - make_interval(days => :d))
-                                                                AS alerts,
+                     WHERE first_event_at >= now() - make_interval(days => :d)
+                     {tid_clause})                              AS alerts,
                   (SELECT COUNT(*)::int FROM investigations
-                     WHERE created_at >= now() - make_interval(days => :d))
-                                                                AS investigations,
+                     WHERE created_at >= now() - make_interval(days => :d)
+                     {tid_clause})                              AS investigations,
                   (SELECT COUNT(*)::int FROM pending_reviews
-                     WHERE status = 'pending')                  AS pending_reviews,
+                     WHERE status = 'pending'
+                     {tid_clause})                              AS pending_reviews,
                   (SELECT COUNT(*)::int FROM pending_reviews
                      WHERE created_at >= now() - make_interval(days => :d)
-                       AND ai_decision = 'escalate')            AS escalated,
+                       AND ai_decision = 'escalate'
+                     {tid_clause})                              AS escalated,
                   (SELECT AVG(ai_confidence)::float FROM pending_reviews
                      WHERE created_at >= now() - make_interval(days => :d)
-                       AND ai_confidence IS NOT NULL)           AS avg_ai_confidence
+                       AND ai_confidence IS NOT NULL
+                     {tid_clause})                              AS avg_ai_confidence
                 """
             ),
             {"d": days},
@@ -342,24 +436,229 @@ async def tenant_stats(db: AsyncSession, *, days: int = 7) -> ToolResult:
 
 
 async def search_investigations(
-    db: AsyncSession, *, query: str, limit: int = 20
+    db: AsyncSession,
+    *,
+    query: str,
+    limit: int = 20,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """ILIKE search over investigation title + summary."""
     limit = max(1, min(50, limit))
     if not query or not query.strip():
         return _enforce_size({"error": "query is empty"})
+    conds = ["(title ILIKE :q OR COALESCE(summary, '') ILIKE :q)"]
+    params: dict[str, Any] = {"q": f"%{query.strip()}%", "n": limit}
+    if target_tenant_id is not None:
+        conds.append("tenant_id = :tid")
+        params["tid"] = str(target_tenant_id)
+    sql = (
+        "SELECT id::text, short_id, title, status, severity, opened_at "
+        "FROM investigations WHERE " + " AND ".join(conds)
+        + " ORDER BY opened_at DESC LIMIT :n"
+    )
+    rows = (await db.execute(text(sql), params)).mappings().all()
+    return _enforce_size([dict(r) for r in rows])
+
+
+# -----------------------------------------------------------------------------
+# Fleet roll-ups (mssp_fleet scope only — never bound in tenant scope)
+# -----------------------------------------------------------------------------
+
+
+async def list_tenants(db: AsyncSession) -> ToolResult:
+    """Enumerate tenants the MSSP serves.
+
+    Returns one row per tenant: ``id``, ``slug``, ``display_name``,
+    plus quick counts (open investigations, pending reviews) so the
+    agent has a single tool call to anchor a fleet conversation.
+    """
     rows = (
         await db.execute(
             text(
                 """
-                SELECT id::text, short_id, title, status, severity, opened_at
-                FROM investigations
-                WHERE title ILIKE :q OR COALESCE(summary, '') ILIKE :q
-                ORDER BY opened_at DESC
-                LIMIT :n
+                SELECT t.id::text                            AS id,
+                       t.slug                                AS slug,
+                       t.display_name                        AS display_name,
+                       COALESCE(i.cnt, 0)::int               AS open_investigations,
+                       COALESCE(p.cnt, 0)::int               AS pending_reviews
+                FROM tenants t
+                LEFT JOIN (
+                    -- Open investigations are stored as status='active'
+                    -- in this codebase (see existing dashboards / IR
+                    -- metrics). 'open' was a misnomer in the plan doc.
+                    SELECT tenant_id, COUNT(*) AS cnt
+                      FROM investigations
+                     WHERE status = 'active'
+                     GROUP BY tenant_id
+                ) i ON i.tenant_id = t.id
+                LEFT JOIN (
+                    SELECT tenant_id, COUNT(*) AS cnt
+                      FROM pending_reviews
+                     WHERE status = 'pending'
+                     GROUP BY tenant_id
+                ) p ON p.tenant_id = t.id
+                ORDER BY t.slug ASC
+                """
+            )
+        )
+    ).mappings().all()
+    return _enforce_size([dict(r) for r in rows])
+
+
+async def fleet_pending_reviews(db: AsyncSession) -> ToolResult:
+    """Pending review counts per tenant — no row bodies.
+
+    The agent uses this for fleet-wide queue questions ("which tenants
+    have a backlog?") without inflating the result set.
+    """
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT t.slug                       AS tenant_slug,
+                       t.display_name               AS tenant_name,
+                       COALESCE(p.cnt, 0)::int      AS pending_count
+                FROM tenants t
+                LEFT JOIN (
+                    SELECT tenant_id, COUNT(*) AS cnt
+                      FROM pending_reviews
+                     WHERE status = 'pending'
+                     GROUP BY tenant_id
+                ) p ON p.tenant_id = t.id
+                ORDER BY pending_count DESC, t.slug ASC
+                """
+            )
+        )
+    ).mappings().all()
+    return _enforce_size([dict(r) for r in rows])
+
+
+async def fleet_recent_alert_counts(
+    db: AsyncSession, *, hours: int = 24
+) -> ToolResult:
+    """Alert counts per tenant for the last ``hours`` hours."""
+    hours = max(1, min(168, hours))
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT t.slug                                 AS tenant_slug,
+                       t.display_name                         AS tenant_name,
+                       COALESCE(a.cnt, 0)::int                AS alert_count,
+                       COALESCE(a.max_sev, 0)::int            AS max_severity
+                FROM tenants t
+                LEFT JOIN (
+                    SELECT tenant_id,
+                           COUNT(*) AS cnt,
+                           MAX(severity) AS max_sev
+                      FROM alerts
+                     WHERE first_event_at >= now() - make_interval(hours => :h)
+                     GROUP BY tenant_id
+                ) a ON a.tenant_id = t.id
+                ORDER BY alert_count DESC, t.slug ASC
                 """
             ),
-            {"q": f"%{query.strip()}%", "n": limit},
+            {"h": hours},
+        )
+    ).mappings().all()
+    return _enforce_size([dict(r) for r in rows])
+
+
+async def set_fleet_focus(
+    db: AsyncSession,
+    *,
+    slug_or_name: str,
+    _conversation_id: UUID | None = None,
+    _ctx: Any = None,
+) -> ToolResult:
+    """Pin the active fleet conversation to a tenant (soft focus).
+
+    After this lands, subsequent fleet-scope tool calls that omit
+    ``tenant_slug`` default to this tenant. Persisted to the
+    ``conversations.focused_tenant_id`` column so the focus survives
+    reloads / new turns.
+
+    The ``slug_or_name`` accepts EITHER the canonical slug (``labtenant``)
+    or the display name (``Lab Tenant``, case-insensitive). The dispatcher
+    injects ``_conversation_id`` and the live ``_ctx`` — the model never
+    sees those args.
+    """
+    needle = slug_or_name.strip()
+    if not needle:
+        return _enforce_size({"error": "slug_or_name is empty"})
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT id::text, slug, display_name
+                FROM tenants
+                WHERE slug = :s OR LOWER(display_name) = LOWER(:s)
+                LIMIT 1
+                """
+            ),
+            {"s": needle},
+        )
+    ).mappings().first()
+    if row is None:
+        return _enforce_size(
+            {"error": f"no tenant matches {slug_or_name!r} by slug or display name"}
+        )
+    target_id = UUID(row["id"])
+    target_slug = row["slug"]
+    target_name = row["display_name"] or target_slug
+
+    if _conversation_id is None:
+        return _enforce_size(
+            {"error": "internal: dispatcher did not inject _conversation_id"}
+        )
+    # Persist the focus on the conversation row. The MSSP session this
+    # tool runs under is BYPASSRLS so the UPDATE works regardless of
+    # the row's tenant_id (NULL for fleet).
+    await db.execute(
+        text(
+            "UPDATE conversations SET focused_tenant_id = :t WHERE id = :c"
+        ),
+        {"t": str(target_id), "c": str(_conversation_id)},
+    )
+    # Mutate the in-memory ctx so the rest of the same turn picks it up
+    # without re-reading the row.
+    if _ctx is not None:
+        _ctx.focused_tenant_id = target_id
+        _ctx.focused_tenant_slug = target_slug
+    return _enforce_size(
+        {
+            "ok": True,
+            "focused_on": {
+                "slug": target_slug,
+                "display_name": target_name,
+            },
+        }
+    )
+
+
+async def fleet_active_investigations(db: AsyncSession) -> ToolResult:
+    """Open-investigation counts per tenant (by max severity bucket)."""
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT t.slug                                 AS tenant_slug,
+                       t.display_name                         AS tenant_name,
+                       COALESCE(i.open_cnt, 0)::int           AS open_count,
+                       COALESCE(i.max_sev, 0)::int            AS max_severity
+                FROM tenants t
+                LEFT JOIN (
+                    -- status='active' is the open state for
+                    -- investigations in this schema (not 'open').
+                    SELECT tenant_id,
+                           COUNT(*) FILTER (WHERE status = 'active') AS open_cnt,
+                           MAX(severity) FILTER (WHERE status = 'active') AS max_sev
+                      FROM investigations
+                     GROUP BY tenant_id
+                ) i ON i.tenant_id = t.id
+                ORDER BY open_count DESC, t.slug ASC
+                """
+            )
         )
     ).mappings().all()
     return _enforce_size([dict(r) for r in rows])
@@ -372,12 +671,24 @@ async def search_investigations(
 
 @dataclass(frozen=True, slots=True)
 class ChatTool:
-    """LangChain-style tool descriptor with a typed dispatcher."""
+    """LangChain-style tool descriptor with a typed dispatcher.
+
+    ``fleet_only`` tools are excluded from the bound tool list in
+    tenant-scope conversations (e.g. ``list_tenants``, ``fleet_*``
+    roll-ups). All other tools are tenant-targeted and accept the
+    optional ``tenant_slug`` arg the dispatcher pre-resolves.
+    """
 
     name: str
     description: str
     schema: dict[str, Any]  # JSON Schema for arguments
     func: Callable[..., Awaitable[ToolResult]] = field(repr=False)
+    # Restrict to mssp_fleet-scope conversations only.
+    fleet_only: bool = False
+    # Set to False for tools that already target a global scope and
+    # don't need the dispatcher to inject ``target_tenant_id`` /
+    # ``_tenant`` (e.g. roll-ups). Tenant-targeted tools default True.
+    tenant_targeted: bool = True
 
 
 AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
@@ -395,6 +706,7 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
                     "type": "string",
                     "description": "UUID of the investigation",
                 },
+                **_TENANT_SLUG_PROP,
             },
             "required": ["investigation_id"],
         },
@@ -421,6 +733,7 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
                     "default": "pending",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=list_pending_reviews,
@@ -438,6 +751,7 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
                 "severity_min": {"type": "integer", "minimum": 0, "maximum": 16},
                 "hours": {"type": "integer", "minimum": 1, "maximum": 168},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=recent_alerts,
@@ -455,6 +769,7 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
                 "event_type": {"type": "string"},
                 "hours": {"type": "integer", "minimum": 1, "maximum": 720},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=audit_trail,
@@ -470,6 +785,7 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
             "type": "object",
             "properties": {
                 "days": {"type": "integer", "minimum": 1, "maximum": 90},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=tenant_stats,
@@ -485,10 +801,92 @@ AVAILABLE_TOOLS: tuple[ChatTool, ...] = (
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                **_TENANT_SLUG_PROP,
             },
             "required": ["query"],
         },
         func=search_investigations,
+    ),
+    # -------------------------------------------------------------------
+    # Fleet roll-ups — only bound in mssp_fleet scope.
+    # -------------------------------------------------------------------
+    ChatTool(
+        name="list_tenants",
+        description=(
+            "List every tenant the MSSP serves with quick counts (open "
+            "investigations, pending reviews). Always call this first in a "
+            "fleet conversation to learn which tenants exist."
+        ),
+        schema={"type": "object", "properties": {}},
+        func=list_tenants,
+        fleet_only=True,
+        tenant_targeted=False,
+    ),
+    ChatTool(
+        name="set_fleet_focus",
+        description=(
+            "Pin the active fleet conversation to a tenant so subsequent "
+            "tool calls default to it without needing ``tenant_slug`` on "
+            "every call. Call this AS SOON AS the user signals a tenant "
+            "to work on (e.g. 'let's focus on lab tenant', 'switch to "
+            "acme-corp'). Accepts either the slug ('labtenant') or the "
+            "display name ('Lab Tenant'). Persists across turns. Call "
+            "again with a different name to switch focus."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "slug_or_name": {
+                    "type": "string",
+                    "description": "Tenant slug or display name to focus on.",
+                },
+            },
+            "required": ["slug_or_name"],
+        },
+        func=set_fleet_focus,
+        fleet_only=True,
+        # Not tenant_targeted: the dispatcher must NOT inject
+        # ``target_tenant_id`` here — this tool's job IS to set focus,
+        # not to consume an already-resolved target.
+        tenant_targeted=False,
+    ),
+    ChatTool(
+        name="fleet_pending_reviews",
+        description=(
+            "Pending review counts per tenant (no row bodies). Use for "
+            "fleet-wide queue / backlog questions in one tool call."
+        ),
+        schema={"type": "object", "properties": {}},
+        func=fleet_pending_reviews,
+        fleet_only=True,
+        tenant_targeted=False,
+    ),
+    ChatTool(
+        name="fleet_recent_alert_counts",
+        description=(
+            "Alert counts per tenant over the last ``hours`` hours, with "
+            "max severity. Use for 'who's noisy right now?'."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "hours": {"type": "integer", "minimum": 1, "maximum": 168},
+            },
+        },
+        func=fleet_recent_alert_counts,
+        fleet_only=True,
+        tenant_targeted=False,
+    ),
+    ChatTool(
+        name="fleet_active_investigations",
+        description=(
+            "Open-investigation counts per tenant with max severity. Use "
+            "for fleet status / triage prioritisation questions."
+        ),
+        schema={"type": "object", "properties": {}},
+        func=fleet_active_investigations,
+        fleet_only=True,
+        tenant_targeted=False,
     ),
 )
 

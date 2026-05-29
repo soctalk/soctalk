@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from uuid import UUID
 
 import structlog
@@ -150,6 +150,13 @@ class ControllerSettings:
     # per-tenant DB row. Leave empty in production.
     tenant_values_overlay: dict | None = None
     wazuh_values_overlay: dict | None = None
+    # Default value for the tenant chart's ``networkPolicies.enabled``.
+    # Defaults to True (safe). Set to False on clusters whose CNI's NP
+    # implementation breaks SocTalk traffic (e.g. kube-router on the
+    # 192.168.1.28 lab — NPs that look correct on paper still trigger
+    # connection-refused between soctalk-system and tenant-* pods).
+    # Env: ``SOCTALK_TENANT_NETWORK_POLICIES_ENABLED=0|false``.
+    tenant_network_policies_enabled: bool = True
 
     @classmethod
     def from_env(cls) -> "ControllerSettings":
@@ -180,6 +187,10 @@ class ControllerSettings:
             wait_timeout=os.getenv("SOCTALK_HELM_TIMEOUT", "15m"),
             persistent_storage_class=os.getenv(
                 "SOCTALK_PERSISTENT_STORAGE_CLASS", "standard"
+            ),
+            tenant_network_policies_enabled=(
+                os.getenv("SOCTALK_TENANT_NETWORK_POLICIES_ENABLED", "1")
+                not in {"0", "false", "False", "no", "NO"}
             ),
         )
 
@@ -551,6 +562,22 @@ class TenantController:
                     k8s_secret_key="token",
                     version_label="v1",
                 ),
+                # Pointer used by the chat agent's per-tenant Wazuh
+                # resolver (soctalk.chat.wazuh_primitives). The wazuh
+                # chart renders the credentials Secret as
+                # ``<release_wazuh>-wazuh-creds`` (release name =
+                # ``wazuh-<slug>``). The resolver reads four keys from
+                # this Secret: WAZUH_API_USERNAME, WAZUH_API_PASSWORD,
+                # INDEXER_USERNAME, INDEXER_PASSWORD. ``k8s_secret_key``
+                # is informational here — the resolver reads all keys.
+                TenantSecret(
+                    tenant_id=ctx.tenant.id,
+                    purpose="wazuh-api",
+                    k8s_namespace=ctx.namespace,
+                    k8s_secret_name=f"{ctx.release_wazuh}-wazuh-creds",
+                    k8s_secret_key="multi",
+                    version_label="v1",
+                ),
             ])
             await self.session.flush()
             await self._emit_event(ctx, "secrets_minted")
@@ -627,6 +654,7 @@ class TenantController:
             agent_hostname=f"{ctx.tenant.slug}.{self.settings.default_agent_dns_suffix}",
             cert_issuer=self.settings.default_cert_issuer,
             profile=ctx.profile,
+            network_policies_enabled=self.settings.tenant_network_policies_enabled,
         )
         if self.settings.tenant_values_overlay:
             values = _deep_merge(values, self.settings.tenant_values_overlay)
@@ -726,23 +754,47 @@ class TenantController:
             await asyncio.sleep(self.settings.readiness_poll_interval_seconds)
 
     async def _step_write_integration_config(self, ctx: _StepContext) -> None:
-        """Write the in-cluster Wazuh manager URL onto integration_configs.
+        """Write the in-cluster Wazuh Manager + Indexer URLs onto integration_configs.
 
         Manager API (:55000) is what SocTalk calls; agent ingress is a
         separate concept handled by the tenant chart's ``agentIngress``.
-        Service name matches the chart's ``{{ include "wazuh.fullname" . }}``
-        convention: ``<release-name>-wazuh-manager``.
+        Indexer (:9200) is queried directly by the chat agent's Wazuh
+        primitives for alert/vulnerability searches — it's a separate
+        Service from the Manager (``<release>-wazuh-indexer`` vs
+        ``<release>-wazuh-manager``). Service-name conventions match
+        the chart's ``{{ include "wazuh.fullname" . }}``.
         """
         target_url = (
             f"https://{ctx.release_wazuh}-wazuh-manager."
             f"{ctx.namespace}.svc.cluster.local:55000"
         )
+        target_indexer = (
+            f"https://{ctx.release_wazuh}-wazuh-indexer."
+            f"{ctx.namespace}.svc.cluster.local:9200"
+        )
+        changed: dict[str, Any] = {}
         if ctx.integration.wazuh_url != target_url:
             ctx.integration.wazuh_url = target_url
+            changed["wazuh_url"] = target_url
+        if ctx.integration.wazuh_indexer_url != target_indexer:
+            ctx.integration.wazuh_indexer_url = target_indexer
+            changed["wazuh_indexer_url"] = target_indexer
+        # The chart-installed Wazuh stack always uses self-signed certs
+        # for its Manager + Indexer endpoints (charts/wazuh emits a
+        # cluster-internal CA at install time). The DB column defaults
+        # to ``true`` for safety, but for chart-deployed tenants the
+        # truthful value is ``false`` — otherwise the chat agent's
+        # ``_resolve_wazuh_for`` resolver builds an httpx client that
+        # fails TLS verify on every call. Operators who terminate
+        # Wazuh behind a public-CA-signed reverse proxy can flip it
+        # back to ``true`` via the tenant settings API.
+        if ctx.integration.wazuh_verify_ssl is not False:
+            ctx.integration.wazuh_verify_ssl = False
+            changed["wazuh_verify_ssl"] = False
+        if changed:
             await self.session.flush()
             await self._emit_event(
-                ctx, "integration_config_written",
-                details={"wazuh_url": target_url},
+                ctx, "integration_config_written", details=changed,
             )
 
     async def _step_finalize_active(self, ctx: _StepContext) -> None:

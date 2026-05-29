@@ -18,14 +18,17 @@ Two upstream APIs:
 
 Config resolution (precedence high → low):
 
-1. Per-tenant secret ``wazuh-<slug>-wazuh-creds`` in the tenant's
-   namespace — read at call time so an MSSP-pinned chat can route to
-   the right tenant's Wazuh. Not implemented yet; lands in a follow-up
-   when MSSP routing gets formal.
-2. Env vars: ``WAZUH_URL``, ``WAZUH_API_USERNAME``,
-   ``WAZUH_API_PASSWORD``, ``WAZUH_INDEXER_URL``,
+1. **Per-tenant** (chat dispatcher injects ``target_tenant_id``): read
+   ``integration_configs.wazuh_url`` + ``wazuh_indexer_url`` + the
+   ``tenant_secrets`` row with ``purpose='wazuh-api'``, then read the
+   referenced k8s Secret cross-namespace for ``WAZUH_API_USERNAME``,
+   ``WAZUH_API_PASSWORD``, ``INDEXER_USERNAME``, ``INDEXER_PASSWORD``.
+   Cached per-tenant for ``_CONFIG_TTL_S`` seconds; 401 from the
+   Manager evicts that one entry. See ``docs/mssp-chat-plan.md``.
+2. **Env-fallback** (no ``target_tenant_id``): ``WAZUH_URL``,
+   ``WAZUH_API_USERNAME``, ``WAZUH_API_PASSWORD``, ``WAZUH_INDEXER_URL``,
    ``WAZUH_INDEXER_USERNAME``, ``WAZUH_INDEXER_PASSWORD``,
-   ``WAZUH_VERIFY_SSL``.
+   ``WAZUH_VERIFY_SSL``. Single-process / local-dev path.
 
 Failure handling: tools return a ``ToolResult`` with ``{"error": ...}``
 on transport / auth / 5xx failures. The agent's system prompt knows
@@ -35,17 +38,32 @@ to relay these as "Wazuh appears unreachable" without inventing data.
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import ssl
 import time
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 import structlog
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from soctalk.chat.tools import ChatTool, ToolResult, _enforce_size
+from soctalk.chat.tools import (
+    _TENANT_SLUG_PROP,
+    ChatTool,
+    ToolResult,
+    _enforce_size,
+)
+
+
+class WazuhNotConfigured(RuntimeError):
+    """Raised when per-tenant Wazuh resolution fails — missing
+    integration_configs row, missing tenant_secrets pointer, k8s secret
+    not readable, etc. Surfaced to the model as the tool's error result.
+    """
 
 
 logger = structlog.get_logger()
@@ -208,12 +226,177 @@ class _IndexerClient:
 
 
 # ---------------------------------------------------------------------------
-# Shared resolution: config + clients per-call so an env change rolls
-# through without restarting the API pod.
+# Per-tenant resolution: read integration_configs + tenant_secrets, then
+# the cross-namespace k8s Secret. Cached per-tenant for _CONFIG_TTL_S.
 # ---------------------------------------------------------------------------
 
 
-def _resolved() -> tuple[_ManagerClient, _IndexerClient] | None:
+# Cache TTL for resolved Wazuh creds (config + JWT). Short enough that a
+# rotated tenant password drains within a few minutes; long enough that
+# typical chat usage doesn't pay the k8s + DB round-trip per call.
+_CONFIG_TTL_S = 300
+
+
+@dataclass
+class _CachedTenantClients:
+    cfg: WazuhConfig
+    manager_client: _ManagerClient
+    expires_at: float
+
+
+_PER_TENANT_CACHE: dict[UUID, _CachedTenantClients] = {}
+_PER_TENANT_LOCK = asyncio.Lock()
+
+
+def _evict_tenant(tenant_id: UUID) -> None:
+    _PER_TENANT_CACHE.pop(tenant_id, None)
+
+
+async def _k8s_secret_read(namespace: str, name: str) -> dict[str, str]:
+    """Read a k8s Secret cross-namespace, return decoded data dict.
+
+    Lazy-imports ``kubernetes_asyncio`` so unit tests don't have to
+    install it. Requires the API pod's ServiceAccount to have
+    ``get`` on that Secret (chart's Phase-5 per-tenant RoleBinding).
+    """
+    try:
+        from kubernetes_asyncio import client as k8s_client
+        from kubernetes_asyncio import config as k8s_config
+    except ImportError as e:
+        raise WazuhNotConfigured(
+            "kubernetes_asyncio not installed; cannot read tenant Wazuh creds"
+        ) from e
+
+    try:
+        k8s_config.load_incluster_config()
+    except k8s_config.ConfigException:
+        # Local dev / tests: try the default kubeconfig as a fallback.
+        try:
+            await k8s_config.load_kube_config()
+        except Exception as e:  # noqa: BLE001
+            raise WazuhNotConfigured(
+                "no kube config available (not in-cluster, no kubeconfig); "
+                "tenant Wazuh routing requires a k8s context"
+            ) from e
+
+    async with k8s_client.ApiClient() as api:
+        v1 = k8s_client.CoreV1Api(api)
+        try:
+            sec = await v1.read_namespaced_secret(name=name, namespace=namespace)
+        except Exception as e:  # noqa: BLE001
+            raise WazuhNotConfigured(
+                f"k8s secret {namespace}/{name} not readable: "
+                f"{type(e).__name__}"
+            ) from e
+        return {
+            k: base64.b64decode(v).decode("utf-8")
+            for k, v in (sec.data or {}).items()
+        }
+
+
+async def _load_wazuh_config(
+    db: AsyncSession, tenant_id: UUID
+) -> WazuhConfig:
+    """Resolve a tenant's WazuhConfig from integration_configs + tenant_secrets + k8s."""
+    row = (
+        await db.execute(
+            sql_text(
+                "SELECT wazuh_enabled, wazuh_url, wazuh_indexer_url, "
+                "       wazuh_verify_ssl "
+                "FROM integration_configs WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not row or not row["wazuh_enabled"] or not row["wazuh_url"]:
+        raise WazuhNotConfigured(
+            f"Wazuh not enabled / URL missing for tenant {tenant_id}"
+        )
+
+    sec = (
+        await db.execute(
+            sql_text(
+                "SELECT k8s_namespace, k8s_secret_name "
+                "FROM tenant_secrets "
+                "WHERE tenant_id = :t AND purpose = 'wazuh-api' "
+                "LIMIT 1"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not sec:
+        raise WazuhNotConfigured(
+            f"tenant_secrets row missing for tenant {tenant_id} "
+            "(purpose='wazuh-api') — run scripts/ops/"
+            "backfill_wazuh_tenant_secrets.py for existing tenants"
+        )
+
+    creds = await _k8s_secret_read(sec["k8s_namespace"], sec["k8s_secret_name"])
+    mgr_user = creds.get("WAZUH_API_USERNAME") or creds.get("username")
+    mgr_pw = creds.get("WAZUH_API_PASSWORD") or creds.get("password")
+    idx_user = (
+        creds.get("INDEXER_USERNAME")
+        or creds.get("WAZUH_INDEXER_USERNAME")
+    )
+    idx_pw = (
+        creds.get("INDEXER_PASSWORD")
+        or creds.get("WAZUH_INDEXER_PASSWORD")
+    )
+    if not (mgr_user and mgr_pw and idx_user and idx_pw):
+        raise WazuhNotConfigured(
+            f"wazuh-api secret {sec['k8s_namespace']}/"
+            f"{sec['k8s_secret_name']} missing required keys "
+            "(WAZUH_API_USERNAME/PASSWORD + INDEXER_USERNAME/PASSWORD)"
+        )
+
+    manager_url = row["wazuh_url"].rstrip("/")
+    indexer_url = (row["wazuh_indexer_url"] or _derive_indexer(manager_url)).rstrip("/")
+    return WazuhConfig(
+        manager_url=manager_url,
+        manager_user=mgr_user,
+        manager_password=mgr_pw,
+        indexer_url=indexer_url,
+        indexer_user=idx_user,
+        indexer_password=idx_pw,
+        verify_ssl=bool(row["wazuh_verify_ssl"]),
+    )
+
+
+async def _resolved_for_tenant(
+    db: AsyncSession, tenant_id: UUID
+) -> tuple[_ManagerClient, _IndexerClient]:
+    """Return cached or freshly resolved (manager, indexer) for a tenant."""
+    now = time.monotonic()
+    cached = _PER_TENANT_CACHE.get(tenant_id)
+    if cached and cached.expires_at > now:
+        return cached.manager_client, _IndexerClient(cached.cfg)
+
+    async with _PER_TENANT_LOCK:
+        cached = _PER_TENANT_CACHE.get(tenant_id)
+        if cached and cached.expires_at > now:
+            return cached.manager_client, _IndexerClient(cached.cfg)
+        cfg = await _load_wazuh_config(db, tenant_id)
+        mgr = _ManagerClient(cfg)
+        _PER_TENANT_CACHE[tenant_id] = _CachedTenantClients(
+            cfg=cfg,
+            manager_client=mgr,
+            expires_at=now + _CONFIG_TTL_S,
+        )
+        return mgr, _IndexerClient(cfg)
+
+
+async def _resolved(
+    db: AsyncSession | None = None,
+    target_tenant_id: UUID | None = None,
+) -> tuple[_ManagerClient, _IndexerClient] | None:
+    """Pick the resolution path: per-tenant if both args present, else env.
+
+    Returns None only when env-fallback fails (no ``WAZUH_URL`` set).
+    Per-tenant failures raise ``WazuhNotConfigured`` so callers can
+    surface a precise reason to the model.
+    """
+    if target_tenant_id is not None and db is not None:
+        return await _resolved_for_tenant(db, target_tenant_id)
     cfg = WazuhConfig.from_env()
     if cfg is None:
         return None
@@ -262,10 +445,16 @@ def _agent_id_3(agent_id: str) -> str:
 
 
 async def get_wazuh_alert_summary(
-    _db: AsyncSession, *, limit: int = 50
+    db: AsyncSession,
+    *,
+    limit: int = 50,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Recent Wazuh alerts from the indexer (wazuh-alerts-*)."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     _, idx = resolved
@@ -302,15 +491,19 @@ async def get_wazuh_alert_summary(
 
 
 async def get_wazuh_rules_summary(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     limit: int = 100,
     level: int | None = None,
     group: str | None = None,
     filename: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Wazuh rules with optional filters on level/group/filename."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -344,15 +537,19 @@ async def get_wazuh_rules_summary(
 
 
 async def get_wazuh_vulnerability_summary(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     agent_id: str,
     limit: int = 100,
     severity: str | None = None,
     cve: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Vulnerability records for an agent from the indexer."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     _, idx = resolved
@@ -393,16 +590,24 @@ async def get_wazuh_vulnerability_summary(
 
 
 async def get_wazuh_critical_vulnerabilities(
-    _db: AsyncSession, *, agent_id: str, limit: int = 100
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    limit: int = 100,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Shortcut: vulnerability_summary with severity=Critical."""
     return await get_wazuh_vulnerability_summary(
-        _db, agent_id=agent_id, limit=limit, severity="Critical"
+        db,
+        agent_id=agent_id,
+        limit=limit,
+        severity="Critical",
+        target_tenant_id=target_tenant_id,
     )
 
 
 async def get_wazuh_agents(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     limit: int = 100,
     status: str | None = None,
@@ -411,9 +616,13 @@ async def get_wazuh_agents(
     group: str | None = None,
     os_platform: str | None = None,
     version: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """List Wazuh agents with optional filters."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -450,14 +659,18 @@ async def get_wazuh_agents(
 
 
 async def get_wazuh_agent_processes(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     agent_id: str,
     limit: int = 100,
     search: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Processes seen on an agent (via Wazuh syscollector)."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -485,9 +698,14 @@ async def get_wazuh_agent_processes(
         return _wrap_error(e, op="agent_processes")
 
 
-async def get_wazuh_cluster_health(_db: AsyncSession) -> ToolResult:
+async def get_wazuh_cluster_health(
+    db: AsyncSession, *, target_tenant_id: UUID | None = None
+) -> ToolResult:
     """Wazuh cluster health summary."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -499,14 +717,18 @@ async def get_wazuh_cluster_health(_db: AsyncSession) -> ToolResult:
 
 
 async def get_wazuh_cluster_nodes(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     limit: int = 100,
     offset: int = 0,
     type: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """List cluster nodes."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -533,16 +755,20 @@ async def get_wazuh_cluster_nodes(
 
 
 async def search_wazuh_manager_logs(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     limit: int = 100,
     offset: int = 0,
     level: str | None = None,
     tag: str | None = None,
     search: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Search the manager's ossec.log."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -573,17 +799,28 @@ async def search_wazuh_manager_logs(
 
 
 async def get_wazuh_manager_error_logs(
-    _db: AsyncSession, *, limit: int = 100
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Manager logs filtered to level=error (convenience wrapper)."""
-    return await search_wazuh_manager_logs(_db, limit=limit, level="error")
+    return await search_wazuh_manager_logs(
+        db, limit=limit, level="error", target_tenant_id=target_tenant_id
+    )
 
 
 async def get_wazuh_log_collector_stats(
-    _db: AsyncSession, *, agent_id: str
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Log-collector stats for a specific agent."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -596,9 +833,14 @@ async def get_wazuh_log_collector_stats(
         return _wrap_error(e, op="log_collector_stats")
 
 
-async def get_wazuh_remoted_stats(_db: AsyncSession) -> ToolResult:
+async def get_wazuh_remoted_stats(
+    db: AsyncSession, *, target_tenant_id: UUID | None = None
+) -> ToolResult:
     """Manager remoted-daemon stats."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -610,15 +852,19 @@ async def get_wazuh_remoted_stats(_db: AsyncSession) -> ToolResult:
 
 
 async def get_wazuh_agent_ports(
-    _db: AsyncSession,
+    db: AsyncSession,
     *,
     agent_id: str,
     limit: int = 100,
     protocol: str | None = None,
     state: str | None = None,
+    target_tenant_id: UUID | None = None,
 ) -> ToolResult:
     """Network ports seen on an agent."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -650,9 +896,14 @@ async def get_wazuh_agent_ports(
         return _wrap_error(e, op="agent_ports")
 
 
-async def get_wazuh_weekly_stats(_db: AsyncSession) -> ToolResult:
+async def get_wazuh_weekly_stats(
+    db: AsyncSession, *, target_tenant_id: UUID | None = None
+) -> ToolResult:
     """Manager weekly activity stats."""
-    resolved = _resolved()
+    try:
+        resolved = await _resolved(db, target_tenant_id)
+    except WazuhNotConfigured as e:
+        return ToolResult(data={"error": str(e)})
     if resolved is None:
         return _err_no_wazuh()
     mgr, _ = resolved
@@ -680,6 +931,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 300},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=get_wazuh_alert_summary,
@@ -698,6 +950,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "level": {"type": "integer", "minimum": 0, "maximum": 16},
                 "group": {"type": "string"},
                 "filename": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=get_wazuh_rules_summary,
@@ -718,6 +971,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                     "enum": ["Low", "Medium", "High", "Critical"],
                 },
                 "cve": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
             "required": ["agent_id"],
         },
@@ -731,6 +985,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
             "properties": {
                 "agent_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 300},
+                **_TENANT_SLUG_PROP,
             },
             "required": ["agent_id"],
         },
@@ -755,6 +1010,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "group": {"type": "string"},
                 "os_platform": {"type": "string"},
                 "version": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=get_wazuh_agents,
@@ -771,6 +1027,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "agent_id": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                 "search": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
             "required": ["agent_id"],
         },
@@ -779,7 +1036,10 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
     ChatTool(
         name="get_wazuh_cluster_health",
         description="Wazuh cluster health summary.",
-        schema={"type": "object", "properties": {}},
+        schema={
+            "type": "object",
+            "properties": {**_TENANT_SLUG_PROP},
+        },
         func=get_wazuh_cluster_health,
     ),
     ChatTool(
@@ -791,6 +1051,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                 "offset": {"type": "integer", "minimum": 0},
                 "type": {"type": "string", "enum": ["master", "worker"]},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=get_wazuh_cluster_nodes,
@@ -810,6 +1071,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "level": {"type": "string", "enum": ["error", "warning", "info"]},
                 "tag": {"type": "string"},
                 "search": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=search_wazuh_manager_logs,
@@ -821,6 +1083,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+                **_TENANT_SLUG_PROP,
             },
         },
         func=get_wazuh_manager_error_logs,
@@ -830,7 +1093,10 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
         description="Log-collector stats for one agent.",
         schema={
             "type": "object",
-            "properties": {"agent_id": {"type": "string"}},
+            "properties": {
+                "agent_id": {"type": "string"},
+                **_TENANT_SLUG_PROP,
+            },
             "required": ["agent_id"],
         },
         func=get_wazuh_log_collector_stats,
@@ -838,7 +1104,10 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
     ChatTool(
         name="get_wazuh_remoted_stats",
         description="Manager remoted-daemon stats (connection / message counts).",
-        schema={"type": "object", "properties": {}},
+        schema={
+            "type": "object",
+            "properties": {**_TENANT_SLUG_PROP},
+        },
         func=get_wazuh_remoted_stats,
     ),
     ChatTool(
@@ -854,6 +1123,7 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
                 "limit": {"type": "integer", "minimum": 1, "maximum": 500},
                 "protocol": {"type": "string", "enum": ["tcp", "udp"]},
                 "state": {"type": "string"},
+                **_TENANT_SLUG_PROP,
             },
             "required": ["agent_id"],
         },
@@ -862,7 +1132,10 @@ WAZUH_CHAT_TOOLS: tuple[ChatTool, ...] = (
     ChatTool(
         name="get_wazuh_weekly_stats",
         description="Manager weekly activity stats.",
-        schema={"type": "object", "properties": {}},
+        schema={
+            "type": "object",
+            "properties": {**_TENANT_SLUG_PROP},
+        },
         func=get_wazuh_weekly_stats,
     ),
 )

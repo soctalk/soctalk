@@ -75,6 +75,12 @@ def _make_mcp_chat_tool(
         description=description[:500],
         schema=input_schema,
         func=_dispatch,
+        # MCP servers advertise their own schemas; they don't know
+        # about ``tenant_slug`` or ``target_tenant_id`` and would 400
+        # if we injected them. The MCP server is the boundary that
+        # owns its own multi-tenant routing (if any). Treat MCP tools
+        # as globally-scoped from the chat dispatcher's perspective.
+        tenant_targeted=False,
     )
 
 

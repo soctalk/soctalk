@@ -136,3 +136,95 @@ async def assert_tenant_daily_cap_ok(
         )
         return None
     return spend
+
+
+# ---------------------------------------------------------------------------
+# MSSP-user-per-day cap (fleet-scope conversations)
+# ---------------------------------------------------------------------------
+#
+# Fleet-scope conversations have ``chat_messages.tenant_id IS NULL`` and
+# therefore fall out of the tenant cap entirely. We add a parallel cap
+# bound to the MSSP user so a busy fleet session can't be a budget
+# side-door. Window + units mirror the tenant cap.
+
+
+def mssp_user_daily_token_cap() -> int:
+    raw = os.getenv("SOCTALK_MSSP_USER_DAILY_TOKEN_CAP", "")
+    try:
+        v = int(raw) if raw else 10_000_000
+    except ValueError:
+        v = 10_000_000
+    return v if v > 0 else 10_000_000
+
+
+def mssp_user_daily_dollar_cap() -> float:
+    raw = os.getenv("SOCTALK_MSSP_USER_DAILY_DOLLAR_CAP", "")
+    try:
+        v = float(raw) if raw else 50.0
+    except ValueError:
+        v = 50.0
+    return v if v > 0 else 50.0
+
+
+@dataclass(frozen=True, slots=True)
+class MsspUserDailySpend:
+    tokens: int
+    dollars: float
+
+    @property
+    def token_cap_hit(self) -> bool:
+        return self.tokens >= mssp_user_daily_token_cap()
+
+    @property
+    def dollar_cap_hit(self) -> bool:
+        return self.dollars >= mssp_user_daily_dollar_cap()
+
+    @property
+    def cap_hit(self) -> bool:
+        return self.token_cap_hit or self.dollar_cap_hit
+
+
+_MSSP_USER_DAILY_SPEND_SQL = """
+    SELECT COALESCE(SUM((COALESCE(m.tokens_in, 0)
+                       + COALESCE(m.tokens_out, 0))::bigint), 0)::bigint AS tokens,
+           COALESCE(SUM(COALESCE(m.dollars, 0.0))::float, 0.0)::float    AS dollars
+      FROM chat_messages m
+      JOIN conversations c ON c.id = m.conversation_id
+     WHERE c.scope = 'mssp_fleet'
+       AND c.created_by_user_id = :u
+       AND m.created_at >= now() - interval '24 hours'
+"""
+
+
+async def get_mssp_user_daily_spend(
+    db: AsyncSession, user_id: UUID
+) -> MsspUserDailySpend:
+    row = (
+        await db.execute(
+            text(_MSSP_USER_DAILY_SPEND_SQL), {"u": str(user_id)}
+        )
+    ).mappings().first()
+    if row is None:
+        return MsspUserDailySpend(tokens=0, dollars=0.0)
+    return MsspUserDailySpend(
+        tokens=int(row["tokens"] or 0),
+        dollars=float(row["dollars"] or 0.0),
+    )
+
+
+async def assert_mssp_user_daily_cap_ok(
+    db: AsyncSession, user_id: UUID, *, source: str
+) -> MsspUserDailySpend | None:
+    spend = await get_mssp_user_daily_spend(db, user_id)
+    if spend.cap_hit:
+        logger.warning(
+            "mssp_user_daily_cap_hit",
+            source=source,
+            user_id=str(user_id),
+            tokens_24h=spend.tokens,
+            token_cap=mssp_user_daily_token_cap(),
+            dollars_24h=round(spend.dollars, 4),
+            dollar_cap=mssp_user_daily_dollar_cap(),
+        )
+        return None
+    return spend

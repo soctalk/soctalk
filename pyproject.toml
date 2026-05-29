@@ -33,6 +33,10 @@ dependencies = [
     # V1 additions (codex P1-7):
     "prometheus-client>=0.20.0",
     "kubernetes>=29.0.0",
+    # Async client for cross-namespace Secret reads from the chat agent
+    # (per-tenant Wazuh routing). The sync ``kubernetes`` package would
+    # block the event loop.
+    "kubernetes-asyncio>=32.0.0",
     "pyyaml>=6.0",
     # Internal auth (internal-auth):
     "argon2-cffi>=23.1.0",

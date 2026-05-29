@@ -86,6 +86,7 @@ def render_tenant_values(
     agent_hostname: str | None = None,
     cert_issuer: str | None = None,
     profile: Profile = "poc",
+    network_policies_enabled: bool = True,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
 
@@ -159,7 +160,7 @@ def render_tenant_values(
             "misp": {"enabled": False},  # V1: MISP deferred regardless of config
         },
         "networkPolicies": {
-            "enabled": True,
+            "enabled": network_policies_enabled,
             "allowedLlmHosts": allowed_llm_hosts,
         },
         "resourceQuota": {

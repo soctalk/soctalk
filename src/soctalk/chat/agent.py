@@ -61,16 +61,29 @@ from soctalk.chat.mcp_tools import build_mcp_chat_tools
 from soctalk.chat.tools import (
     AVAILABLE_TOOLS,
     ChatTool,
+    TenantSlugMismatch,
+    TenantSlugRequired,
+    TenantSlugUnknown,
     ToolResult,
     get_investigation,
+    resolve_tenant_slug,
 )
 
 
-def _active_tools() -> list[ChatTool]:
-    """Read-only DB tools + native Wazuh primitives + MCP-bound tools."""
+def _active_tools(scope: str) -> list[ChatTool]:
+    """Read-only DB tools + native Wazuh primitives + MCP-bound tools.
+
+    Fleet-only tools (``ChatTool.fleet_only``) are excluded in
+    tenant-scope conversations so a tenant-bound MSSP chat can't peek
+    at the fleet without explicitly switching scope.
+    """
     from soctalk.chat.wazuh_primitives import WAZUH_CHAT_TOOLS
 
-    return [*AVAILABLE_TOOLS, *WAZUH_CHAT_TOOLS, *build_mcp_chat_tools()]
+    pool = [*AVAILABLE_TOOLS, *WAZUH_CHAT_TOOLS, *build_mcp_chat_tools()]
+    if scope == "mssp_fleet":
+        return pool
+    # tenant scope: drop fleet-only tools.
+    return [t for t in pool if not t.fleet_only]
 
 
 def _find_tool(name: str, pool: list[ChatTool]) -> ChatTool | None:
@@ -107,7 +120,11 @@ class TurnContext:
     """Everything the loop needs to know about one turn."""
 
     conversation_id: UUID
-    tenant_id: UUID
+    # NULL for scope='mssp_fleet' — the agent operates without a single
+    # tenant binding and tools require explicit tenant_slug.
+    tenant_id: UUID | None
+    # 'tenant' | 'mssp_fleet' — drives system prompt + tool requirements.
+    scope: str
     user_id: UUID
     model_name: str
     budget_dollars: float
@@ -118,6 +135,14 @@ class TurnContext:
     # The user's new message text (already persisted as a row before
     # ``run_turn`` is invoked).
     user_text: str
+    # Soft fleet-scope focus (settable via ``set_fleet_focus`` tool).
+    # When set, fleet tool calls that omit ``tenant_slug`` default to
+    # this tenant instead of erroring. Updated in-place by the tool
+    # for the rest of the current turn (subsequent calls within the
+    # same turn pick it up). Persisted to ``conversations.focused_
+    # tenant_id`` so future turns inherit it.
+    focused_tenant_id: UUID | None = None
+    focused_tenant_slug: str | None = None
     # Set by the caller to signal cancellation (closed tab, /stop).
     disconnected: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -265,16 +290,128 @@ def _build_messages(
 
 
 async def _dispatch_tool(
-    tool: ChatTool, db: AsyncSession, raw_args: dict[str, Any]
+    tool: ChatTool,
+    db: AsyncSession,
+    raw_args: dict[str, Any],
+    ctx: TurnContext,
 ) -> ToolResult:
-    """Call the tool function with kwarg unpacking. Catches errors."""
+    """Call the tool function with kwarg unpacking. Catches errors.
+
+    For tenant-targeted tools, resolves ``tenant_slug`` (per scope
+    rules) into a ``target_tenant_id`` kwarg and wraps the result with
+    a ``_tenant`` envelope when the conversation is fleet-scope (so the
+    model can attribute multi-tenant answers correctly).
+    """
+    args = dict(raw_args)
+    slug_in = args.pop("tenant_slug", None)
+    target_meta: dict[str, str] | None = None
+
+    if tool.tenant_targeted:
+        try:
+            target_tid, target_meta = await _resolve_tool_target_tenant(
+                db, ctx, slug_in
+            )
+        except (TenantSlugRequired, TenantSlugMismatch, TenantSlugUnknown) as e:
+            return ToolResult(data={"error": str(e)})
+        if target_tid is not None:
+            args["target_tenant_id"] = target_tid
+
+    # ``set_fleet_focus`` is the one tool that needs handles to the
+    # live conversation row + the in-memory ctx so it can persist the
+    # focus AND mutate ctx for the rest of the same turn. The leading
+    # underscore on the kwarg keeps them out of the JSON Schema the
+    # model sees.
+    if tool.name == "set_fleet_focus":
+        args["_conversation_id"] = ctx.conversation_id
+        args["_ctx"] = ctx
+
     try:
-        return await tool.func(db, **raw_args)  # type: ignore[arg-type]
+        result = await tool.func(db, **args)  # type: ignore[arg-type]
     except TypeError as e:
         return ToolResult(data={"error": f"bad arguments: {e}"})
     except Exception as e:  # noqa: BLE001
         logger.exception("chat_tool_error tool=%s", tool.name)
         return ToolResult(data={"error": f"{type(e).__name__}: {e}"[:200]})
+
+    # Only add the _tenant envelope in fleet scope. Tenant scope keeps
+    # the existing flat shape (the tenant is implicit and uniform across
+    # results, so the envelope would be pure noise).
+    if target_meta is not None and ctx.scope == "mssp_fleet":
+        result = _wrap_result_with_tenant(result, target_meta)
+    return result
+
+
+async def _resolve_tool_target_tenant(
+    db: AsyncSession,
+    ctx: TurnContext,
+    slug_in: str | None,
+) -> tuple[UUID | None, dict[str, str] | None]:
+    """Translate ``tenant_slug`` arg + ctx scope to ``(tenant_id, meta)``.
+
+    * tenant scope, slug omitted        → (ctx.tenant_id, None)
+    * tenant scope, slug matches conv   → (ctx.tenant_id, None)
+    * tenant scope, slug mismatches     → TenantSlugMismatch
+    * fleet  scope, slug omitted        → TenantSlugRequired
+    * fleet  scope, slug given          → resolve to (tid, meta)
+    """
+    if ctx.scope == "tenant":
+        assert ctx.tenant_id is not None  # ck_conversations_scope invariant
+        if slug_in is None:
+            return (ctx.tenant_id, None)
+        # Caller passed a slug — validate it matches the conv's tenant.
+        try:
+            sid, sslug, sname = await resolve_tenant_slug(db, slug_in)
+        except TenantSlugUnknown:
+            raise
+        if sid != ctx.tenant_id:
+            raise TenantSlugMismatch(
+                f"tenant_slug {slug_in!r} doesn't match this "
+                "conversation's tenant — drop the arg or open a fleet "
+                "conversation"
+            )
+        return (ctx.tenant_id, None)
+
+    # mssp_fleet scope.
+    if not slug_in:
+        # Fall back to the conversation's focus, if any. The agent sets
+        # focus via the ``set_fleet_focus`` tool when the user says
+        # things like "let's work on lab tenant".
+        if ctx.focused_tenant_id is not None:
+            slug = ctx.focused_tenant_slug or ""
+            return (
+                ctx.focused_tenant_id,
+                {
+                    "id": str(ctx.focused_tenant_id),
+                    "slug": slug,
+                    "name": slug,
+                },
+            )
+        raise TenantSlugRequired(
+            "tenant_slug required in fleet conversations — call "
+            "set_fleet_focus(slug_or_name) once if the user signalled "
+            "a tenant to work on, or list_tenants() to find one"
+        )
+    sid, sslug, sname = await resolve_tenant_slug(db, slug_in)
+    return (sid, {"id": str(sid), "slug": sslug, "name": sname})
+
+
+def _wrap_result_with_tenant(
+    result: ToolResult, tenant_meta: dict[str, str]
+) -> ToolResult:
+    """Add ``_tenant`` to the result's data envelope.
+
+    For list payloads we wrap as ``{"_tenant": ..., "rows": [...]}``;
+    dicts get ``_tenant`` merged in at the top level.
+    """
+    if isinstance(result.data, dict):
+        wrapped = {"_tenant": tenant_meta, **result.data}
+    else:
+        wrapped = {"_tenant": tenant_meta, "rows": result.data}
+    return ToolResult(
+        data=wrapped,
+        truncated=result.truncated,
+        hint=result.hint,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +443,7 @@ async def _insert_message(
     db: AsyncSession,
     *,
     conversation_id: UUID,
-    tenant_id: UUID,
+    tenant_id: UUID | None,
     role: str,
     content: dict[str, Any],
     tokens_in: int = 0,
@@ -314,7 +451,12 @@ async def _insert_message(
     dollars: float = 0.0,
     model_name: str | None = None,
 ) -> UUID:
-    """Insert one chat_messages row and return its id."""
+    """Insert one chat_messages row and return its id.
+
+    ``tenant_id=None`` is the fleet-scope path: the row matches the
+    NULL-tenant RLS branch (audience='mssp' + blank GUC) — MSSP
+    sessions handle this via BYPASSRLS.
+    """
     msg_id = uuid4()
     await db.execute(
         text(
@@ -331,7 +473,7 @@ async def _insert_message(
         {
             "id": str(msg_id),
             "cid": str(conversation_id),
-            "t": str(tenant_id),
+            "t": str(tenant_id) if tenant_id else None,
             "role": role,
             "content": json.dumps(content, default=str),
             "tin": tokens_in,
@@ -412,6 +554,10 @@ async def run_turn(
         system_prompt = prompts.per_investigation_system_prompt(
             ctx.investigation_summary
         )
+    elif ctx.scope == "mssp_fleet":
+        system_prompt = prompts.fleet_system_prompt(
+            focused_tenant_slug=ctx.focused_tenant_slug,
+        )
     else:
         system_prompt = prompts.GLOBAL_SYSTEM_PROMPT
 
@@ -451,7 +597,8 @@ async def run_turn(
     )
     # Snapshot the active toolset for this turn — read-only DB tools
     # plus whatever MCP servers (Wazuh, Cortex, …) are currently bound.
-    active_pool = _active_tools()
+    # Fleet roll-ups are filtered out for tenant-scope conversations.
+    active_pool = _active_tools(ctx.scope)
     try:
         llm = llm.bind_tools(_tool_specs_for_binding(active_pool))
     except (AttributeError, TypeError):
@@ -571,7 +718,7 @@ async def run_turn(
                 if tool is None:
                     result = ToolResult(data={"error": f"unknown tool: {tname!r}"})
                 else:
-                    result = await _dispatch_tool(tool, db, targs or {})
+                    result = await _dispatch_tool(tool, db, targs or {}, ctx)
 
                 yield sse.tool_result(
                     call_id, result.to_dict(), truncated=result.truncated

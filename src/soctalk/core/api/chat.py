@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, AsyncIterator
 from uuid import UUID
 
 import structlog
@@ -38,7 +39,10 @@ from soctalk.chat.agent import (
     load_investigation_summary,
     run_turn,
 )
-from soctalk.core.cost import assert_tenant_daily_cap_ok
+from soctalk.core.cost import (
+    assert_mssp_user_daily_cap_ok,
+    assert_tenant_daily_cap_ok,
+)
 from soctalk.core.tenancy.auth import current_identity, UserIdentity
 
 
@@ -52,7 +56,7 @@ router = APIRouter(
     dependencies=[Depends(current_identity)],
 )
 
-MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin"})
+MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "analyst"})
 
 
 def _db(request: Request) -> AsyncSession:
@@ -60,6 +64,40 @@ def _db(request: Request) -> AsyncSession:
     if sess is None:
         raise HTTPException(500, "db session not attached")
     return sess
+
+
+@asynccontextmanager
+async def _chat_db(
+    request: Request, identity: UserIdentity
+) -> AsyncIterator[AsyncSession]:
+    """Yield the session that's correctly scoped for the caller's audience.
+
+    * **MSSP audience** (platform_admin / mssp_admin / analyst): open a
+      fresh BYPASSRLS session and commit at exit. RLS is bypassed so
+      fleet conversations (``tenant_id IS NULL``) are visible AND
+      writable even when the caller has an Open SOC pin that would
+      otherwise pin ``app.current_tenant_id`` on the request session.
+    * **Tenant audience** (customer roles, tenant_admin, etc.): yield
+      the request-bound session. The middleware commits on response;
+      no extra commit here. RLS keeps the caller scoped to their home
+      tenant.
+
+    Use this instead of ``_db(request)`` directly on any handler that
+    reads or writes ``conversations`` / ``chat_messages``.
+    """
+    if identity.role in MSSP_LEVEL_ROLES:
+        from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+        sm = get_mssp_sessionmaker()
+        async with sm() as sess:
+            try:
+                yield sess
+                await sess.commit()
+            except Exception:
+                await sess.rollback()
+                raise
+    else:
+        yield _db(request)
 
 
 def _default_chat_model() -> str:
@@ -84,6 +122,11 @@ def _default_budget_dollars() -> float:
 class _CreateConversationBody(BaseModel):
     investigation_id: str | None = None
     model: str | None = None
+    # tenant | mssp_fleet | null. When NULL (the common case from the
+    # UI's single '+ New' button), _resolve_scope_and_tenant picks the
+    # right default for the caller's role: MSSP → 'mssp_fleet',
+    # customer → 'tenant'. Callers can still pin a scope explicitly.
+    scope: str | None = None
 
 
 class _PostMessageBody(BaseModel):
@@ -92,7 +135,14 @@ class _PostMessageBody(BaseModel):
 
 class _ConversationOut(BaseModel):
     id: str
-    tenant_id: str
+    # NULL for scope='mssp_fleet' conversations.
+    tenant_id: str | None
+    scope: str
+    # Soft fleet-scope focus (set via set_fleet_focus tool). NULL when
+    # unset; the API also surfaces the slug joined from the tenants
+    # table for UI rendering.
+    focused_tenant_id: str | None
+    focused_tenant_slug: str | None
     created_by_user_id: str
     investigation_id: str | None
     title: str | None
@@ -129,21 +179,37 @@ class _ConversationDetailOut(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _resolve_tenant_for_write(
+_VALID_SCOPES = frozenset({"tenant", "mssp_fleet"})
+
+
+async def _resolve_scope_and_tenant(
     db: AsyncSession,
     identity: UserIdentity,
     *,
+    requested_scope: str | None,
     investigation_id: UUID | None,
-) -> UUID:
-    """Apply the MSSP-write tenant-id rule.
+) -> tuple[str, UUID | None]:
+    """Resolve (scope, tenant_id) for a new conversation.
 
-    1. investigation_id provided → use that investigation's tenant_id
-       (authoritative binding); MSSP role allowed cross-tenant, tenant
-       role only if it matches their home tenant.
-    2. No investigation_id → caller's current_tenant pin if set, else
-       home tenant_id. MSSP without a pin cannot create a global chat
-       (would not have a single tenant_id to stamp).
+    Defaulting:
+
+    * Investigation-bound: ALWAYS ``scope='tenant'``, tenant inherited
+      from the investigation row.
+    * Otherwise, when ``requested_scope`` is None (the common UI path
+      — single '+ New' button), pick by role:
+        - MSSP-level → ``mssp_fleet`` (no pin needed; the agent uses
+          ``set_fleet_focus`` to narrow within a conversation).
+        - Customer → ``tenant`` (their home tenant).
+    * Explicit ``requested_scope`` is honoured if valid for the role.
     """
+    is_mssp = identity.role in MSSP_LEVEL_ROLES
+
+    if requested_scope is not None and requested_scope not in _VALID_SCOPES:
+        raise HTTPException(400, "invalid scope")
+    if not is_mssp and requested_scope == "mssp_fleet":
+        raise HTTPException(403, "fleet scope requires an MSSP-level role")
+
+    # Investigation-bound chats are always tenant-scoped.
     if investigation_id is not None:
         row = (
             await db.execute(
@@ -154,25 +220,43 @@ async def _resolve_tenant_for_write(
         if row is None:
             raise HTTPException(404, "investigation not found")
         inv_tenant = UUID(row["tenant_id"])
-        if identity.role not in MSSP_LEVEL_ROLES:
-            if identity.tenant_id != inv_tenant:
-                raise HTTPException(
-                    403, "investigation belongs to a different tenant"
-                )
-        return inv_tenant
+        if not is_mssp and identity.tenant_id != inv_tenant:
+            raise HTTPException(
+                403, "investigation belongs to a different tenant"
+            )
+        return ("tenant", inv_tenant)
 
-    # Global-scope chat.
-    current_pin = getattr(identity, "current_tenant", None)
-    if identity.role in MSSP_LEVEL_ROLES:
+    current_pin = getattr(identity, "current_tenant", None) if is_mssp else None
+
+    # Pick the default scope when caller didn't specify.
+    # Open SOC pinning is the user-facing verb for "operate as this
+    # tenant" — when pinned, a new chat is tenant-scoped to that pin;
+    # otherwise MSSP users get fleet (and narrow via set_fleet_focus).
+    if requested_scope is None:
+        if is_mssp:
+            requested_scope = "tenant" if current_pin else "mssp_fleet"
+        else:
+            requested_scope = "tenant"
+
+    if requested_scope == "mssp_fleet":
+        return ("mssp_fleet", None)
+
+    # requested_scope == "tenant"
+    if is_mssp:
+        # MSSP tenant-scope requires the pin to know which tenant_id
+        # to stamp. Drop the pin via "Clear" if you wanted fleet.
         if current_pin is None:
             raise HTTPException(
                 400,
-                "MSSP global chat requires an active tenant pin (Open SOC)",
+                "tenant-scope chat needs an Open SOC pin; clear the "
+                "pin to start a fleet chat instead",
             )
-        return (
+        pin_uuid = (
             current_pin if isinstance(current_pin, UUID) else UUID(str(current_pin))
         )
-    return identity.tenant_id
+        return ("tenant", pin_uuid)
+
+    return ("tenant", identity.tenant_id)
 
 
 def _title_from_text(s: str) -> str:
@@ -190,7 +274,6 @@ async def create_conversation(
     body: _CreateConversationBody, request: Request
 ) -> _ConversationOut:
     identity = current_identity(request)
-    db = _db(request)
 
     inv_uuid: UUID | None = None
     if body.investigation_id:
@@ -199,36 +282,45 @@ async def create_conversation(
         except (TypeError, ValueError) as e:
             raise HTTPException(400, "invalid investigation_id") from e
 
-    tenant_id = await _resolve_tenant_for_write(
-        db, identity, investigation_id=inv_uuid
-    )
     model_name = body.model or _default_chat_model()
     budget = _default_budget_dollars()
 
-    row = (
-        await db.execute(
-            text(
-                """
-                INSERT INTO conversations (
-                    tenant_id, created_by_user_id, investigation_id,
-                    model_name, status, budget_dollars
-                )
-                VALUES (:t, :u, :inv, :m, 'active', :b)
-                RETURNING id::text, tenant_id::text, created_by_user_id::text,
-                          investigation_id::text, title, model_name, status,
-                          total_tokens, total_dollars, budget_dollars,
-                          created_at, last_message_at
-                """
-            ),
-            {
-                "t": str(tenant_id),
-                "u": str(identity.user_id),
-                "inv": str(inv_uuid) if inv_uuid else None,
-                "m": model_name,
-                "b": budget,
-            },
+    async with _chat_db(request, identity) as db:
+        scope, tenant_id = await _resolve_scope_and_tenant(
+            db,
+            identity,
+            requested_scope=body.scope,
+            investigation_id=inv_uuid,
         )
-    ).mappings().first()
+        row = (
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO conversations (
+                        tenant_id, scope, created_by_user_id,
+                        investigation_id, model_name, status,
+                        budget_dollars
+                    )
+                    VALUES (:t, :s, :u, :inv, :m, 'active', :b)
+                    RETURNING id::text, tenant_id::text, scope,
+                              focused_tenant_id::text,
+                              NULL::text AS focused_tenant_slug,
+                              created_by_user_id::text,
+                              investigation_id::text, title, model_name,
+                              status, total_tokens, total_dollars,
+                              budget_dollars, created_at, last_message_at
+                    """
+                ),
+                {
+                    "t": str(tenant_id) if tenant_id else None,
+                    "s": scope,
+                    "u": str(identity.user_id),
+                    "inv": str(inv_uuid) if inv_uuid else None,
+                    "m": model_name,
+                    "b": budget,
+                },
+            )
+        ).mappings().first()
     if row is None:
         raise HTTPException(500, "conversation insert failed")
     return _ConversationOut(**dict(row))
@@ -241,57 +333,84 @@ async def list_conversations(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> _ConversationListOut:
-    db = _db(request)
+    identity = current_identity(request)
     conds = ["1=1"]
     params: dict[str, Any] = {"n": limit, "off": offset}
     if investigation_id:
         conds.append("investigation_id = :inv")
         params["inv"] = investigation_id
+    # MSSP callers: the BYPASSRLS session would otherwise drown them in
+    # cross-user rows, so we filter to their own creations AND match the
+    # listing to the active scope context (pin → tenant chats for that
+    # pin; no pin → fleet chats). Tenant-audience callers stay
+    # RLS-scoped to their tenant and don't get a user filter (a
+    # tenant_admin keeps seeing the tenant's conversations).
+    if identity.role in MSSP_LEVEL_ROLES:
+        conds.append("created_by_user_id = :u")
+        params["u"] = str(identity.user_id)
+        current_pin = getattr(identity, "current_tenant", None)
+        if current_pin is not None:
+            conds.append("scope = 'tenant'")
+            conds.append("tenant_id = :pin")
+            params["pin"] = str(current_pin)
+        else:
+            conds.append("scope = 'mssp_fleet'")
     sql = (
-        "SELECT id::text, tenant_id::text, created_by_user_id::text, "
-        "investigation_id::text, title, model_name, status, total_tokens, "
-        "total_dollars, budget_dollars, created_at, last_message_at "
-        "FROM conversations WHERE " + " AND ".join(conds)
-        + " ORDER BY created_at DESC LIMIT :n OFFSET :off"
+        "SELECT c.id::text, c.tenant_id::text, c.scope, "
+        "c.focused_tenant_id::text, ft.slug AS focused_tenant_slug, "
+        "c.created_by_user_id::text, c.investigation_id::text, c.title, "
+        "c.model_name, c.status, c.total_tokens, c.total_dollars, "
+        "c.budget_dollars, c.created_at, c.last_message_at "
+        "FROM conversations c "
+        "LEFT JOIN tenants ft ON ft.id = c.focused_tenant_id "
+        "WHERE " + " AND ".join("c." + cond if cond != "1=1" else cond for cond in conds)
+        + " ORDER BY c.created_at DESC LIMIT :n OFFSET :off"
     )
-    rows = (await db.execute(text(sql), params)).mappings().all()
+    async with _chat_db(request, identity) as db:
+        rows = (await db.execute(text(sql), params)).mappings().all()
     return _ConversationListOut(items=[_ConversationOut(**dict(r)) for r in rows])
 
 
 @router.get("/conversations/{conv_id}", response_model=_ConversationDetailOut)
 async def get_conversation(conv_id: str, request: Request) -> _ConversationDetailOut:
-    db = _db(request)
-    conv = (
-        await db.execute(
-            text(
-                """
-                SELECT id::text, tenant_id::text, created_by_user_id::text,
-                       investigation_id::text, title, model_name, status,
-                       total_tokens, total_dollars, budget_dollars,
-                       created_at, last_message_at
-                FROM conversations WHERE id = :id
-                """
-            ),
-            {"id": conv_id},
-        )
-    ).mappings().first()
-    if conv is None:
-        raise HTTPException(404, "conversation not found")
-    msgs = (
-        await db.execute(
-            text(
-                """
-                SELECT id::text, role, content, tokens_in, tokens_out,
-                       dollars, created_at
-                FROM chat_messages
-                WHERE conversation_id = :cid
-                ORDER BY created_at ASC, id ASC
-                LIMIT 200
-                """
-            ),
-            {"cid": conv_id},
-        )
-    ).mappings().all()
+    identity = current_identity(request)
+    async with _chat_db(request, identity) as db:
+        conv = (
+            await db.execute(
+                text(
+                    """
+                    SELECT c.id::text, c.tenant_id::text, c.scope,
+                           c.focused_tenant_id::text,
+                           ft.slug AS focused_tenant_slug,
+                           c.created_by_user_id::text,
+                           c.investigation_id::text, c.title, c.model_name,
+                           c.status, c.total_tokens, c.total_dollars,
+                           c.budget_dollars, c.created_at, c.last_message_at
+                    FROM conversations c
+                    LEFT JOIN tenants ft ON ft.id = c.focused_tenant_id
+                    WHERE c.id = :id
+                    """
+                ),
+                {"id": conv_id},
+            )
+        ).mappings().first()
+        if conv is None:
+            raise HTTPException(404, "conversation not found")
+        msgs = (
+            await db.execute(
+                text(
+                    """
+                    SELECT id::text, role, content, tokens_in, tokens_out,
+                           dollars, created_at
+                    FROM chat_messages
+                    WHERE conversation_id = :cid
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 200
+                    """
+                ),
+                {"cid": conv_id},
+            )
+        ).mappings().all()
     return _ConversationDetailOut(
         conversation=_ConversationOut(**dict(conv)),
         messages=[_MessageOut(**dict(m)) for m in msgs],
@@ -300,11 +419,12 @@ async def get_conversation(conv_id: str, request: Request) -> _ConversationDetai
 
 @router.delete("/conversations/{conv_id}")
 async def delete_conversation(conv_id: str, request: Request) -> dict[str, bool]:
-    db = _db(request)
-    await db.execute(
-        text("UPDATE conversations SET status = 'closed' WHERE id = :id"),
-        {"id": conv_id},
-    )
+    identity = current_identity(request)
+    async with _chat_db(request, identity) as db:
+        await db.execute(
+            text("UPDATE conversations SET status = 'closed' WHERE id = :id"),
+            {"id": conv_id},
+        )
     return {"ok": True}
 
 
@@ -339,72 +459,106 @@ async def post_message(
     ``tenant_context`` pinned to their home tenant.
     """
     identity = current_identity(request)
-    db = _db(request)
 
     try:
         conv_uuid = UUID(conv_id)
     except (TypeError, ValueError) as e:
         raise HTTPException(400, "invalid conv_id") from e
 
-    # FOR UPDATE lock prevents two browser tabs from triggering
-    # concurrent turns on the same conversation and double-billing.
-    conv = (
+    # Prelude (lock + cap check + user message insert + investigation
+    # summary load) runs in an audience-appropriate session — MSSP gets
+    # a fresh BYPASSRLS session so fleet convs (tenant_id IS NULL)
+    # write through under an MSSP user's Open-SOC-pinned request.
+    async with _chat_db(request, identity) as db:
+        # FOR UPDATE lock prevents two browser tabs from triggering
+        # concurrent turns on the same conversation and double-billing.
+        # We pull focused_tenant_id + the joined slug here too so the
+        # turn context can default fleet tool calls to it.
+        conv = (
+            await db.execute(
+                text(
+                    """
+                    SELECT c.id::text, c.tenant_id::text, c.scope,
+                           c.focused_tenant_id::text,
+                           ft.slug AS focused_tenant_slug,
+                           c.created_by_user_id::text,
+                           c.investigation_id::text, c.model_name,
+                           c.status, c.total_dollars, c.budget_dollars,
+                           c.title
+                    FROM conversations c
+                    LEFT JOIN tenants ft ON ft.id = c.focused_tenant_id
+                    WHERE c.id = :id FOR UPDATE OF c NOWAIT
+                    """
+                ),
+                {"id": conv_id},
+            )
+        ).mappings().first()
+        if conv is None:
+            raise HTTPException(404, "conversation not found")
+        if conv["status"] != "active":
+            raise HTTPException(
+                409, f"conversation is {conv['status']}"
+            )
+
+        scope = conv["scope"]
+        tenant_id: UUID | None = (
+            UUID(conv["tenant_id"]) if conv["tenant_id"] else None
+        )
+
+        # Daily-cap check: tenant cap for tenant-scope convs (shared
+        # with worker), per-MSSP-user cap for fleet convs (parallel
+        # ceiling so fleet isn't a budget side-door).
+        if scope == "tenant":
+            assert tenant_id is not None  # invariant from ck_conversations_scope
+            if (
+                await assert_tenant_daily_cap_ok(db, tenant_id, source="chat_post")
+                is None
+            ):
+                raise HTTPException(429, "tenant daily cap exceeded")
+        else:  # mssp_fleet
+            if (
+                await assert_mssp_user_daily_cap_ok(
+                    db, identity.user_id, source="chat_post_fleet"
+                )
+                is None
+            ):
+                raise HTTPException(429, "MSSP user daily cap exceeded")
+
+        # Append the user message + auto-title on first user message.
+        # tenant_id mirrors the conversation's scope: NULL for fleet,
+        # set for tenant.
         await db.execute(
             text(
                 """
-                SELECT id::text, tenant_id::text, created_by_user_id::text,
-                       investigation_id::text, model_name, status,
-                       total_dollars, budget_dollars, title
-                FROM conversations WHERE id = :id FOR UPDATE NOWAIT
+                INSERT INTO chat_messages (
+                    conversation_id, tenant_id, role, content, created_at
+                )
+                VALUES (:cid, :t, 'user', CAST(:content AS jsonb), now())
                 """
             ),
-            {"id": conv_id},
+            {
+                "cid": conv_id,
+                "t": str(tenant_id) if tenant_id else None,
+                "content": '{"text": ' + _json_str(body.text) + "}",
+            },
         )
-    ).mappings().first()
-    if conv is None:
-        raise HTTPException(404, "conversation not found")
-    if conv["status"] != "active":
-        raise HTTPException(
-            409, f"conversation is {conv['status']}"
-        )
-
-    tenant_id = UUID(conv["tenant_id"])
-
-    # Daily-cap check shared with the worker path.
-    if await assert_tenant_daily_cap_ok(db, tenant_id, source="chat_post") is None:
-        raise HTTPException(429, "tenant daily cap exceeded")
-
-    # Append the user message + auto-title on first user message.
-    await db.execute(
-        text(
-            """
-            INSERT INTO chat_messages (
-                conversation_id, tenant_id, role, content, created_at
+        if not conv["title"]:
+            await db.execute(
+                text("UPDATE conversations SET title = :t WHERE id = :id"),
+                {"t": _title_from_text(body.text), "id": conv_id},
             )
-            VALUES (:cid, :t, 'user', CAST(:content AS jsonb), now())
-            """
-        ),
-        {
-            "cid": conv_id,
-            "t": str(tenant_id),
-            "content": '{"text": ' + _json_str(body.text) + "}",
-        },
-    )
-    if not conv["title"]:
-        await db.execute(
-            text("UPDATE conversations SET title = :t WHERE id = :id"),
-            {"t": _title_from_text(body.text), "id": conv_id},
-        )
 
-    # Pre-load investigation summary if scoped.
-    summary = None
-    if conv["investigation_id"]:
-        try:
-            summary = await load_investigation_summary(
-                db, UUID(conv["investigation_id"])
-            )
-        except Exception:  # noqa: BLE001
-            summary = None
+        # Pre-load investigation summary if scoped.
+        summary = None
+        if conv["investigation_id"]:
+            try:
+                summary = await load_investigation_summary(
+                    db, UUID(conv["investigation_id"])
+                )
+            except Exception:  # noqa: BLE001
+                summary = None
+    # Prelude session has committed (MSSP) / will be committed by
+    # middleware (tenant). Stream session below opens fresh.
 
     # Capture pre-stream context (the agent only needs values, not the
     # request session itself — by the time _stream() runs the
@@ -412,6 +566,13 @@ async def post_message(
     ctx = TurnContext(
         conversation_id=conv_uuid,
         tenant_id=tenant_id,
+        scope=scope,
+        focused_tenant_id=(
+            UUID(conv["focused_tenant_id"])
+            if conv.get("focused_tenant_id")
+            else None
+        ),
+        focused_tenant_slug=conv.get("focused_tenant_slug"),
         user_id=identity.user_id,
         model_name=conv["model_name"],
         budget_dollars=float(conv["budget_dollars"]),
@@ -436,6 +597,13 @@ async def post_message(
         # has been (or is about to be) committed by the middleware on
         # the 200 response. Reusing it triggers asyncpg's "another
         # operation in progress" InterfaceError mid-stream.
+        #
+        # Session choice keys on the CALLER'S role (MSSP audience reads
+        # cross-tenant for the chat's read tools; tenant-role caller
+        # gets RLS-pinned). The conv's scope decides what rows the loop
+        # writes (NULL tenant_id for fleet), which is orthogonal to the
+        # session role — MSSP-BYPASS handles NULL writes fine, tenant
+        # writes still match the RLS predicate.
         if is_mssp:
             sm = get_mssp_sessionmaker()
             tctx = None
@@ -510,19 +678,19 @@ async def confirm_action(
     conv_id: str, msg_id: str, request: Request
 ) -> dict[str, Any]:
     identity = current_identity(request)
-    db = _db(request)
-    try:
-        result = await chat_actions.dispatch_confirm(
-            db,
-            message_id=UUID(msg_id),
-            conversation_id=UUID(conv_id),
-            reviewer_user_id=identity.user_id,
-            reviewer_email=identity.email,
-        )
-    except LookupError as e:
-        raise HTTPException(404, str(e))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    async with _chat_db(request, identity) as db:
+        try:
+            result = await chat_actions.dispatch_confirm(
+                db,
+                message_id=UUID(msg_id),
+                conversation_id=UUID(conv_id),
+                reviewer_user_id=identity.user_id,
+                reviewer_email=identity.email,
+            )
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     return result
 
 
