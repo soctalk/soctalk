@@ -53,13 +53,19 @@ spec:
         values: ["wazuh-manager", "wazuh-indexer", "thehive", "cortex"]
   policyTypes: [Ingress]
   ingress:
+    # Permit ingress from BOTH the orchestrator (verdict / runs-worker
+    # path, the original consumer) AND the API pod (chat agent's
+    # per-tenant Wazuh routing — calls land on the API process, not the
+    # orchestrator). See docs/mssp-chat-plan.md §"Risks #2".
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: soctalk-system
           podSelector:
-            matchLabels:
-              app.kubernetes.io/component: orchestrator
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: ["orchestrator", "api"]
       ports:
         - { port: 55000, protocol: TCP }  # Wazuh manager API
         - { port: 9200, protocol: TCP }   # Wazuh indexer
