@@ -1,7 +1,7 @@
 { pkgs }:
 
 let
-  python = pkgs.python311;
+  python = pkgs.python313;
   
   # Python packages available from nixpkgs
   pythonWithPackages = python.withPackages (ps: with ps; [
@@ -42,8 +42,8 @@ in pkgs.mkShell {
     pythonWithPackages
 
     # Node.js and pnpm for frontend
-    pkgs.nodejs_20
-    pkgs.nodePackages.pnpm
+    pkgs.nodejs_22
+    pkgs.pnpm_9          # pin to 9.x: matches lockfile v9.0 + Dockerfiles' corepack pnpm@9.15.0
 
     # PostgreSQL client tools
     pkgs.postgresql_16
@@ -53,7 +53,7 @@ in pkgs.mkShell {
 
     # Linting and formatting
     pkgs.ruff
-    pkgs.nodePackages.prettier
+    pkgs.prettier
 
     # Build tools
     pkgs.gnumake
