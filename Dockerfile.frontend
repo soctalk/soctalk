@@ -14,10 +14,7 @@
 
 FROM node:20-alpine AS builder
 WORKDIR /app
-# Pin pnpm to a version that still supports Node 20. corepack's
-# ``pnpm@latest`` jumped to 11.x which requires Node 22; pin so the
-# build doesn't drift the next time we rebuild.
-RUN corepack enable && corepack prepare pnpm@10.10.0 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
