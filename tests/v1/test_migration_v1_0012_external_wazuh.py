@@ -36,11 +36,14 @@ pytestmark = [
 ]
 
 
+# Columns OWNED by v1_0012_integration_external_wazuh (added on upgrade,
+# dropped on downgrade). ``wazuh_indexer_url`` is deliberately absent: it
+# is created by the upstream v1_0013_mssp_chat_scope migration that this
+# revision now descends from, so it survives this migration's downgrade.
 _NEW_COLUMNS = {
     "wazuh_username",
     "wazuh_password_plain",
     "wazuh_api_token_plain",
-    "wazuh_indexer_url",
     "wazuh_api_url",
 }
 
@@ -144,12 +147,16 @@ def test_v1_0012_external_wazuh_is_reversible():
         cols_after_down = _column_names(engine, "integration_configs")
         # The five new columns must be gone; legacy columns remain.
         assert not (_NEW_COLUMNS & cols_after_down), (
-            "downgrade -1 should have dropped the wazuh_* columns, "
+            "downgrade -1 should have dropped the four owned wazuh_* columns, "
             f"still present: {sorted(_NEW_COLUMNS & cols_after_down)}"
         )
         # Sanity: pre-existing columns survive the downgrade.
         assert "wazuh_url" in cols_after_down
         assert "llm_api_key_plain" in cols_after_down
+        # wazuh_indexer_url is owned by the upstream v1_0013_mssp_chat_scope
+        # migration, not this one — it must survive this revision's
+        # downgrade rather than being dropped with the four owned columns.
+        assert "wazuh_indexer_url" in cols_after_down
 
         # CHECK constraint must NOT list 'provided' after downgrade and
         # must still list the three pre-v1_0012 values.
