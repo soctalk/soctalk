@@ -32,6 +32,20 @@ build-frontend:
     docker tag soctalk-frontend:latest {{registry}}/soctalk-frontend:latest
     @echo "Frontend image ready: {{registry}}/soctalk-frontend:latest"
 
+# Build and tag the canonical V1 app-ui image (Dockerfile.app → soctalk-app-ui)
+#
+# This is the image the soctalk-system Helm chart references
+# (component "app-ui" → soctalk-app-ui), and what CI publishes
+# (.github/workflows/publish-images.yml). Distinct from build-frontend,
+# which builds the legacy compose-era soctalk-frontend from
+# Dockerfile.frontend. The chart / k8s deploy path needs THIS one.
+build-app-ui:
+    @echo "Building app-ui image..."
+    docker build -f Dockerfile.app --network=host -t soctalk-app-ui:latest .
+    @echo "Tagging image for registry..."
+    docker tag soctalk-app-ui:latest {{registry}}/soctalk-app-ui:latest
+    @echo "App-ui image ready: {{registry}}/soctalk-app-ui:latest"
+
 # Build and tag the mock-endpoint image
 build-mock-endpoint:
     @echo "Building mock-endpoint image..."
@@ -166,11 +180,10 @@ integration-test *EXTRA="tests/v1":
 
 # Build SocTalk images, import into the soctalk-local cluster, helm install / upgrade
 system-up:
-    just build-all
+    just build-api build-app-ui
     k3d image import \
         cr.lab.atricore.io/soctalk-api:latest \
-        cr.lab.atricore.io/soctalk-orchestrator:latest \
-        cr.lab.atricore.io/soctalk-frontend:latest \
+        cr.lab.atricore.io/soctalk-app-ui:latest \
         --cluster soctalk-local
     helm upgrade --install soctalk-system charts/soctalk-system \
         --namespace soctalk-system --create-namespace \
@@ -184,11 +197,10 @@ system-up:
 
 # Rebuild images, re-import, rolling-restart deployments (skips helm)
 system-reload:
-    just build-all
+    just build-api build-app-ui
     k3d image import \
         cr.lab.atricore.io/soctalk-api:latest \
-        cr.lab.atricore.io/soctalk-orchestrator:latest \
-        cr.lab.atricore.io/soctalk-frontend:latest \
+        cr.lab.atricore.io/soctalk-app-ui:latest \
         --cluster soctalk-local
     kubectl -n soctalk-system rollout restart deploy
     kubectl -n soctalk-system rollout status deploy --timeout=3m
