@@ -21,6 +21,17 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    # Skip image rebuilds when the change touches only docs, tests, or
+    # the soctalk-docs site. Saves CI minutes and avoids re-publishing
+    # the same image bits on a doc tweak.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/workflows/v1-ci.yml'
+      - '.github/workflows/deploy-demo.yml'
   workflow_dispatch:
     inputs:
       tag:

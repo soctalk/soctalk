@@ -1,0 +1,126 @@
+name: Deploy to demo.soctalk.ai
+
+# Auto-deploys the freshly-built images to the demo box and runs the
+# Playwright onboarding smoke test against it.
+#
+# Triggered automatically after Publish Images and Charts succeeds on
+# main. Can also be invoked manually via workflow_dispatch.
+#
+# Required secrets (set via `gh secret set`):
+#   DEMO_HOST           e.g. demo.soctalk.ai  (or an IP, e.g. 116.203.201.40)
+#   DEMO_SSH_USER       e.g. root
+#   DEMO_SSH_KEY        private SSH key with access to the demo node
+#   DEMO_ADMIN_EMAIL    bootstrap admin email (for the smoke test)
+#   DEMO_ADMIN_PW       bootstrap admin password
+#
+# Required vars (set via `gh variable set`):
+#   DEMO_BASE_URL       https://demo.soctalk.ai (defaults to https://${{ secrets.DEMO_HOST }})
+#
+# The workflow rolls the deployments to the new SHA, waits for rollout
+# to settle, then runs the smoke test. If smoke fails, the workflow
+# exits non-zero — no automatic rollback yet (operator inspects).
+
+on:
+  workflow_run:
+    workflows: ["Publish Images and Charts"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Image SHA to deploy (default: short SHA of main HEAD)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only run when the upstream workflow succeeded (or when manually fired).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run gives us the SHA of the originating run; use it.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve image SHA
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.sha }}" ]]; then
+            sha="${{ inputs.sha }}"
+          else
+            sha="${GITHUB_SHA::7}"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying SHA: $sha"
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.DEMO_SSH_KEY }}" > ~/.ssh/id_demo
+          chmod 600 ~/.ssh/id_demo
+          ssh-keyscan -H "${{ secrets.DEMO_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Roll soctalk-system deployments to new SHA
+        env:
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_demo \
+              -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
+              "set -euo pipefail
+               for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
+                 container=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || true)
+                 [ -z \"\$container\" ] && { echo \"skipping \$d (not found)\"; continue; }
+                 # Image base differs per deployment; preserve it and just swap tag.
+                 base=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/:.*//')
+                 echo \"rolling \$d: \$base:\$SHA\"
+                 kubectl -n soctalk-system set image deploy/\$d \$container=\$base:$SHA
+               done
+               for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
+                 kubectl -n soctalk-system rollout status deploy/\$d --timeout=5m || true
+               done"
+
+  smoke:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run smoke test
+        env:
+          SMOKE_BASE_URL: ${{ vars.DEMO_BASE_URL || format('https://{0}', secrets.DEMO_HOST) }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
+          SMOKE_SLUG_PREFIX: ci
+        run: python tests/e2e/smoke_onboard.py
+
+      - name: Upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots
+          path: /tmp/onboard-shots/
+          if-no-files-found: ignore
