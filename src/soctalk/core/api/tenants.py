@@ -64,6 +64,28 @@ class TenantRead(BaseModel):
     runtime: dict | None = None
 
 
+class ExternalSiemOnboard(BaseModel):
+    """External SIEM (Wazuh) connection material for the ``provided`` profile.
+
+    The tenant brings their own Wazuh deployment rather than having SocTalk
+    provision one in-namespace. The Wazuh **API** (manager, :55000) and the
+    **Indexer** (OpenSearch, :9200) authenticate with *separate* credentials,
+    mirroring the 4-key ``*-wazuh-creds`` Secret. ``api_token`` is an optional
+    pre-minted manager token that overrides username/password auth; its
+    absence is always valid. Persisted onto the tenant's IntegrationConfig
+    (passwords/token land in the ``*_plain`` columns).
+    """
+
+    indexer_url: str = Field(..., max_length=500)
+    indexer_username: str = Field(..., max_length=255)
+    indexer_password: str = Field(..., max_length=4096)
+    api_url: str = Field(..., max_length=500)
+    api_username: str = Field(..., max_length=255)
+    api_password: str = Field(..., max_length=4096)
+    api_token: str | None = Field(default=None, max_length=4096)
+    verify_ssl: bool = True
+
+
 class TenantOnboard(BaseModel):
     """Wizard payload — one POST, three logical steps' worth of data."""
 
@@ -81,19 +103,11 @@ class TenantOnboard(BaseModel):
     # LLM endpoint (optional; tenant can set API key later via detail page)
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o")
-    # External Wazuh connection — only meaningful for the ``provided`` profile,
-    # where the tenant brings their own Wazuh deployment rather than having
-    # SocTalk provision one in the tenant namespace. The Wazuh API (manager)
-    # and the Indexer (OpenSearch) authenticate with separate credentials.
-    # Persisted onto the tenant's IntegrationConfig (passwords/token land in
-    # the *_plain columns).
-    wazuh_api_url: str | None = Field(default=None, max_length=500)
-    wazuh_api_username: str | None = Field(default=None, max_length=255)
-    wazuh_api_password: str | None = Field(default=None, max_length=4096)
-    wazuh_api_token: str | None = Field(default=None, max_length=4096)
-    wazuh_indexer_url: str | None = Field(default=None, max_length=500)
-    wazuh_indexer_username: str | None = Field(default=None, max_length=255)
-    wazuh_indexer_password: str | None = Field(default=None, max_length=4096)
+    # External SIEM connection — only meaningful for the ``provided`` profile.
+    # Required for ``provided`` (enforced server-side with a 422 in
+    # :func:`_validate_external_siem`); ignored entirely for poc/persistent so
+    # the controller fills wazuh_url/indexer_url in-cluster.
+    external_siem: ExternalSiemOnboard | None = None
 
 
 class ProvisioningJobRead(BaseModel):
@@ -135,6 +149,59 @@ def _db(request: Request) -> AsyncSession:
     return session
 
 
+# Fields of ``external_siem`` that are mandatory when profile='provided'.
+# ``api_token`` is deliberately excluded — it is an optional override and its
+# absence (or emptiness) must never trigger a 422. ``verify_ssl`` is a bool
+# with a default and is likewise never "missing".
+_REQUIRED_EXTERNAL_SIEM_FIELDS: tuple[str, ...] = (
+    "indexer_url",
+    "indexer_username",
+    "indexer_password",
+    "api_url",
+    "api_username",
+    "api_password",
+)
+
+
+def _external_siem_errors(siem: ExternalSiemOnboard | None) -> list[dict]:
+    """Return field-level validation errors for a ``provided`` onboard.
+
+    When ``siem`` is ``None`` every required field is reported missing. When a
+    block is present, only the empty/blank required fields are reported. An
+    empty list means the external SIEM material is complete.
+    """
+    fields = (
+        _REQUIRED_EXTERNAL_SIEM_FIELDS
+        if siem is None
+        else tuple(
+            name
+            for name in _REQUIRED_EXTERNAL_SIEM_FIELDS
+            if not (getattr(siem, name) or "").strip()
+        )
+    )
+    return [
+        {
+            "loc": ["body", "external_siem", name],
+            "msg": f"{name} is required when profile='provided'",
+            "type": "value_error.missing",
+        }
+        for name in fields
+    ]
+
+
+def _validate_external_siem(siem: ExternalSiemOnboard | None) -> None:
+    """Reject a ``provided`` onboard that lacks complete external-SIEM creds.
+
+    Raises :class:`HTTPException` (422) with field-level errors when the
+    ``external_siem`` block is absent or any required field is empty/blank.
+    Must be called before any DB write so a rejected onboard creates NO
+    Tenant row.
+    """
+    errors = _external_siem_errors(siem)
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+
+
 # ----- Endpoints --------------------------------------------------------------
 
 
@@ -158,6 +225,12 @@ async def onboard_tenant(
     the namespace + secrets + Helm releases + workloads are all ready.
     """
     session = _db(request)
+
+    # Validate external SIEM material up front for the ``provided`` profile,
+    # *before* any DB read/write, so a rejected onboard creates NO Tenant row.
+    if payload.profile == "provided":
+        _validate_external_siem(payload.external_siem)
+
     org = await _get_organization(session)
 
     existing = await session.execute(
@@ -178,22 +251,27 @@ async def onboard_tenant(
     await session.flush()
 
     async with tenant_context(session, tenant.id):
-        # External Wazuh connection material is only captured for the
-        # 'provided' profile (BYO-SIEM). For poc/persistent these stay NULL
-        # and the controller fills wazuh_url/indexer_url in-cluster.
-        provided = payload.profile == "provided"
+        # External SIEM connection material is only captured for the
+        # 'provided' profile (BYO-SIEM, validated above). For poc/persistent
+        # ``siem`` is None and these columns stay NULL so the controller fills
+        # wazuh_url/indexer_url in-cluster. Lands in the SAME transaction as
+        # the Tenant row (single commit below).
+        siem = payload.external_siem if payload.profile == "provided" else None
         session.add_all([
             IntegrationConfig(
                 tenant_id=tenant.id,
                 llm_base_url=payload.llm_base_url,
                 llm_model=payload.llm_model,
-                wazuh_api_url=payload.wazuh_api_url if provided else None,
-                wazuh_username=payload.wazuh_api_username if provided else None,
-                wazuh_password_plain=payload.wazuh_api_password if provided else None,
-                wazuh_api_token_plain=payload.wazuh_api_token if provided else None,
-                wazuh_indexer_url=payload.wazuh_indexer_url if provided else None,
-                wazuh_indexer_username=payload.wazuh_indexer_username if provided else None,
-                wazuh_indexer_password_plain=payload.wazuh_indexer_password if provided else None,
+                wazuh_indexer_url=siem.indexer_url if siem else None,
+                wazuh_indexer_username=siem.indexer_username if siem else None,
+                wazuh_indexer_password_plain=(
+                    siem.indexer_password if siem else None
+                ),
+                wazuh_api_url=siem.api_url if siem else None,
+                wazuh_username=siem.api_username if siem else None,
+                wazuh_password_plain=siem.api_password if siem else None,
+                wazuh_api_token_plain=siem.api_token if siem else None,
+                wazuh_verify_ssl=siem.verify_ssl if siem else True,
             ),
             BrandingConfig(
                 tenant_id=tenant.id,

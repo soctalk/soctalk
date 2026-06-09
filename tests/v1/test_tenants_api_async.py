@@ -301,11 +301,19 @@ async def test_onboard_provided_persists_external_wazuh_fields(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
     """The onboarding wizard payload carries external Wazuh connection
-    material for the 'provided' profile. ``onboard_tenant`` must write it
-    onto the tenant's IntegrationConfig (password/token → *_plain columns)
-    so the adapter can later reach the tenant-supplied SIEM.
+    material for the 'provided' profile inside a nested ``external_siem``
+    block. ``onboard_tenant`` must write the *full* credential set onto the
+    tenant's IntegrationConfig (passwords/token → *_plain columns) so the
+    adapter and chat resolver can later reach the tenant-supplied SIEM.
+
+    Exercises the complete payload → column mapping, including api_token and
+    verify_ssl.
     """
-    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        TenantOnboard,
+        onboard_tenant,
+    )
 
     class FakeRequest:
         class State:
@@ -320,13 +328,16 @@ async def test_onboard_provided_persists_external_wazuh_fields(
         slug=f"pv{uuid4().hex[:8]}",
         display_name="BYO Wazuh Tenant",
         profile="provided",
-        wazuh_api_url="https://wazuh.example.com:55000",
-        wazuh_api_username="soctalk-adapter",
-        wazuh_api_password=pw,
-        wazuh_api_token=tok,
-        wazuh_indexer_url="https://indexer.example.com:9200",
-        wazuh_indexer_username="indexer-ro",
-        wazuh_indexer_password=ipw,
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://indexer.example.com:9200",
+            indexer_username="indexer-ro",
+            indexer_password=ipw,
+            api_url="https://wazuh.example.com:55000",
+            api_username="soctalk-adapter",
+            api_password=pw,
+            api_token=tok,
+            verify_ssl=False,
+        ),
     )
 
     result = await onboard_tenant(payload, FakeRequest())
@@ -339,22 +350,32 @@ async def test_onboard_provided_persists_external_wazuh_fields(
             )
         )
     ).scalar_one()
+    # api side
     assert integration.wazuh_api_url == "https://wazuh.example.com:55000"
     assert integration.wazuh_username == "soctalk-adapter"
     assert integration.wazuh_password_plain == pw
     assert integration.wazuh_api_token_plain == tok
+    # indexer side
     assert integration.wazuh_indexer_url == "https://indexer.example.com:9200"
     assert integration.wazuh_indexer_username == "indexer-ro"
     assert integration.wazuh_indexer_password_plain == ipw
+    # flags
+    assert integration.wazuh_verify_ssl is False
 
 
 async def test_onboard_non_provided_leaves_external_wazuh_null(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
-    """For poc/persistent the wizard must not stamp external Wazuh creds —
-    those columns stay NULL so the controller fills in-cluster URLs.
+    """For poc/persistent the wizard must ignore any ``external_siem`` block —
+    those columns stay NULL (and verify_ssl keeps its default) so the
+    controller fills in-cluster URLs. Guards against a regression where a
+    smuggled external_siem leaks onto a non-provided tenant.
     """
-    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        TenantOnboard,
+        onboard_tenant,
+    )
 
     class FakeRequest:
         class State:
@@ -362,19 +383,25 @@ async def test_onboard_non_provided_leaves_external_wazuh_null(
             db = mssp_session
         state = State()
 
-    # Even if a client smuggles wazuh_* on a poc onboard, we drop them.
+    # Even if a client smuggles a full external_siem on a poc onboard, drop it.
     payload = TenantOnboard(
         slug=f"pc{uuid4().hex[:8]}",
         display_name="PoC Tenant",
         profile="poc",
-        wazuh_api_url="https://should-be-ignored:55000",
-        wazuh_api_username="ignored",
-        wazuh_api_password="ignored",
-        wazuh_indexer_username="ignored",
-        wazuh_indexer_password="ignored",
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://should-be-ignored:9200",
+            indexer_username="ignored",
+            indexer_password="ignored",
+            api_url="https://should-be-ignored:55000",
+            api_username="ignored",
+            api_password="ignored",
+            api_token="ignored",
+            verify_ssl=False,
+        ),
     )
 
     result = await onboard_tenant(payload, FakeRequest())
+    assert result.profile == "poc"
 
     integration = (
         await mssp_session.execute(
@@ -387,5 +414,165 @@ async def test_onboard_non_provided_leaves_external_wazuh_null(
     assert integration.wazuh_username is None
     assert integration.wazuh_password_plain is None
     assert integration.wazuh_api_token_plain is None
+    assert integration.wazuh_indexer_url is None
     assert integration.wazuh_indexer_username is None
     assert integration.wazuh_indexer_password_plain is None
+    # verify_ssl untouched → DB default True (not the smuggled False).
+    assert integration.wazuh_verify_ssl is True
+
+
+def _onboard_route_status() -> int:
+    """Declared HTTP status for POST /api/mssp/tenants/onboard (202 Accepted)."""
+    from soctalk.core.api.tenants import router
+
+    for route in router.routes:
+        if getattr(route, "path", "").endswith("/onboard"):
+            return route.status_code  # type: ignore[attr-defined]
+    raise AssertionError("onboard route not registered")
+
+
+async def test_onboard_provided_profile_happy_path(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """profile='provided' + a complete external_siem block → 202 Accepted, a
+    Tenant row is created, and BOTH the Wazuh API
+    (api_username→wazuh_username) and the Indexer
+    (indexer_username→wazuh_indexer_username) credentials land on the
+    IntegrationConfig.
+
+    api_token is omitted to prove its absence never blocks onboarding.
+    """
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        TenantOnboard,
+        onboard_tenant,
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"hp{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Provided Happy Path",
+        profile="provided",
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://indexer.example.com:9200",
+            indexer_username="indexer-ro",
+            indexer_password="idx-pw-" + uuid4().hex,
+            api_url="https://wazuh.example.com:55000",
+            api_username="soctalk-adapter",
+            api_password="api-pw-" + uuid4().hex,
+            # api_token intentionally omitted (defaults to None) — must not 422.
+        ),
+    )
+
+    # Success contract for the onboard wizard is HTTP 202 Accepted.
+    assert _onboard_route_status() == 202
+
+    result = await onboard_tenant(payload, FakeRequest())
+    assert result.profile == "provided"
+
+    # A Tenant row exists for the slug.
+    tenant_row = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalar_one()
+    assert str(tenant_row.id) == str(result.id)
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_row.id
+            )
+        )
+    ).scalar_one()
+    # Both credential families are populated.
+    assert integration.wazuh_username == "soctalk-adapter"
+    assert integration.wazuh_indexer_username == "indexer-ro"
+    # api_token absent → stored NULL, and onboarding still succeeded.
+    assert integration.wazuh_api_token_plain is None
+
+
+async def test_onboard_provided_profile_missing_creds(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """profile='provided' with external_siem=None → HTTP 422 with field-level
+    errors and NO Tenant row created.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"mc{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Missing Creds",
+        profile="provided",
+        external_siem=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+
+    # No Tenant row was created for the rejected onboard.
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_onboard_provided_profile_partial_creds(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """profile='provided' with an external_siem block whose api_password is
+    empty → HTTP 422 and NO Tenant row created. A partially-filled block is
+    just as invalid as a missing one.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        TenantOnboard,
+        onboard_tenant,
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"pp{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Partial Creds",
+        profile="provided",
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://indexer.example.com:9200",
+            indexer_username="indexer-ro",
+            indexer_password="idx-pw",
+            api_url="https://wazuh.example.com:55000",
+            api_username="soctalk-adapter",
+            api_password="",  # empty → must reject
+            api_token=None,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
