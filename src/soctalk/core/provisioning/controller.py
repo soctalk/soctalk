@@ -1071,6 +1071,24 @@ class TenantController:
         replace this with a tenant-config-driven write — e.g., read
         from ``integration_configs.llm_api_key`` instead of the install
         shared key. V1 default is shared.
+
+        Key resolution precedence:
+
+        1. Per-tenant ``IntegrationConfig.llm_api_key_plain`` (set via
+           ``PATCH /api/mssp/tenants/{id}/llm``) — used verbatim, the
+           install-wide Secret is NOT read.
+        2. The install-wide LLM Secret
+           (``SOCTALK_INSTALL_LLM_SECRET_NAME``, default
+           ``soctalk-system-llm-api-key``; keys ``openai-api-key`` /
+           ``anthropic-api-key``).
+
+        When neither source yields a non-empty key this raises
+        ``ProvisionError(step='apply_secrets')`` and emits a
+        ``llm_key_missing`` lifecycle event, rather than silently skipping
+        the Secret and stranding the runs-worker in
+        CreateContainerConfigError. Because this step precedes
+        ``helm_apply_tenant``, the runs-worker Deployment is never created
+        without the Secret it mounts.
         """
         # Per-tenant override wins: when an MSSP set
         # ``IntegrationConfig.llm_api_key_plain`` (via
@@ -1100,6 +1118,8 @@ class TenantController:
                 else ["openai-api-key", "anthropic-api-key"]
             )
 
+            api_key = None
+            chosen_key_name = None
             try:
                 src = await self.k8s.get_secret(src_ns, src_name)
             except Exception as e:  # noqa: BLE001
@@ -1109,20 +1129,48 @@ class TenantController:
                     name=src_name,
                     err=str(e),
                 )
-                return
-            data = src.get("data") or {}
-            chosen_key_name = next(
-                (k for k in candidate_keys if data.get(k)), None
-            )
-            api_key = data.get(chosen_key_name) if chosen_key_name else None
+            else:
+                data = src.get("data") or {}
+                chosen_key_name = next(
+                    (k for k in candidate_keys if data.get(k)), None
+                )
+                api_key = data.get(chosen_key_name) if chosen_key_name else None
+
             if not api_key:
+                # Fail fast instead of silently skipping. Leaving
+                # Secret/tenant-llm-key uncreated stranded the L2 runs-worker
+                # pod in CreateContainerConfigError
+                # (``secret "tenant-llm-key" not found``). This runs inside
+                # ``apply_secrets`` — BEFORE ``helm_apply_tenant`` — so raising
+                # here guarantees the runs-worker Deployment is never created
+                # without the Secret it mounts. Emit a typed lifecycle event
+                # first so the wizard/timeline names the exact cause, then
+                # raise so provision() drives the tenant to ``degraded``.
                 logger.warning(
                     "llm_key_source_empty",
                     ns=src_ns,
                     name=src_name,
                     tried=candidate_keys,
                 )
-                return
+                await self._emit_event(
+                    ctx,
+                    "llm_key_missing",
+                    details={
+                        "install_secret_namespace": src_ns,
+                        "install_secret_name": src_name,
+                        "tried_keys": candidate_keys,
+                    },
+                )
+                raise ProvisionError(
+                    "no LLM API key available for tenant "
+                    f"'{ctx.tenant.slug}': cannot write Secret/tenant-llm-key. "
+                    "IntegrationConfig.llm_api_key_plain is unset and the "
+                    f"install-wide LLM Secret '{src_ns}/{src_name}' has no "
+                    f"non-empty key among {candidate_keys}. Supply an "
+                    "install-wide key (llm.apiKey) or PATCH "
+                    "/api/mssp/tenants/{id}/llm before retrying.",
+                    step="apply_secrets",
+                )
             # Mirror the provider hint that matches which install key
             # we actually picked. Without this, an Anthropic-only
             # install Secret would still ship its key into a tenant

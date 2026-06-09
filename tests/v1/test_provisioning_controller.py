@@ -198,7 +198,11 @@ async def seeded_tenant(
     await session.flush()
 
     session.add_all([
-        IntegrationConfig(tenant_id=tenant.id),
+        # A per-tenant LLM key so the happy-path/resume tests provision past
+        # ``apply_secrets`` — ``_copy_llm_key_to_tenant_ns`` now fails fast
+        # when no key (per-tenant or install-wide) is resolvable. The
+        # LLM-guard tests override this value per scenario via ``_set_llm_key``.
+        IntegrationConfig(tenant_id=tenant.id, llm_api_key_plain="sk-seeded-tenant-llm-key"),
         BrandingConfig(tenant_id=tenant.id, app_name="Test"),
     ])
     await session.commit()
@@ -387,6 +391,9 @@ async def provided_tenant(
         IntegrationConfig(
             tenant_id=tenant.id,
             wazuh_enabled=True,
+            # Per-tenant LLM key: the LLM-key guard fails fast without one,
+            # and the 'provided' profile still runs apply_secrets/_copy_llm_key.
+            llm_api_key_plain="sk-provided-tenant-llm-key",
             # Customer-provided external endpoints (must survive provisioning).
             wazuh_url=_PROVIDED_API_URL,
             wazuh_api_url=_PROVIDED_API_URL,
@@ -521,3 +528,161 @@ async def test_provision_provided_profile(
     assert "external-siem-creds" in purposes
     assert "bootstrap" not in purposes
     assert {"llm", "adapter-token", "runs-worker-token"} <= purposes
+
+
+# ---------------------------------------------------------------------------
+# LLM key guard: explicit precedence + fail-fast (tenant.provisioning.llm-key-guard)
+# ---------------------------------------------------------------------------
+#
+# ``_copy_llm_key_to_tenant_ns`` resolves the tenant's LLM API key with a fixed
+# precedence — per-tenant ``IntegrationConfig.llm_api_key_plain`` first, then
+# the install-wide Secret (``SOCTALK_INSTALL_LLM_SECRET_NAME``, default
+# ``soctalk-system-llm-api-key``, keys ``openai-api-key`` / ``anthropic-api-key``).
+# When neither yields a non-empty key the step must FAIL FAST with a typed
+# ``ProvisionError(step='apply_secrets')`` and a ``llm_key_missing`` lifecycle
+# event — instead of silently skipping the Secret and stranding the L2
+# runs-worker in CreateContainerConfigError (`secret "tenant-llm-key" not found`).
+
+# Default install-wide LLM Secret coordinates: namespace matches
+# ``ControllerSettings.soctalk_system_namespace`` and name matches the
+# ``SOCTALK_INSTALL_LLM_SECRET_NAME`` default the controller reads.
+_INSTALL_LLM_NS = "soctalk-system"
+_INSTALL_LLM_SECRET = "soctalk-system-llm-api-key"
+
+
+async def _set_llm_key(
+    session: AsyncSession, tenant_id, value: str | None
+) -> None:
+    """Set (or clear) the per-tenant LLM key on the tenant's IntegrationConfig.
+
+    Lets each LLM-guard test pin the exact precedence input it exercises,
+    independent of whatever default the shared ``seeded_tenant`` fixture uses.
+    """
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant_id
+            )
+        )
+    ).scalar_one()
+    integ.llm_api_key_plain = value
+    await session.commit()
+
+
+def _llm_guard_controller(session: AsyncSession, fake_k8s: FakeK8s) -> TenantController:
+    return TenantController(
+        session,
+        k8s=fake_k8s,
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            readiness_poll_interval_seconds=0.01,
+            readiness_timeout_seconds=5.0,
+        ),
+    )
+
+
+async def test_llm_key_per_tenant_precedence(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Per-tenant key wins: Secret/tenant-llm-key is written from
+    ``llm_api_key_plain`` and the install-wide Secret is never read."""
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    await _set_llm_key(session, seeded_tenant.id, "sk-per-tenant-PRECEDENCE")
+
+    fake_k8s = FakeK8s()
+    # Even with an install-wide Secret present, precedence must skip reading it.
+    fake_k8s.secrets[(_INSTALL_LLM_NS, _INSTALL_LLM_SECRET)] = {
+        "openai-api-key": "sk-install-MUST-NOT-BE-USED",
+    }
+
+    controller = _llm_guard_controller(session, fake_k8s)
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    ns = f"tenant-{seeded_tenant.slug}"
+    assert (ns, "tenant-llm-key") in fake_k8s.secrets
+    assert fake_k8s.secrets[(ns, "tenant-llm-key")] == {
+        "api_key": "sk-per-tenant-PRECEDENCE"
+    }
+    # The install-wide Secret was NOT read (per-tenant precedence short-circuit).
+    assert not any(
+        _INSTALL_LLM_SECRET in c for c in fake_k8s.calls
+    ), f"install-wide LLM Secret must not be read: {fake_k8s.calls}"
+
+
+async def test_llm_key_missing_fails_fast(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Neither source yields a key ⇒ fail fast in apply_secrets.
+
+    Asserts: ProvisionError(step='apply_secrets') naming the LLM key, a
+    'llm_key_missing' lifecycle event, the tenant ends degraded, no
+    tenant-llm-key Secret is put, and helm_apply_tenant never runs (so no
+    runs-worker Deployment is created without its Secret).
+    """
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    await _set_llm_key(session, seeded_tenant.id, None)
+
+    fake_k8s = FakeK8s()  # no install-wide LLM Secret present
+    controller = _llm_guard_controller(session, fake_k8s)
+
+    with pytest.raises(ProvisionError) as exc_info:
+        await controller.provision(seeded_tenant.id, actor_id="test")
+    assert exc_info.value.step == "apply_secrets"
+    assert "llm" in str(exc_info.value).lower()
+
+    # Tenant ends degraded.
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == seeded_tenant.id))
+    ).scalar_one()
+    assert tenant.state == TenantState.DEGRADED.value
+
+    # Lifecycle event emitted; helm_apply_tenant never ran.
+    evs = (
+        await session.execute(
+            select(TenantLifecycleEvent)
+            .where(TenantLifecycleEvent.tenant_id == seeded_tenant.id)
+            .order_by(TenantLifecycleEvent.timestamp)
+        )
+    ).scalars().all()
+    kinds = [e.event_type for e in evs]
+    assert "llm_key_missing" in kinds
+    assert "helm_applied" not in kinds, (
+        "runs-worker Deployment must not be created without its LLM Secret"
+    )
+
+    # No tenant-llm-key Secret was put.
+    ns = f"tenant-{seeded_tenant.slug}"
+    assert (ns, "tenant-llm-key") not in fake_k8s.secrets
+
+
+async def test_llm_key_install_wide_unchanged(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Regression guard: with only the install-wide Secret present, the
+    tenant-llm-key Secret is still written from it (poc/persistent path)."""
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    await _set_llm_key(session, seeded_tenant.id, None)
+
+    fake_k8s = FakeK8s()
+    fake_k8s.secrets[(_INSTALL_LLM_NS, _INSTALL_LLM_SECRET)] = {
+        "openai-api-key": "sk-install-SHARED-KEY",
+    }
+    controller = _llm_guard_controller(session, fake_k8s)
+
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    ns = f"tenant-{seeded_tenant.slug}"
+    assert (ns, "tenant-llm-key") in fake_k8s.secrets
+    assert fake_k8s.secrets[(ns, "tenant-llm-key")] == {
+        "api_key": "sk-install-SHARED-KEY"
+    }
+    # The install-wide Secret WAS read this time.
+    assert any(_INSTALL_LLM_SECRET in c for c in fake_k8s.calls)
