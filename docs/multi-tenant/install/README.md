@@ -219,6 +219,45 @@ After the tenant reaches `active`:
 3. Share the customer UI URL and initial `customer_viewer` invite with the
    end-customer.
 
+### Variant — provided-SIEM tenant
+
+When the customer **already runs Wazuh** and SocTalk should analyze that
+external SIEM rather than provision one in-cluster, choose the **`provided`**
+profile on the **Profile** step. See
+[provided-profile.md](../provided-profile.md) and
+[wazuh-profiles.md](../wazuh-profiles.md) for the full contract.
+
+Selecting `provided` reveals a conditional **External SIEM** wizard step (the
+5th step: *Identity → Profile → External SIEM → Branding → Review*). It captures
+the two credential pairs SocTalk needs to reach the external Wazuh — the
+**indexer** (OpenSearch, `:9200`, used by the adapter for alert ingest) and the
+manager **API** (`:55000`, used by the L1 chat resolver):
+
+| Field | Meaning |
+|---|---|
+| `indexer_url` | External indexer base URL, e.g. `https://wazuh.customer.example:9200` |
+| `indexer_username` / `indexer_password` | Indexer HTTP-Basic credentials |
+| `api_url` | External Wazuh manager API base URL, e.g. `https://wazuh.customer.example:55000` |
+| `api_username` / `api_password` | Manager API HTTP-Basic credentials |
+| `api_token` *(optional)* | Pre-minted manager Bearer token; overrides username/password auth |
+| `verify_ssl` | Uncheck for a self-signed external indexer/manager cert |
+
+The wizard blocks submission until `indexer_url`, `indexer_username`,
+`indexer_password`, `api_url`, `api_username`, and `api_password` are filled
+(`api_token` is optional); the server independently rejects an incomplete
+`provided` onboard with **HTTP 422**. On submit, the values persist onto the
+tenant's `IntegrationConfig`, and provisioning writes them into
+`Secret/tenant-external-siem-creds` in `tenant-<slug>` — **no** in-cluster
+Wazuh/TheHive/Cortex and **no** agent ingress are deployed (skip step 2 above;
+agents keep reporting to the customer's external manager).
+
+Before the adapter can ingest, make sure both external hosts are reachable: the
+tenant adapter's Cilium FQDN egress allow-list and the `soctalk-system`
+control-plane egress to the manager are covered in
+[provided-profile.md](../provided-profile.md) §5. Rotate the credentials later
+from the tenant detail page's **External SIEM** panel (which calls
+`PATCH /api/mssp/tenants/{id}/external-siem`).
+
 ## 4 Verify
 
 ```bash
