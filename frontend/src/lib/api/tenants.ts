@@ -53,6 +53,23 @@ export interface Tenant {
 	runtime?: Record<string, unknown> | null;
 }
 
+// External SIEM (Wazuh) connection material for the ``provided`` profile —
+// the tenant brings their own Wazuh deployment instead of having SocTalk
+// provision one. The Wazuh **Indexer** (OpenSearch, :9200) and the **API**
+// (manager, :55000) authenticate with separate credentials. ``api_token`` is
+// an optional pre-minted manager token; ``verify_ssl`` defaults to true.
+// Mirrors the backend ``ExternalSiemOnboard`` model 1:1.
+export interface ExternalSiemOnboard {
+	indexer_url: string;
+	indexer_username: string;
+	indexer_password: string;
+	api_url: string;
+	api_username: string;
+	api_password: string;
+	api_token?: string;
+	verify_ssl: boolean;
+}
+
 export interface TenantOnboard {
 	slug: string;
 	display_name: string;
@@ -64,17 +81,10 @@ export interface TenantOnboard {
 	contact_email?: string | null;
 	llm_base_url?: string;
 	llm_model?: string;
-	// External Wazuh connection — only meaningful for the ``provided`` profile,
-	// where the tenant brings their own Wazuh deployment instead of having
-	// SocTalk provision one. The Wazuh API (manager) and the Indexer
-	// (OpenSearch) authenticate with separate credentials.
-	wazuh_api_url?: string | null;
-	wazuh_api_username?: string | null;
-	wazuh_api_password?: string | null;
-	wazuh_api_token?: string | null;
-	wazuh_indexer_url?: string | null;
-	wazuh_indexer_username?: string | null;
-	wazuh_indexer_password?: string | null;
+	// Nested external-SIEM block — only sent for the ``provided`` profile.
+	// Supersedes the earlier flat ``wazuh_*`` fields. Omitted entirely for
+	// poc/persistent so the controller fills wazuh_url/indexer_url in-cluster.
+	external_siem?: ExternalSiemOnboard;
 }
 
 export interface LifecycleEvent {
