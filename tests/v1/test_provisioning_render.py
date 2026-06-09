@@ -1,11 +1,18 @@
 """Unit tests for profile-driven chart values rendering.
 
-No DB, no kube, no helm. Pure functions only.
+Pure functions only — no DB, no kube. The ``adapter-fqdn-egress`` chart
+assertions shell out to ``helm template`` (the only place that touches a
+binary); they self-skip where ``helm`` is not on PATH so the rest of the
+suite stays a pure-python run.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -214,6 +221,143 @@ def test_render_provided_profile():
     )
     assert v_poc["networkPolicies"]["externalSiemHosts"] == []
     _assert_validates_against_tenant_schema(v_poc)
+
+
+# ---------------------------------------------------------------------------
+# Chart render: adapter-fqdn-egress CiliumNetworkPolicy (helm template)
+#
+# These exercise the *chart* side of the FQDN-egress feature. The values from
+# render_tenant_values are fed through ``helm template`` and the emitted
+# CiliumNetworkPolicy is asserted on. ``helm`` also validates against
+# values.schema.json while templating, so a schema violation surfaces as a
+# non-zero exit here too. Skipped (not failed) where ``helm`` is absent.
+# ---------------------------------------------------------------------------
+
+_TENANT_CHART_DIR = Path(__file__).resolve().parents[2] / "charts" / "soctalk-tenant"
+
+
+def _helm_template(values: dict) -> list[dict]:
+    """Render the soctalk-tenant chart with ``values`` → list of manifests."""
+    helm = shutil.which("helm")
+    if helm is None:
+        pytest.skip("helm binary not on PATH")
+    yaml = pytest.importorskip("yaml")
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        yaml.safe_dump(values, fh)
+        values_path = fh.name
+    try:
+        proc = subprocess.run(
+            [helm, "template", "t", str(_TENANT_CHART_DIR), "-f", values_path],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        os.unlink(values_path)
+    assert proc.returncode == 0, f"helm template failed:\n{proc.stderr}"
+    return [d for d in yaml.safe_load_all(proc.stdout) if d]
+
+
+def _fqdn_egress_match_names(manifests: list[dict]) -> list[str] | None:
+    """toFQDNs matchName values from adapter-fqdn-egress, or None if absent."""
+    for doc in manifests:
+        if (
+            doc.get("kind") == "CiliumNetworkPolicy"
+            and doc.get("metadata", {}).get("name") == "adapter-fqdn-egress"
+        ):
+            names: list[str] = []
+            for rule in doc.get("spec", {}).get("egress", []):
+                for fqdn in rule.get("toFQDNs", []) or []:
+                    if "matchName" in fqdn:
+                        names.append(fqdn["matchName"])
+            return names
+    return None
+
+
+def _provided_values_for_chart(
+    *,
+    indexer_url: str | None,
+    api_url: str | None,
+    soctalk_url: str,
+) -> dict:
+    """render_tenant_values for a 'provided' tenant, plus a soctalkSystem.url.
+
+    render populates externalSiemHosts + fqdnEgress.enabled; soctalkSystem.url
+    is injected here because the L1 :issue-agent path sets it, not the renderer.
+    """
+    t = _make_tenant("provided")
+    integration = _make_integration(t.id)
+    integration.wazuh_indexer_url = indexer_url
+    integration.wazuh_api_url = api_url
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="provided",
+    )
+    v["soctalkSystem"] = {"url": soctalk_url, "adapterToken": ""}
+    return v
+
+
+def test_chart_fqdn_egress_includes_l1_and_external_siem_hosts():
+    """Acceptance 1 + 6: the rendered adapter-fqdn-egress CiliumNetworkPolicy
+    carries the L1 host (from soctalkSystem.url) AND every external SIEM host
+    (from networkPolicies.externalSiemHosts) under toFQDNs."""
+    values = _provided_values_for_chart(
+        indexer_url="https://indexer.siem.acme.example:9200",
+        api_url="https://manager.siem.acme.example:55000",
+        soctalk_url="https://l1.mssp.example",
+    )
+    # Precondition: render produced the external host list the chart consumes.
+    assert set(values["networkPolicies"]["externalSiemHosts"]) == {
+        "indexer.siem.acme.example",
+        "manager.siem.acme.example",
+    }
+
+    names = _fqdn_egress_match_names(_helm_template(values))
+    assert names is not None, "adapter-fqdn-egress was not emitted"
+    assert "l1.mssp.example" in names  # L1 host
+    assert "indexer.siem.acme.example" in names  # external SIEM indexer
+    assert "manager.siem.acme.example" in names  # external SIEM API
+
+
+def test_chart_fqdn_egress_emitted_for_external_hosts_without_l1_url():
+    """Acceptance 1 + 2 boundary: external SIEM hosts alone (soctalkSystem.url
+    empty) still emit the policy — the skip only triggers when BOTH are empty."""
+    values = _provided_values_for_chart(
+        indexer_url="https://indexer.siem.acme.example:9200",
+        api_url="https://manager.siem.acme.example:55000",
+        soctalk_url="",
+    )
+    names = _fqdn_egress_match_names(_helm_template(values))
+    assert names is not None, "adapter-fqdn-egress should emit for SIEM hosts"
+    assert "indexer.siem.acme.example" in names
+    assert "manager.siem.acme.example" in names
+    assert "l1.mssp.example" not in names  # no L1 url ⇒ no L1 entry
+
+
+def test_chart_fqdn_egress_skipped_when_no_hosts():
+    """Acceptance 2: with externalSiemHosts empty AND soctalkSystem.url empty,
+    the CiliumNetworkPolicy is not emitted (existing skip behavior preserved)
+    even though the 'provided' profile forces fqdnEgress.enabled=true."""
+    values = _provided_values_for_chart(
+        indexer_url="https://indexer.siem.acme.example:9200",
+        api_url="https://manager.siem.acme.example:55000",
+        soctalk_url="",
+    )
+    # Force the exact skip precondition: no external hosts, no L1 url, while
+    # leaving fqdnEgress enabled — proves the gate skips on host-emptiness,
+    # not just on the toggle. (A real 'provided' tenant always has hosts, so
+    # the adapter indexer URL is kept valid for the schema check.)
+    values["networkPolicies"]["externalSiemHosts"] = []
+    values["soctalkSystem"]["url"] = ""
+    assert values["networkPolicies"]["fqdnEgress"]["enabled"] is True
+
+    names = _fqdn_egress_match_names(_helm_template(values))
+    assert names is None, "adapter-fqdn-egress must be skipped when no hosts"
 
 
 @pytest.mark.parametrize("profile", ["poc", "persistent", "provided"])

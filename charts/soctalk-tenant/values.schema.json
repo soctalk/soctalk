@@ -137,9 +137,12 @@
         "enabled":         { "type": "boolean" },
         "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
         "externalSiemHosts": {
-          "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list.",
+          "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list (matchName entries). Items are bare hostnames — no scheme, no port.",
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$"
+          }
         },
         "fqdnEgress": {
           "description": "Emit a CiliumNetworkPolicy permitting adapter egress to soctalkSystem.url and the externalSiemHosts FQDNs. Requires Cilium CRDs.",

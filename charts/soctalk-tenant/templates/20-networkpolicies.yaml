@@ -191,13 +191,17 @@ spec:
 {{- end }}
 
 {{- /*
-FQDN egress: adapter → L1 (cross-cluster L2 path).
+FQDN egress: adapter → L1 (cross-cluster L2 path) + external SIEM.
 
 Stock NetworkPolicy has no FQDN support — it targets pods/namespaces
-or IP CIDRs. For a cross-cluster deploy where the L2 tenant's cluster
-is separate from the MSSP's SocTalk install, the adapter must be able
-to reach L1 by public hostname. CiliumNetworkPolicy + toFQDNs is the
-standard pattern.
+or IP CIDRs. Two cases need public-hostname egress for the adapter:
+  - cross-cluster deploy: the L2 tenant cluster is separate from the
+    MSSP's SocTalk install, so the adapter reaches L1 by hostname
+    (soctalkSystem.url).
+  - 'provided' profile: the tenant brings its OWN external Wazuh, so
+    the adapter reaches the indexer (:9200) + manager API (:55000) by
+    hostname (networkPolicies.externalSiemHosts, populated by render.py).
+CiliumNetworkPolicy + toFQDNs is the standard pattern for both.
 
 Gated by networkPolicies.fqdnEgress.enabled because:
   - the chart must render on clusters without Cilium CRDs
@@ -205,14 +209,29 @@ Gated by networkPolicies.fqdnEgress.enabled because:
   - collapsed-tier deploys don't need FQDN egress — the existing
     adapter-egress policy already allows the in-cluster path
 
+Skip when there is nothing to allow: BOTH soctalkSystem.url AND
+externalSiemHosts empty ⇒ no policy emitted (preserves the original
+collapsed-tier fallback).
+
 Operator on a non-Cilium cluster: turn this off and either install
 with --set soctalkSystem.url='' (collapsed-tier fallback) or provide
 equivalent egress via their own CNI's policy mechanism.
 */ -}}
-{{- if and .Values.networkPolicies.enabled .Values.networkPolicies.fqdnEgress.enabled .Values.soctalkSystem.url }}
-{{- $parsed := urlParse .Values.soctalkSystem.url }}
-{{- $host := $parsed.host }}
-{{- if contains ":" $host }}{{ $host = index (splitList ":" $host) 0 }}{{ end }}
+{{- $extSiemHosts := .Values.networkPolicies.externalSiemHosts | default (list) }}
+{{- if and .Values.networkPolicies.enabled .Values.networkPolicies.fqdnEgress.enabled (or .Values.soctalkSystem.url (gt (len $extSiemHosts) 0)) }}
+{{- /*
+Build the FQDN allow-list: the L1 API host (parsed out of soctalkSystem.url,
+port stripped) plus every external SIEM host. Deduped (uniq) so an indexer +
+API that share a hostname collapse to one matchName, and the L1 host isn't
+repeated if it also appears in the SIEM list.
+*/ -}}
+{{- $fqdns := list }}
+{{- if .Values.soctalkSystem.url }}
+{{-   $host := (urlParse .Values.soctalkSystem.url).host }}
+{{-   if contains ":" $host }}{{- $host = index (splitList ":" $host) 0 }}{{- end }}
+{{-   $fqdns = append $fqdns $host }}
+{{- end }}
+{{- $fqdns = concat $fqdns $extSiemHosts | uniq }}
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
@@ -237,11 +256,18 @@ spec:
           rules:
             dns:
               - matchPattern: "*"
-    # The L1 API hostname over HTTP(S).
+    # L1 API host (HTTP/S) + external SIEM hosts (Wazuh indexer :9200 +
+    # manager API :55000). The union of ports is harmless: the adapter only
+    # dials L1 on 443/80 and the SIEM on 9200/55000, so an unused host:port
+    # pairing is simply never connected.
     - toFQDNs:
-        - matchName: {{ $host | quote }}
+        {{- range $fqdns }}
+        - matchName: {{ . | quote }}
+        {{- end }}
       toPorts:
         - ports:
-            - { port: "443", protocol: TCP }
-            - { port: "80",  protocol: TCP }
+            - { port: "443",   protocol: TCP }
+            - { port: "80",    protocol: TCP }
+            - { port: "9200",  protocol: TCP }
+            - { port: "55000", protocol: TCP }
 {{- end }}
