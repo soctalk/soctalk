@@ -31,6 +31,7 @@ from soctalk.core.tenancy.models import (
     Organization,
     Tenant,
     TenantLifecycleEvent,
+    TenantSecret,
     TenantState,
 )
 
@@ -328,3 +329,195 @@ async def test_preflight_failure_doesnt_mutate_tenant_beyond_degraded(
         await session.execute(select(Tenant).where(Tenant.id == seeded_tenant.id))
     ).scalar_one()
     assert tenant.state == TenantState.DEGRADED.value
+
+
+# ---------------------------------------------------------------------------
+# 'provided' profile: external Wazuh, no in-namespace SIEM
+# ---------------------------------------------------------------------------
+
+
+# External SIEM endpoints + creds the customer brings for a 'provided' tenant.
+_PROVIDED_INDEXER_URL = "https://indexer.acme.example:9200"
+_PROVIDED_API_URL = "https://wazuh.acme.example:55000"
+_PROVIDED_INDEXER_USER = "idx-user"
+_PROVIDED_INDEXER_PASS = "idx-pass"
+_PROVIDED_API_USER = "api-user"
+_PROVIDED_API_PASS = "api-pass"
+
+
+@pytest_asyncio.fixture
+async def provided_tenant(
+    session: AsyncSession, admin_session: AsyncSession
+) -> Tenant:
+    """A pending 'provided'-profile tenant whose IntegrationConfig already
+    carries BOTH the external indexer creds and the Wazuh API creds (the
+    onboard endpoint guarantees these before profile='provided' is allowed).
+    ``wazuh_api_token_plain`` is intentionally left NULL so the test can pin
+    the "WAZUH_API_TOKEN omitted when absent" branch.
+    """
+    from sqlalchemy import text
+
+    await admin_session.execute(
+        text(
+            "TRUNCATE tenant_lifecycle_events, integration_configs, "
+            "branding_configs, tenant_secrets, provisioning_jobs, "
+            "tenants, organizations CASCADE"
+        )
+    )
+    await admin_session.commit()
+
+    org = Organization(
+        mssp_id=uuid4(), mssp_name="Test MSSP", slug="test-mssp",
+        install_id=uuid4(), install_label="test",
+    )
+    session.add(org)
+    await session.flush()
+
+    tenant = Tenant(
+        slug=f"tenant-{uuid4().hex[:8]}",
+        display_name="Provided Tenant",
+        state=TenantState.PENDING.value,
+        profile="provided",
+        organization_id=org.id,
+    )
+    session.add(tenant)
+    await session.flush()
+
+    session.add_all([
+        IntegrationConfig(
+            tenant_id=tenant.id,
+            wazuh_enabled=True,
+            # Customer-provided external endpoints (must survive provisioning).
+            wazuh_url=_PROVIDED_API_URL,
+            wazuh_api_url=_PROVIDED_API_URL,
+            wazuh_indexer_url=_PROVIDED_INDEXER_URL,
+            # Wazuh API (manager, :55000) HTTP-Basic creds.
+            wazuh_username=_PROVIDED_API_USER,
+            wazuh_password_plain=_PROVIDED_API_PASS,
+            # Indexer (:9200) HTTP-Basic creds.
+            wazuh_indexer_username=_PROVIDED_INDEXER_USER,
+            wazuh_indexer_password_plain=_PROVIDED_INDEXER_PASS,
+            # No pre-minted API token: WAZUH_API_TOKEN must be omitted.
+            wazuh_api_token_plain=None,
+        ),
+        BrandingConfig(tenant_id=tenant.id, app_name="Provided"),
+    ])
+    await session.commit()
+    return tenant
+
+
+async def test_provision_provided_profile(
+    session: AsyncSession, provided_tenant: Tenant, monkeypatch
+):
+    """Drive a 'provided' tenant pending -> active and assert the controller:
+
+    - installs the soctalk-tenant chart exactly once,
+    - never installs the wazuh-<slug> release,
+    - writes Secret/tenant-external-siem-creds with the four credential keys
+      (WAZUH_API_TOKEN omitted because wazuh_api_token_plain is NULL),
+    - runs that secret step AFTER apply_secrets and BEFORE helm_apply_tenant,
+    - emits exactly one 'wazuh_skipped_provided' lifecycle event,
+    - leaves integration.wazuh_url / wazuh_indexer_url untouched,
+    - mints an 'external-siem-creds' reference row but NO 'bootstrap' row.
+    """
+    fake_k8s = FakeK8s()
+
+    # Recording helm shims. Both also push a marker into fake_k8s.calls so we
+    # get one ordered timeline across secret writes + helm installs.
+    tenant_calls: list[dict] = []
+    wazuh_calls: list[dict] = []
+
+    def _ok():
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True})()
+
+    async def rec_install_tenant(*_a, **kw):
+        fake_k8s.calls.append("helm_install_tenant")
+        tenant_calls.append(kw)
+        return _ok()
+
+    async def rec_install_wazuh(*_a, **kw):
+        fake_k8s.calls.append("helm_install_wazuh")
+        wazuh_calls.append(kw)
+        return _ok()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+    monkeypatch.setattr(controller_mod, "helm_install_wazuh", rec_install_wazuh)
+    from soctalk.core.provisioning import helm as helm_mod
+    monkeypatch.setattr(helm_mod, "helm_version", _fake_helm_version)
+
+    controller = TenantController(
+        session, k8s=fake_k8s,
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            readiness_poll_interval_seconds=0.01,
+            readiness_timeout_seconds=5.0,
+        ),
+    )
+
+    result = await controller.provision(provided_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # --- helm: exactly one soctalk-tenant install, zero wazuh installs ------
+    assert len(tenant_calls) == 1, f"expected one tenant install, got {tenant_calls}"
+    assert wazuh_calls == [], f"wazuh release must not be installed, got {wazuh_calls}"
+
+    ns = f"tenant-{provided_tenant.slug}"
+
+    # --- the external-SIEM Secret carries exactly the four basic-auth keys --
+    assert (ns, "tenant-external-siem-creds") in fake_k8s.secrets
+    secret = fake_k8s.secrets[(ns, "tenant-external-siem-creds")]
+    assert set(secret.keys()) == {
+        "INDEXER_USERNAME",
+        "INDEXER_PASSWORD",
+        "WAZUH_API_USERNAME",
+        "WAZUH_API_PASSWORD",
+    }
+    assert secret["INDEXER_USERNAME"] == _PROVIDED_INDEXER_USER
+    assert secret["INDEXER_PASSWORD"] == _PROVIDED_INDEXER_PASS
+    assert secret["WAZUH_API_USERNAME"] == _PROVIDED_API_USER
+    assert secret["WAZUH_API_PASSWORD"] == _PROVIDED_API_PASS
+    # No pre-minted API token on the integration row -> key omitted.
+    assert "WAZUH_API_TOKEN" not in secret
+
+    # --- step ordering: apply_secrets < write_external_siem_secret < helm ---
+    calls = fake_k8s.calls
+    i_adapter = calls.index(f"put_secret:{ns}/adapter-token")          # apply_secrets
+    i_ext = calls.index(f"put_secret:{ns}/tenant-external-siem-creds")  # new step
+    i_helm = calls.index("helm_install_tenant")                        # helm_apply_tenant
+    assert i_adapter < i_ext < i_helm
+
+    # --- lifecycle events: wazuh skipped once; secret-applied marker present-
+    evs = (
+        await session.execute(
+            select(TenantLifecycleEvent)
+            .where(TenantLifecycleEvent.tenant_id == provided_tenant.id)
+            .order_by(TenantLifecycleEvent.timestamp)
+        )
+    ).scalars().all()
+    kinds = [e.event_type for e in evs]
+    assert kinds.count("wazuh_skipped_provided") == 1
+    assert "external_siem_secret_applied" in kinds
+
+    # --- integration endpoints unchanged (no in-cluster clobber) ------------
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == provided_tenant.id
+            )
+        )
+    ).scalar_one()
+    assert integ.wazuh_url == _PROVIDED_API_URL
+    assert integ.wazuh_indexer_url == _PROVIDED_INDEXER_URL
+
+    # --- mint rows: external-siem-creds present, bootstrap absent -----------
+    secret_rows = (
+        await session.execute(
+            select(TenantSecret).where(
+                TenantSecret.tenant_id == provided_tenant.id
+            )
+        )
+    ).scalars().all()
+    purposes = {r.purpose for r in secret_rows}
+    assert "external-siem-creds" in purposes
+    assert "bootstrap" not in purposes
+    assert {"llm", "adapter-token", "runs-worker-token"} <= purposes

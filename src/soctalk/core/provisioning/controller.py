@@ -21,6 +21,7 @@ progress without inventing a second timeline.
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
@@ -217,6 +218,11 @@ class _StepContext:
     bag: dict = field(default_factory=dict)
 
 
+# A provisioning step: takes the shared context, mutates K8s/DB, returns None.
+# The step list is assembled per-profile in :meth:`TenantController.provision`.
+_StepFn = Callable[["_StepContext"], Awaitable[None]]
+
+
 # ---------------------------------------------------------------------------
 # Controller
 # ---------------------------------------------------------------------------
@@ -303,17 +309,34 @@ class TenantController:
             llm_secret_name=f"tenant-{tenant.id}-llm",
         )
 
-        steps = [
+        # Profile-aware step list. A 'provided' tenant brings its own external
+        # Wazuh, so SocTalk:
+        #   - writes the external-SIEM creds Secret (extra step, between
+        #     apply_secrets and helm_apply_tenant),
+        #   - never installs the wazuh-<slug> release (a single
+        #     'wazuh_skipped_provided' marker stands in for it),
+        #   - does NOT clobber integration.wazuh_url with an in-cluster URL.
+        steps: list[tuple[str, _StepFn]] = [
             ("preflight", self._step_preflight),
             ("mint_secrets", self._step_mint_secrets),
             ("ensure_namespace", self._step_ensure_namespace),
             ("apply_secrets", self._step_apply_secrets),
-            ("helm_apply_tenant", self._step_helm_apply_tenant),
-            ("helm_apply_wazuh", self._step_helm_apply_wazuh),
-            ("wait_workloads", self._step_wait_workloads),
-            ("write_integration_config", self._step_write_integration_config),
-            ("finalize_active", self._step_finalize_active),
         ]
+        if ctx.profile == "provided":
+            steps.append(
+                ("write_external_siem_secret", self._step_write_external_siem_secret)
+            )
+        steps.append(("helm_apply_tenant", self._step_helm_apply_tenant))
+        if ctx.profile == "provided":
+            steps.append(("wazuh_skipped", self._step_wazuh_skipped_provided))
+        else:
+            steps.append(("helm_apply_wazuh", self._step_helm_apply_wazuh))
+        steps.append(("wait_workloads", self._step_wait_workloads))
+        if ctx.profile != "provided":
+            steps.append(
+                ("write_integration_config", self._step_write_integration_config)
+            )
+        steps.append(("finalize_active", self._step_finalize_active))
 
         for name, step in steps:
             try:
@@ -511,55 +534,93 @@ class TenantController:
         )
 
     async def _step_mint_secrets(self, ctx: _StepContext) -> None:
-        """Mint bootstrap + adapter creds once per tenant.
+        """Mint the per-tenant ``TenantSecret`` reference rows once per tenant.
 
-        Postcondition: a ``TenantSecret`` row with ``purpose='bootstrap'``
-        exists for the tenant. If already present we skip minting — the
-        raw material is already in k8s and re-minting would orphan creds.
+        Postcondition (idempotency marker): a ``TenantSecret`` row exists for
+        the tenant whose ``purpose`` is the profile-appropriate Wazuh marker —
+        ``bootstrap`` for in-cluster profiles (poc/persistent) and
+        ``external-siem-creds`` for ``provided`` (which never mints a bootstrap
+        Secret because there is no in-namespace Wazuh). If already present we
+        skip minting — the raw material is already in k8s and re-minting would
+        orphan creds.
         """
-        bootstrap_row = (
+        # 'provided' tenants never mint a bootstrap Secret (no in-namespace
+        # Wazuh), so idempotency keys off the external-siem-creds row instead.
+        marker_purpose = (
+            "external-siem-creds" if ctx.profile == "provided" else "bootstrap"
+        )
+        marker_row = (
             await self.session.execute(
                 select(TenantSecret).where(
                     TenantSecret.tenant_id == ctx.tenant.id,
-                    TenantSecret.purpose == "bootstrap",
+                    TenantSecret.purpose == marker_purpose,
                 )
             )
         ).scalar_one_or_none()
 
-        if bootstrap_row is None:
-            bootstrap = generate_bootstrap_secrets()
-            ctx.bag["bootstrap"] = bootstrap
-            self.session.add_all([
+        if marker_row is not None:
+            # Already-minted case: we don't have the raw material any more,
+            # and we don't need it for helm since Wazuh reads creds from
+            # the k8s Secret we wrote last time. For the renderer we pass
+            # placeholders — helm upgrade will no-op the Secret if unchanged.
+            ctx.bag["bootstrap"] = None
+            return
+
+        # Common reference rows minted for every profile.
+        mint_targets = [
+            TenantSecret(
+                tenant_id=ctx.tenant.id,
+                purpose="llm",
+                k8s_namespace=self.settings.soctalk_system_namespace,
+                k8s_secret_name=ctx.llm_secret_name,
+                k8s_secret_key="api_key",
+                version_label="v1",
+            ),
+            TenantSecret(
+                tenant_id=ctx.tenant.id,
+                purpose="adapter-token",
+                k8s_namespace=ctx.namespace,
+                k8s_secret_name="adapter-token",
+                k8s_secret_key="token",
+                version_label="v1",
+            ),
+            TenantSecret(
+                tenant_id=ctx.tenant.id,
+                purpose="runs-worker-token",
+                k8s_namespace=ctx.namespace,
+                k8s_secret_name="runs-worker-token",
+                k8s_secret_key="token",
+                version_label="v1",
+            ),
+        ]
+
+        if ctx.profile == "provided":
+            # No in-namespace Wazuh ⇒ no bootstrap creds to generate. The only
+            # Wazuh-related Secret SocTalk owns is the external-SIEM creds
+            # Secret (written by ``_step_write_external_siem_secret``); track
+            # it so ``tenant_secrets`` reflects every namespace Secret we own
+            # and the chat resolver can locate the Wazuh API creds.
+            ctx.bag["bootstrap"] = None
+            mint_targets.append(
                 TenantSecret(
                     tenant_id=ctx.tenant.id,
-                    purpose="llm",
-                    k8s_namespace=self.settings.soctalk_system_namespace,
-                    k8s_secret_name=ctx.llm_secret_name,
-                    k8s_secret_key="api_key",
+                    purpose="external-siem-creds",
+                    k8s_namespace=ctx.namespace,
+                    k8s_secret_name="tenant-external-siem-creds",
+                    k8s_secret_key="multi",
                     version_label="v1",
-                ),
+                )
+            )
+        else:
+            bootstrap = generate_bootstrap_secrets()
+            ctx.bag["bootstrap"] = bootstrap
+            mint_targets.extend([
                 TenantSecret(
                     tenant_id=ctx.tenant.id,
                     purpose="bootstrap",
                     k8s_namespace=ctx.namespace,
                     k8s_secret_name="tenant-bootstrap",
                     k8s_secret_key="multi",
-                    version_label="v1",
-                ),
-                TenantSecret(
-                    tenant_id=ctx.tenant.id,
-                    purpose="adapter-token",
-                    k8s_namespace=ctx.namespace,
-                    k8s_secret_name="adapter-token",
-                    k8s_secret_key="token",
-                    version_label="v1",
-                ),
-                TenantSecret(
-                    tenant_id=ctx.tenant.id,
-                    purpose="runs-worker-token",
-                    k8s_namespace=ctx.namespace,
-                    k8s_secret_name="runs-worker-token",
-                    k8s_secret_key="token",
                     version_label="v1",
                 ),
                 # Pointer used by the chat agent's per-tenant Wazuh
@@ -579,14 +640,10 @@ class TenantController:
                     version_label="v1",
                 ),
             ])
-            await self.session.flush()
-            await self._emit_event(ctx, "secrets_minted")
-        else:
-            # Already-minted case: we don't have the raw material any more,
-            # and we don't need it for helm since Wazuh reads creds from
-            # the k8s Secret we wrote last time. For the renderer we pass
-            # placeholders — helm upgrade will no-op the Secret if unchanged.
-            ctx.bag["bootstrap"] = None
+
+        self.session.add_all(mint_targets)
+        await self.session.flush()
+        await self._emit_event(ctx, "secrets_minted")
 
     async def _step_ensure_namespace(self, ctx: _StepContext) -> None:
         await self.k8s.ensure_namespace(
@@ -637,6 +694,72 @@ class TenantController:
         await self._copy_llm_key_to_tenant_ns(ctx)
         await self._mint_tenant_admin_user(ctx)
         await self._emit_event(ctx, "secrets_applied")
+
+    async def _step_write_external_siem_secret(self, ctx: _StepContext) -> None:
+        """Write the ``tenant-external-siem-creds`` Secret ('provided' only).
+
+        Carries BOTH credential pairs in ONE Secret, keyed with the same
+        UPPERCASE names the in-cluster ``<release>-wazuh-creds`` Secret uses so
+        the adapter and the chat resolver stay profile-agnostic:
+
+          - ``INDEXER_USERNAME`` / ``INDEXER_PASSWORD``  → adapter alert ingest
+          - ``WAZUH_API_USERNAME`` / ``WAZUH_API_PASSWORD`` → L1 chat resolver
+          - ``WAZUH_API_TOKEN`` (optional)               → pre-minted API token
+
+        Idempotent: ``put_secret`` is create-or-patch, so re-entry never errors
+        on AlreadyExists. Runs AFTER ``_step_apply_secrets`` and BEFORE
+        ``_step_helm_apply_tenant`` (the adapter pod the tenant chart starts
+        mounts this Secret by reference).
+        """
+        ic = ctx.integration
+        # Defensive: the onboard endpoint already blocks 'provided' onboarding
+        # without these. Both HTTP-Basic pairs (indexer + API) are required.
+        required = (
+            ic.wazuh_indexer_url,
+            ic.wazuh_indexer_username,
+            ic.wazuh_indexer_password_plain,
+            ic.wazuh_api_url,
+            ic.wazuh_username,
+            ic.wazuh_password_plain,
+        )
+        if not all(required):
+            raise ProvisionError(
+                "provided profile missing external SIEM credentials "
+                "(indexer/api url + username + password all required)",
+                step="write_external_siem_secret",
+            )
+
+        data = {
+            "INDEXER_USERNAME": ic.wazuh_indexer_username,
+            "INDEXER_PASSWORD": ic.wazuh_indexer_password_plain,
+            "WAZUH_API_USERNAME": ic.wazuh_username,
+            "WAZUH_API_PASSWORD": ic.wazuh_password_plain,
+        }
+        # Optional pre-minted API token: only ship the key when it's set so a
+        # NULL column doesn't materialize an empty WAZUH_API_TOKEN env var.
+        if ic.wazuh_api_token_plain:
+            data["WAZUH_API_TOKEN"] = ic.wazuh_api_token_plain
+
+        await self.k8s.put_secret(
+            ctx.namespace,
+            "tenant-external-siem-creds",
+            data=data,
+            labels={
+                "soctalk.io/tenant-id": str(ctx.tenant.id),
+                "soctalk.io/secret-purpose": "external-siem-creds",
+                "managed-by": "soctalk",
+            },
+        )
+        await self._emit_event(ctx, "external_siem_secret_applied")
+
+    async def _step_wazuh_skipped_provided(self, ctx: _StepContext) -> None:
+        """Timeline marker for 'provided' tenants where ``helm_apply_wazuh``
+        would have run. The tenant brings its own external Wazuh, so the
+        ``wazuh-<slug>`` release is never installed; emit a single
+        ``wazuh_skipped_provided`` lifecycle event so the wizard still shows a
+        step between ``helm_apply_tenant`` and ``wait_workloads``.
+        """
+        await self._emit_event(ctx, "wazuh_skipped_provided")
 
     async def _step_helm_apply_tenant(self, ctx: _StepContext) -> None:
         api_host = (
@@ -763,7 +886,17 @@ class TenantController:
         Service from the Manager (``<release>-wazuh-indexer`` vs
         ``<release>-wazuh-manager``). Service-name conventions match
         the chart's ``{{ include "wazuh.fullname" . }}``.
+
+        No-op for the ``provided`` profile: that tenant's
+        ``integration.wazuh_url`` / ``wazuh_indexer_url`` point at the
+        customer's own external Wazuh, and overwriting them with in-cluster
+        Service DNS on every reconcile would break the adapter and the chat
+        resolver on the next pod restart. (Defensive: ``provided`` already
+        omits this step from the provision step list.)
         """
+        if ctx.profile == "provided":
+            return
+
         target_url = (
             f"https://{ctx.release_wazuh}-wazuh-manager."
             f"{ctx.namespace}.svc.cluster.local:55000"

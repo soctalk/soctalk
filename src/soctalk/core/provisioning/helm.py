@@ -177,10 +177,33 @@ async def helm_version() -> HelmResult:
 async def helm_uninstall(
     release_name: str, namespace: str, *, keep_history: bool = False
 ) -> HelmResult:
+    """Uninstall a release; idempotent against an already-absent release.
+
+    A release that was never installed — e.g. the ``wazuh-<slug>`` release for
+    a ``provided`` tenant, or a ``persistent`` decommission that already
+    cleaned the release up by hand — makes ``helm uninstall`` exit non-zero
+    with ``release: not found`` on stderr. Treat that as success (return
+    without raising) so :meth:`TenantController.decommission` tears down
+    cleanly across all callers. Any other non-zero exit raises ``HelmError``.
+    """
     args = ["uninstall", release_name, "--namespace", namespace]
     if keep_history:
         args.append("--keep-history")
-    return await _run_helm(args, timeout=600.0)
+    result = await _run_helm(args, timeout=600.0)
+    if not result.ok:
+        combined = f"{result.stderr}\n{result.stdout}".lower()
+        if "not found" in combined:
+            logger.info(
+                "helm_uninstall_release_absent_treated_as_success",
+                release=release_name,
+                namespace=namespace,
+                stderr=result.stderr.strip(),
+            )
+            return result
+        raise HelmError(
+            f"helm uninstall {release_name} failed: {result.stderr}"
+        )
+    return result
 
 
 async def helm_status(release_name: str, namespace: str) -> dict[str, Any]:
