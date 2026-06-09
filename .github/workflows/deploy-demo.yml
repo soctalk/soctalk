@@ -72,25 +72,38 @@ jobs:
           chmod 600 ~/.ssh/id_demo
           ssh-keyscan -H "${{ secrets.DEMO_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Roll soctalk-system deployments to new SHA
-        env:
-          SHA: ${{ steps.resolve.outputs.sha }}
+      - name: Roll soctalk-system deployments to latest
         run: |
           set -euo pipefail
+          # Always roll to :latest. publish-images.yml retags :latest on
+          # every successful image build, so this tracks the head of main
+          # regardless of whether the current commit itself triggered an
+          # image build (e.g. workflow-only changes skip publish-images
+          # via the path filter, but :latest still points at the most
+          # recent code change's image).
+          #
+          # SSH keepalive prevents the session dropping during slow rollouts.
           ssh -i ~/.ssh/id_demo \
               -o StrictHostKeyChecking=accept-new \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=20 \
               "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
               "set -euo pipefail
                for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
-                 container=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || true)
-                 [ -z \"\$container\" ] && { echo \"skipping \$d (not found)\"; continue; }
-                 # Image base differs per deployment; preserve it and just swap tag.
+                 # Skip absent deployments quietly (orchestrator may not be installed).
+                 kubectl -n soctalk-system get deploy \$d >/dev/null 2>&1 || { echo \"skipping \$d (not found)\"; continue; }
+                 container=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].name}')
                  base=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/:.*//')
-                 echo \"rolling \$d: \$base:$SHA\"
-                 kubectl -n soctalk-system set image deploy/\$d \$container=\$base:$SHA
+                 echo \"rolling \$d to \$base:latest\"
+                 # Pin the tag to :latest (no-op if already :latest) AND
+                 # rollout-restart so the pod re-pulls. imagePullPolicy for
+                 # :latest defaults to Always, but restart guarantees it.
+                 kubectl -n soctalk-system set image deploy/\$d \$container=\$base:latest
+                 kubectl -n soctalk-system rollout restart deploy/\$d
                done
                for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
-                 kubectl -n soctalk-system rollout status deploy/\$d --timeout=5m || true
+                 kubectl -n soctalk-system get deploy \$d >/dev/null 2>&1 || continue
+                 kubectl -n soctalk-system rollout status deploy/\$d --timeout=10m
                done"
 
   smoke:
