@@ -208,6 +208,33 @@ class K8sClient:
                 return
             raise
 
+    async def patch_deployment(
+        self, namespace: str, name: str, patch: dict[str, Any]
+    ) -> None:
+        """Apply an arbitrary strategic-merge patch to a Deployment.
+
+        Thin wrapper over ``apps_v1.patch_namespaced_deployment``. Used by
+        the external-SIEM PATCH endpoint to bump a pod-template annotation
+        (``soctalk.io/restartedAt``) — the same mechanism ``kubectl rollout
+        restart`` uses under the hood — so the long-lived adapter pod cycles
+        against the freshly-written Secret. A 404 (no Deployment in this
+        cluster — e.g. cross-cluster deploy) is swallowed so best-effort
+        callers don't have to special-case it; other errors propagate to the
+        caller, which logs and continues.
+        """
+        from kubernetes import client as k8s
+        from kubernetes.client.exceptions import ApiException
+
+        apps = k8s.AppsV1Api()
+        try:
+            await self._run(
+                apps.patch_namespaced_deployment, name, namespace, patch
+            )
+        except ApiException as e:
+            if e.status == 404:
+                return
+            raise
+
 
 def new_k8s_client() -> K8sClient:
     """Factory helper; tests substitute a fake."""

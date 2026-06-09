@@ -7,16 +7,19 @@ Every handler is guarded by :func:`require_role` on the 3 MSSP roles
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.provisioning import TenantController
+from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role
 from soctalk.core.tenancy.models import (
@@ -639,6 +642,275 @@ def _to_read(t: Tenant) -> TenantRead:
         state_changed_at=t.state_changed_at.isoformat(),
         runtime=t.runtime,
     )
+
+
+# ---------------------------------------------------------------------------
+# External SIEM (Wazuh) connection — profile-agnostic PATCH/GET.
+# ---------------------------------------------------------------------------
+#
+# Mirrors the ``llm_config.update_tenant_llm`` dual-write contract: Postgres
+# is authoritative and committed FIRST; the K8s Secret rewrite + adapter
+# rolling restart are best-effort side effects that log-and-continue on
+# failure. The endpoint deliberately does NOT gate on ``tenant.profile`` — an
+# existing poc / persistent tenant can be repointed at an external Wazuh after
+# the fact (effectively a manual migration).
+
+
+class ExternalSiemPatch(BaseModel):
+    """All-optional external-SIEM credential patch.
+
+    Only non-None fields are written, so a caller can rotate a single
+    password (or flip ``verify_ssl``) without resending the full connection
+    block. ``None`` — not falsiness — is the "leave unchanged" sentinel, so
+    ``verify_ssl=False`` is a real write.
+    """
+
+    indexer_url: str | None = Field(default=None, max_length=500)
+    indexer_username: str | None = Field(default=None, max_length=255)
+    indexer_password: str | None = Field(default=None, max_length=4096)
+    api_url: str | None = Field(default=None, max_length=500)
+    api_username: str | None = Field(default=None, max_length=255)
+    api_password: str | None = Field(default=None, max_length=4096)
+    api_token: str | None = Field(default=None, max_length=4096)
+    verify_ssl: bool | None = None
+
+
+class ExternalSiemRead(BaseModel):
+    """Masked view of the external-SIEM config.
+
+    Plaintext passwords/token are NEVER returned — only ``has_*`` booleans
+    signal their presence (mirrors the ``has_api_key`` precedent in
+    ``llm_config.LlmConfigRead``).
+    """
+
+    indexer_url: str | None
+    indexer_username: str | None
+    api_url: str | None
+    api_username: str | None
+    has_indexer_password: bool
+    has_api_password: bool
+    has_api_token: bool
+    verify_ssl: bool
+
+
+# payload field → IntegrationConfig column. ``api_*`` map to the Wazuh
+# **manager** (API) columns; ``indexer_*`` to the **indexer** columns; both
+# HTTP-Basic pairs are distinct, matching the 4-key external-SIEM Secret.
+_EXTERNAL_SIEM_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("indexer_url", "wazuh_indexer_url"),
+    ("indexer_username", "wazuh_indexer_username"),
+    ("indexer_password", "wazuh_indexer_password_plain"),
+    ("api_url", "wazuh_api_url"),
+    ("api_username", "wazuh_username"),
+    ("api_password", "wazuh_password_plain"),
+    ("api_token", "wazuh_api_token_plain"),
+    ("verify_ssl", "wazuh_verify_ssl"),
+)
+
+
+def _external_siem_read(cfg: IntegrationConfig) -> ExternalSiemRead:
+    return ExternalSiemRead(
+        indexer_url=cfg.wazuh_indexer_url,
+        indexer_username=cfg.wazuh_indexer_username,
+        api_url=cfg.wazuh_api_url,
+        api_username=cfg.wazuh_username,
+        has_indexer_password=bool(cfg.wazuh_indexer_password_plain),
+        has_api_password=bool(cfg.wazuh_password_plain),
+        has_api_token=bool(cfg.wazuh_api_token_plain),
+        verify_ssl=cfg.wazuh_verify_ssl,
+    )
+
+
+def _external_siem_secret_data(cfg: IntegrationConfig) -> dict[str, str]:
+    """Build the UPPERCASE-keyed Secret payload from the merged row.
+
+    Same key shape the controller's ``_step_write_external_siem_secret``
+    writes so the adapter and the chat resolver read one consistent contract.
+    A NULL/empty column drops its key — notably ``WAZUH_API_TOKEN`` when no
+    pre-minted token is set, so a NULL column never materializes an empty
+    env var.
+    """
+    data: dict[str, str] = {}
+    if cfg.wazuh_indexer_username:
+        data["INDEXER_USERNAME"] = cfg.wazuh_indexer_username
+    if cfg.wazuh_indexer_password_plain:
+        data["INDEXER_PASSWORD"] = cfg.wazuh_indexer_password_plain
+    if cfg.wazuh_username:
+        data["WAZUH_API_USERNAME"] = cfg.wazuh_username
+    if cfg.wazuh_password_plain:
+        data["WAZUH_API_PASSWORD"] = cfg.wazuh_password_plain
+    if cfg.wazuh_api_token_plain:
+        data["WAZUH_API_TOKEN"] = cfg.wazuh_api_token_plain
+    return data
+
+
+@router.get(
+    "/{tenant_id}/external-siem",
+    response_model=ExternalSiemRead,
+    dependencies=[
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
+    ],
+)
+async def get_tenant_external_siem(
+    tenant_id: UUID, request: Request
+) -> ExternalSiemRead:
+    """Masked read of a tenant's external-SIEM connection material."""
+    session = _db(request)
+    async with tenant_context(session, tenant_id):
+        cfg = (
+            await session.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+    if cfg is None:
+        raise HTTPException(404, "tenant has no integration config")
+    return _external_siem_read(cfg)
+
+
+@router.patch(
+    "/{tenant_id}/external-siem",
+    response_model=ExternalSiemRead,
+    dependencies=[
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
+    ],
+)
+async def update_tenant_external_siem(
+    tenant_id: UUID, payload: ExternalSiemPatch, request: Request
+) -> ExternalSiemRead:
+    """Profile-agnostic external-SIEM update.
+
+    Dual-write ordering (mirrors ``llm_config.update_tenant_llm:267-270``):
+
+      1. Apply non-None payload fields to the ``IntegrationConfig.wazuh_*``
+         columns + flush, inside ``tenant_context``.
+      2. ``session.commit()`` — Postgres is authoritative and lands BEFORE
+         any K8s side effect.
+      3. Re-read the merged row, write/patch
+         ``Secret/tenant-external-siem-creds`` in ``tenant-<slug>`` (token key
+         omitted when unset).
+      4. Patch the ``soctalk-adapter`` Deployment annotation so its pod rolls
+         and mounts the freshly-written Secret.
+
+    Steps 3-4 are best-effort: a K8s failure is logged via structlog and does
+    NOT roll back the committed Postgres update — the user's intent is already
+    recorded authoritatively, and the provisioning worker re-reconciles the
+    Secret on its next pass.
+    """
+    session = _db(request)
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(404, "tenant not found")
+
+    async with tenant_context(session, tenant_id):
+        cfg = (
+            await session.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if cfg is None:
+            raise HTTPException(404, "tenant has no integration config")
+        for src, dest in _EXTERNAL_SIEM_FIELD_MAP:
+            value = getattr(payload, src)
+            if value is not None:
+                setattr(cfg, dest, value)
+        await session.flush()
+    # Commit the Postgres row FIRST — before any K8s side effect. The
+    # DB-session middleware would otherwise commit after the handler returns,
+    # which could leave the K8s Secret written while a late commit failure
+    # rolled back the columns (violating "Postgres is authoritative").
+    await session.commit()
+
+    # Re-read the merged row so the Secret + response reflect the FULL state,
+    # not just the PATCH delta.
+    async with tenant_context(session, tenant_id):
+        cfg = (
+            await session.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one()
+
+    await _apply_external_siem_k8s(tenant_id, tenant.slug, cfg)
+    return _external_siem_read(cfg)
+
+
+async def _apply_external_siem_k8s(
+    tenant_id: UUID, tenant_slug: str, cfg: IntegrationConfig
+) -> None:
+    """Best-effort K8s side effects: rewrite the creds Secret + roll the
+    adapter Deployment.
+
+    Every failure is logged via structlog and swallowed — Postgres already
+    holds the authoritative update. Construction of the client itself is
+    guarded too: a pure cross-cluster L1 has no reachable MSSP-cluster
+    kubeconfig and must not 500 the PATCH.
+    """
+    log = structlog.get_logger()
+    namespace = f"tenant-{tenant_slug}"
+    try:
+        k8s = new_k8s_client()
+    except Exception as exc:  # noqa: BLE001 — no reachable cluster
+        log.warning(
+            "external_siem_k8s_unavailable",
+            tenant_id=str(tenant_id),
+            error=str(exc),
+        )
+        return
+
+    data = _external_siem_secret_data(cfg)
+    if data:
+        try:
+            await k8s.put_secret(
+                namespace,
+                "tenant-external-siem-creds",
+                data=data,
+                labels={
+                    "soctalk.io/tenant-id": str(tenant_id),
+                    "soctalk.io/secret-purpose": "external-siem-creds",
+                    "managed-by": "soctalk",
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "external_siem_secret_write_failed",
+                tenant_id=str(tenant_id),
+                error=str(exc),
+            )
+
+    # ``secretKeyRef`` env vars don't refresh on a Secret update, so roll the
+    # long-lived adapter pod. Patch a pod-template annotation (what ``kubectl
+    # rollout restart`` does under the hood) — no rollout subresource perm
+    # required. The chat resolver reads creds live per request and needs no
+    # restart.
+    try:
+        await k8s.patch_deployment(
+            namespace=namespace,
+            name="soctalk-adapter",
+            patch={
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "soctalk.io/restartedAt": str(time.time_ns())
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "external_siem_adapter_restart_failed",
+            tenant_id=str(tenant_id),
+            error=str(exc),
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -431,6 +431,232 @@ def _onboard_route_status() -> int:
     raise AssertionError("onboard route not registered")
 
 
+class _FakeK8s:
+    """Records the external-SIEM dual-write side effects.
+
+    Mirrors the slice of :class:`K8sClient` the PATCH endpoint touches:
+    a create-or-patch Secret write and a Deployment template-annotation
+    patch (the rolling-restart mechanism). Everything is treated as
+    idempotent + always-succeeds so the tests assert on what was called.
+    """
+
+    def __init__(self) -> None:
+        self.secrets: dict[tuple[str, str], dict[str, str]] = {}
+        self.deployment_patches: list[tuple[str, str, dict]] = []
+
+    async def put_secret(self, namespace, name, data, *, labels=None) -> None:
+        self.secrets[(namespace, name)] = dict(data)
+
+    async def patch_deployment(self, namespace, name, patch) -> None:
+        self.deployment_patches.append((namespace, name, patch))
+
+
+async def test_patch_external_siem(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """PATCH /api/mssp/tenants/{id}/external-siem updates BOTH credential
+    pairs, rewrites the ``tenant-external-siem-creds`` Secret, rolls the
+    ``soctalk-adapter`` Deployment (annotation changes), and returns a
+    masked view where passwords + token are NEVER echoed.
+    """
+    import soctalk.core.api.tenants as tenants_mod
+    from soctalk.core.api.tenants import (
+        ExternalSiemPatch,
+        update_tenant_external_siem,
+    )
+
+    fake = _FakeK8s()
+    monkeypatch.setattr(tenants_mod, "new_k8s_client", lambda: fake)
+
+    slug = f"es{uuid4().hex[:8]}"
+    tenant = Tenant(
+        slug=slug,
+        display_name="External SIEM Patch",
+        state=TenantState.ACTIVE.value,
+        profile="provided",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.flush()
+    mssp_session.add(
+        IntegrationConfig(
+            tenant_id=tenant.id,
+            wazuh_indexer_url="https://old-indexer:9200",
+            wazuh_indexer_username="old-idx",
+            wazuh_indexer_password_plain="old-idx-pw",
+            wazuh_api_url="https://old-wazuh:55000",
+            wazuh_username="old-api",
+            wazuh_password_plain="old-api-pw",
+            wazuh_verify_ssl=True,
+        )
+    )
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    new_idx_pw = "new-idx-pw-" + uuid4().hex
+    new_api_pw = "new-api-pw-" + uuid4().hex
+    new_token = "new-token-" + uuid4().hex
+    result = await update_tenant_external_siem(
+        tenant.id,
+        ExternalSiemPatch(
+            indexer_username="new-idx",
+            indexer_password=new_idx_pw,
+            api_username="new-api",
+            api_password=new_api_pw,
+            api_token=new_token,
+            verify_ssl=False,  # False is NOT None → must be written
+        ),
+        FakeRequest(),
+    )
+
+    # --- masked response: has_* flags set; plaintext NEVER echoed ---
+    assert result.has_indexer_password is True
+    assert result.has_api_password is True
+    assert result.has_api_token is True
+    assert result.indexer_username == "new-idx"
+    assert result.api_username == "new-api"
+    assert result.verify_ssl is False
+    serialized = str(result.model_dump())
+    assert new_idx_pw not in serialized
+    assert new_api_pw not in serialized
+    assert new_token not in serialized
+
+    # --- adapter Deployment annotation changed (rolling restart) ---
+    ns = f"tenant-{slug}"
+    adapter_patches = [
+        p
+        for (pns, name, p) in fake.deployment_patches
+        if pns == ns and name == "soctalk-adapter"
+    ]
+    assert adapter_patches, "expected a soctalk-adapter deployment patch"
+    annotations = adapter_patches[-1]["spec"]["template"]["metadata"][
+        "annotations"
+    ]
+    assert "soctalk.io/restartedAt" in annotations
+    assert annotations["soctalk.io/restartedAt"].isdigit()
+
+    # --- Secret rewritten with BOTH pairs + token, UPPERCASE keys ---
+    secret = fake.secrets[(ns, "tenant-external-siem-creds")]
+    assert secret["INDEXER_USERNAME"] == "new-idx"
+    assert secret["INDEXER_PASSWORD"] == new_idx_pw
+    assert secret["WAZUH_API_USERNAME"] == "new-api"
+    assert secret["WAZUH_API_PASSWORD"] == new_api_pw
+    assert secret["WAZUH_API_TOKEN"] == new_token
+
+    # --- Postgres columns updated; untouched URLs preserved ---
+    mssp_session.expunge_all()
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.wazuh_indexer_password_plain == new_idx_pw
+    assert cfg.wazuh_password_plain == new_api_pw
+    assert cfg.wazuh_api_token_plain == new_token
+    assert cfg.wazuh_verify_ssl is False
+    assert cfg.wazuh_indexer_url == "https://old-indexer:9200"
+    assert cfg.wazuh_api_url == "https://old-wazuh:55000"
+
+
+async def test_patch_external_siem_works_for_poc_profile(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """The endpoint is profile-agnostic: a ``poc`` tenant can be repointed
+    at an external SIEM after the fact. The columns + the Secret update even
+    though the tenant is NOT on the ``provided`` profile, and there is no
+    profile gate that 4xxs the request.
+    """
+    import soctalk.core.api.tenants as tenants_mod
+    from soctalk.core.api.tenants import (
+        ExternalSiemPatch,
+        update_tenant_external_siem,
+    )
+
+    fake = _FakeK8s()
+    monkeypatch.setattr(tenants_mod, "new_k8s_client", lambda: fake)
+
+    slug = f"pc{uuid4().hex[:8]}"
+    tenant = Tenant(
+        slug=slug,
+        display_name="PoC repoint",
+        state=TenantState.ACTIVE.value,
+        profile="poc",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.flush()
+    mssp_session.add(
+        IntegrationConfig(
+            tenant_id=tenant.id,
+            wazuh_url="https://wazuh-poc.in-cluster",
+        )
+    )
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    idx_pw = "poc-idx-pw-" + uuid4().hex
+    api_pw = "poc-api-pw-" + uuid4().hex
+    result = await update_tenant_external_siem(
+        tenant.id,
+        ExternalSiemPatch(
+            indexer_url="https://ext-indexer:9200",
+            indexer_username="ext-idx",
+            indexer_password=idx_pw,
+            api_url="https://ext-wazuh:55000",
+            api_username="ext-api",
+            api_password=api_pw,
+            # api_token intentionally omitted → key omitted from the Secret
+        ),
+        FakeRequest(),
+    )
+
+    assert result.has_indexer_password is True
+    assert result.has_api_password is True
+    assert result.has_api_token is False
+
+    # Profile was never gated and is unchanged.
+    tenant_row = (
+        await mssp_session.execute(select(Tenant).where(Tenant.id == tenant.id))
+    ).scalar_one()
+    assert tenant_row.profile == "poc"
+
+    # Columns updated despite the non-provided profile.
+    mssp_session.expunge_all()
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.wazuh_indexer_url == "https://ext-indexer:9200"
+    assert cfg.wazuh_indexer_username == "ext-idx"
+    assert cfg.wazuh_indexer_password_plain == idx_pw
+    assert cfg.wazuh_api_url == "https://ext-wazuh:55000"
+    assert cfg.wazuh_username == "ext-api"
+    assert cfg.wazuh_password_plain == api_pw
+
+    # Secret written to the tenant namespace; token key omitted when unset.
+    secret = fake.secrets[(f"tenant-{slug}", "tenant-external-siem-creds")]
+    assert secret["INDEXER_USERNAME"] == "ext-idx"
+    assert secret["INDEXER_PASSWORD"] == idx_pw
+    assert secret["WAZUH_API_USERNAME"] == "ext-api"
+    assert secret["WAZUH_API_PASSWORD"] == api_pw
+    assert "WAZUH_API_TOKEN" not in secret
+
+
 async def test_onboard_provided_profile_happy_path(
     mssp_session: AsyncSession, seeded_org: Organization
 ):
