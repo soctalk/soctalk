@@ -66,6 +66,17 @@ class WazuhNotConfigured(RuntimeError):
     """
 
 
+class ExternalSiemNotConfigured(WazuhNotConfigured):
+    """Raised for a ``provided`` tenant whose external Wazuh **manager** API
+    is not usable — missing ``IntegrationConfig.wazuh_api_url`` or absent
+    API credentials in the ``tenant-external-siem-creds`` Secret.
+
+    Subclasses :class:`WazuhNotConfigured` so the existing chat-tool error
+    handlers catch it and surface ``external Wazuh API not configured`` as a
+    tool error result rather than letting it bubble up as an unhandled 500.
+    """
+
+
 logger = structlog.get_logger()
 
 
@@ -90,6 +101,11 @@ class WazuhConfig:
     indexer_user: str
     indexer_password: str
     verify_ssl: bool
+    # Operator-supplied static Manager-API JWT (``provided`` profile only).
+    # When set, the Manager client uses it directly as the Bearer token and
+    # skips the HTTP-Basic ``/security/user/authenticate`` mint. ``None`` on
+    # the poc/persistent + env paths, which always mint via Basic auth.
+    manager_token: str | None = None
 
     @classmethod
     def from_env(cls) -> "WazuhConfig | None":
@@ -165,6 +181,11 @@ class _ManagerClient:
 
     async def _auth(self, client: httpx.AsyncClient) -> str:
         async with self._lock:
+            # ``provided`` profile: an operator-supplied WAZUH_API_TOKEN is
+            # used directly as the Bearer JWT — no login round-trip. There's
+            # nothing to refresh for a static token, so return it as-is.
+            if self._cfg.manager_token:
+                return self._cfg.manager_token
             if self._token and (time.monotonic() - self._token_ts) < _TOKEN_TTL_S:
                 return self._token
             r = await client.post(
@@ -294,10 +315,52 @@ async def _k8s_secret_read(namespace: str, name: str) -> dict[str, str]:
         }
 
 
+async def _tenant_profile(db: AsyncSession, tenant_id: UUID) -> str | None:
+    """Return the tenant's deployment ``profile`` (``poc`` / ``persistent`` /
+    ``provided`` / ``legacy``), or ``None`` if the tenant row is absent.
+
+    Branching the manager-API resolver on this lets a ``provided`` tenant's
+    chat tools target the external Wazuh manager while poc/persistent keep
+    the in-cluster Service path.
+    """
+    row = (
+        await db.execute(
+            sql_text("SELECT profile FROM tenants WHERE id = :t"),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    return row["profile"] if row else None
+
+
 async def _load_wazuh_config(
     db: AsyncSession, tenant_id: UUID
 ) -> WazuhConfig:
-    """Resolve a tenant's WazuhConfig from integration_configs + tenant_secrets + k8s."""
+    """Resolve a tenant's WazuhConfig, branching on the deployment profile.
+
+    * ``provided`` — the tenant brings their own external Wazuh: the manager
+      base URL is :attr:`IntegrationConfig.wazuh_api_url` and the API creds
+      come from the ``tenant-external-siem-creds`` Secret (see
+      :func:`_load_wazuh_config_provided`).
+    * ``poc`` / ``persistent`` (and ``legacy`` / unknown, defensively) — the
+      in-cluster ``wazuh-<slug>-wazuh-manager`` Service + the
+      ``wazuh-<slug>-wazuh-creds`` Secret. This path is UNCHANGED
+      (see :func:`_load_wazuh_config_in_cluster`).
+    """
+    if (await _tenant_profile(db, tenant_id)) == "provided":
+        return await _load_wazuh_config_provided(db, tenant_id)
+    return await _load_wazuh_config_in_cluster(db, tenant_id)
+
+
+async def _load_wazuh_config_in_cluster(
+    db: AsyncSession, tenant_id: UUID
+) -> WazuhConfig:
+    """Resolve a poc/persistent tenant's WazuhConfig from integration_configs
+    + tenant_secrets + the in-cluster ``wazuh-<slug>-wazuh-creds`` Secret.
+
+    Unchanged from the original single-profile resolver — the ``provided``
+    work branches *before* this function so the in-cluster contract (URL +
+    Secret name + required keys) is preserved verbatim.
+    """
     row = (
         await db.execute(
             sql_text(
@@ -359,6 +422,102 @@ async def _load_wazuh_config(
         indexer_user=idx_user,
         indexer_password=idx_pw,
         verify_ssl=bool(row["wazuh_verify_ssl"]),
+    )
+
+
+async def _load_wazuh_config_provided(
+    db: AsyncSession, tenant_id: UUID
+) -> WazuhConfig:
+    """Resolve the **external** Wazuh manager API for a ``provided`` tenant.
+
+    The manager base URL is :attr:`IntegrationConfig.wazuh_api_url` — NOT the
+    in-cluster ``wazuh-<slug>-wazuh-manager`` Service. Credentials are read
+    from the ``tenant-external-siem-creds`` Secret the controller wrote in
+    ``tenant-<slug>`` (feature ``tenant.profile.provided.controller``), keyed:
+
+      * ``WAZUH_API_USERNAME`` / ``WAZUH_API_PASSWORD`` — manager API basic auth
+      * ``WAZUH_API_TOKEN`` (optional) — a pre-minted Bearer JWT override
+      * ``INDEXER_USERNAME`` / ``INDEXER_PASSWORD`` — indexer (OpenSearch) auth
+
+    Auth precedence (handled by :class:`_ManagerClient`): a present
+    ``WAZUH_API_TOKEN`` is used directly as the Bearer token; otherwise the
+    username/password mint a short-lived JWT via HTTP-Basic against
+    ``POST /security/user/authenticate``.
+
+    Raises :class:`ExternalSiemNotConfigured` (surfaced as ``external Wazuh API
+    not configured``) when the URL or the manager credentials are missing —
+    never an unhandled 500.
+    """
+    row = (
+        await db.execute(
+            sql_text(
+                "SELECT wazuh_api_url, wazuh_indexer_url, wazuh_verify_ssl "
+                "FROM integration_configs WHERE tenant_id = :t"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    api_url = ((row["wazuh_api_url"] if row else None) or "").strip()
+    if not api_url:
+        raise ExternalSiemNotConfigured(
+            "external Wazuh API not configured: IntegrationConfig.wazuh_api_url "
+            f"is empty for provided tenant {tenant_id}"
+        )
+
+    sec = (
+        await db.execute(
+            sql_text(
+                "SELECT k8s_namespace, k8s_secret_name "
+                "FROM tenant_secrets "
+                "WHERE tenant_id = :t AND purpose = 'external-siem-creds' "
+                "LIMIT 1"
+            ),
+            {"t": str(tenant_id)},
+        )
+    ).mappings().first()
+    if not sec:
+        raise ExternalSiemNotConfigured(
+            "external Wazuh API not configured: tenant-external-siem-creds "
+            f"Secret pointer missing for provided tenant {tenant_id}"
+        )
+
+    creds = await _k8s_secret_read(sec["k8s_namespace"], sec["k8s_secret_name"])
+    api_token = (creds.get("WAZUH_API_TOKEN") or "").strip() or None
+    mgr_user = creds.get("WAZUH_API_USERNAME") or ""
+    mgr_pw = creds.get("WAZUH_API_PASSWORD") or ""
+    # Manager auth needs EITHER a pre-minted token OR a username+password pair.
+    if not api_token and not (mgr_user and mgr_pw):
+        raise ExternalSiemNotConfigured(
+            "external Wazuh API not configured: Secret "
+            f"{sec['k8s_namespace']}/{sec['k8s_secret_name']} has no usable "
+            "manager credentials (need WAZUH_API_TOKEN, or "
+            "WAZUH_API_USERNAME + WAZUH_API_PASSWORD)"
+        )
+
+    idx_user = (
+        creds.get("INDEXER_USERNAME")
+        or creds.get("WAZUH_INDEXER_USERNAME")
+        or ""
+    )
+    idx_pw = (
+        creds.get("INDEXER_PASSWORD")
+        or creds.get("WAZUH_INDEXER_PASSWORD")
+        or ""
+    )
+
+    manager_url = api_url.rstrip("/")
+    indexer_url = (
+        (row["wazuh_indexer_url"] if row else None) or _derive_indexer(manager_url)
+    ).rstrip("/")
+    return WazuhConfig(
+        manager_url=manager_url,
+        manager_user=mgr_user,
+        manager_password=mgr_pw,
+        indexer_url=indexer_url,
+        indexer_user=idx_user,
+        indexer_password=idx_pw,
+        verify_ssl=bool(row["wazuh_verify_ssl"]),
+        manager_token=api_token,
     )
 
 

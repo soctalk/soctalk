@@ -100,6 +100,25 @@ in particular has trouble matching ipBlock rules against ClusterIP
 DNATed traffic); the chart keeps egress permissive for the api pod.
 Default-deny still binds the rest of the namespace, and ingress is
 strictly allow-listed.
+
+External Wazuh manager egress (`provided` profile): the chat agent's
+per-tenant Wazuh manager-API resolver
+(src/soctalk/chat/wazuh_primitives.py) runs IN THIS api pod. For a
+tenant onboarded with profile=`provided`, that resolver dials the
+tenant's externally-hosted Wazuh manager
+(IntegrationConfig.wazuh_api_url, typically :55000) instead of an
+in-cluster Service. The permissive `egress: - {}` rule below already
+allows that outbound connection, so on the local profile
+(`networkPolicy.cilium: false`, egress unrestricted) this is a
+DOCUMENTED NO-OP — there is nothing extra to render.
+
+Locked-down installs that replace this permissive rule with a closed
+Cilium allowlist MUST add an explicit egress allowance for the external
+manager host(s) — a CiliumNetworkPolicy `toFQDNs` rule on the api pod
+(same pattern as the tenant chart's `adapter-fqdn-egress`) targeting
+each tenant's `wazuh_api_url` host on :55000 — or the resolver's calls
+will be dropped. This is a prerequisite documented for those installs;
+the OSS chart does not enumerate per-tenant external hosts here.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
