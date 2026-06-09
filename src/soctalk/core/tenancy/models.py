@@ -232,14 +232,24 @@ class IntegrationConfig(SQLModel, table=True):
     wazuh_verify_ssl: bool = Field(default=True)
     # External Wazuh credentials (populated only for the ``provided`` profile,
     # where the tenant brings their own Wazuh deployment rather than having
-    # SocTalk provision one in-namespace). Plaintext storage mirrors the
-    # existing ``llm_api_key_plain`` compromise; KMS/Fernet hardening is
-    # tracked as a cross-column follow-up.
+    # SocTalk provision one in-namespace). The Wazuh **API** (manager, :55000)
+    # and the **Indexer** (OpenSearch, :9200) authenticate with *separate*
+    # credentials, mirroring the in-cluster chart's ``credentials`` block and
+    # the 4-key ``*-wazuh-creds`` Secret (WAZUH_API_USERNAME/PASSWORD +
+    # INDEXER_USERNAME/PASSWORD). Plaintext storage mirrors the existing
+    # ``llm_api_key_plain`` compromise; KMS/Fernet hardening is tracked as a
+    # cross-column follow-up.
+    #
+    # Wazuh API (manager) credentials + endpoint:
     wazuh_username: str | None = Field(default=None, max_length=255)
     wazuh_password_plain: str | None = Field(default=None, max_length=4096)
     wazuh_api_token_plain: str | None = Field(default=None, max_length=4096)
-    wazuh_indexer_url: str | None = Field(default=None, max_length=500)
     wazuh_api_url: str | None = Field(default=None, max_length=500)
+    # Wazuh Indexer (OpenSearch) credentials. The indexer URL is declared
+    # above (``wazuh_indexer_url``, with the in-cluster resolver default);
+    # only the separate indexer credentials are added here.
+    wazuh_indexer_username: str | None = Field(default=None, max_length=255)
+    wazuh_indexer_password_plain: str | None = Field(default=None, max_length=4096)
     # TheHive
     thehive_enabled: bool = Field(default=True)
     thehive_url: str | None = Field(default=None, max_length=500)

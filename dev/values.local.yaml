@@ -37,6 +37,20 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+# Per-tenant image overrides for local k3d. The controller's built-in
+# defaults (src/soctalk/core/provisioning/render.py) point the adapter +
+# runs-worker at ghcr.io/soctalk/soctalk-{adapter,orchestrator}:0.1.13-fixes,
+# which aren't published/reachable from this cluster. Repoint them at the
+# locally-built images that `just tenant-images` builds and imports
+# (cr.lab.atricore.io/...:latest). These become the soctalk-tenant chart's
+# adapter.image / runsWorker.image; pullPolicy stays IfNotPresent so the
+# kubelet uses the k3d-imported image without a registry round-trip.
+tenantProvisioning:
+  adapterImageRepo: cr.lab.atricore.io/soctalk-adapter
+  adapterImageTag: latest
+  runsWorkerImageRepo: cr.lab.atricore.io/soctalk-orchestrator
+  runsWorkerImageTag: latest
+
 ingress:
   # local-up.sh installs nginx-ingress in the ``ingress-system``
   # namespace with ingressClassName=nginx. The chart's default

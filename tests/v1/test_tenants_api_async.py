@@ -262,6 +262,8 @@ async def test_provided_profile_persists_external_wazuh_fields(
         wazuh_api_token_plain="tok-" + uuid4().hex,
         wazuh_indexer_url="https://indexer.example.com:9200",
         wazuh_api_url="https://wazuh.example.com:55000",
+        wazuh_indexer_username="indexer-ro",
+        wazuh_indexer_password_plain="idx-pw-" + uuid4().hex,
     )
     mssp_session.add(integration)
     await mssp_session.commit()
@@ -282,9 +284,108 @@ async def test_provided_profile_persists_external_wazuh_fields(
     assert read_back.wazuh_api_token_plain == integration.wazuh_api_token_plain
     assert read_back.wazuh_indexer_url == integration.wazuh_indexer_url
     assert read_back.wazuh_api_url == integration.wazuh_api_url
+    assert read_back.wazuh_indexer_username == integration.wazuh_indexer_username
+    assert (
+        read_back.wazuh_indexer_password_plain
+        == integration.wazuh_indexer_password_plain
+    )
 
     # Tenant.profile also round-trips with the new enum value.
     tenant_read = (
         await mssp_session.execute(select(Tenant).where(Tenant.id == tenant.id))
     ).scalar_one()
     assert tenant_read.profile == "provided"
+
+
+async def test_onboard_provided_persists_external_wazuh_fields(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """The onboarding wizard payload carries external Wazuh connection
+    material for the 'provided' profile. ``onboard_tenant`` must write it
+    onto the tenant's IntegrationConfig (password/token → *_plain columns)
+    so the adapter can later reach the tenant-supplied SIEM.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    pw = "byo-pw-" + uuid4().hex
+    tok = "byo-tok-" + uuid4().hex
+    ipw = "byo-ipw-" + uuid4().hex
+    payload = TenantOnboard(
+        slug=f"pv{uuid4().hex[:8]}",
+        display_name="BYO Wazuh Tenant",
+        profile="provided",
+        wazuh_api_url="https://wazuh.example.com:55000",
+        wazuh_api_username="soctalk-adapter",
+        wazuh_api_password=pw,
+        wazuh_api_token=tok,
+        wazuh_indexer_url="https://indexer.example.com:9200",
+        wazuh_indexer_username="indexer-ro",
+        wazuh_indexer_password=ipw,
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    assert result.profile == "provided"
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.wazuh_api_url == "https://wazuh.example.com:55000"
+    assert integration.wazuh_username == "soctalk-adapter"
+    assert integration.wazuh_password_plain == pw
+    assert integration.wazuh_api_token_plain == tok
+    assert integration.wazuh_indexer_url == "https://indexer.example.com:9200"
+    assert integration.wazuh_indexer_username == "indexer-ro"
+    assert integration.wazuh_indexer_password_plain == ipw
+
+
+async def test_onboard_non_provided_leaves_external_wazuh_null(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """For poc/persistent the wizard must not stamp external Wazuh creds —
+    those columns stay NULL so the controller fills in-cluster URLs.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    # Even if a client smuggles wazuh_* on a poc onboard, we drop them.
+    payload = TenantOnboard(
+        slug=f"pc{uuid4().hex[:8]}",
+        display_name="PoC Tenant",
+        profile="poc",
+        wazuh_api_url="https://should-be-ignored:55000",
+        wazuh_api_username="ignored",
+        wazuh_api_password="ignored",
+        wazuh_indexer_username="ignored",
+        wazuh_indexer_password="ignored",
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.wazuh_api_url is None
+    assert integration.wazuh_username is None
+    assert integration.wazuh_password_plain is None
+    assert integration.wazuh_api_token_plain is None
+    assert integration.wazuh_indexer_username is None
+    assert integration.wazuh_indexer_password_plain is None

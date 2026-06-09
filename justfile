@@ -24,6 +24,18 @@ build-orchestrator:
     docker tag soctalk-orchestrator:latest {{registry}}/soctalk-orchestrator:latest
     @echo "Orchestrator image ready: {{registry}}/soctalk-orchestrator:latest"
 
+# Build and tag the per-tenant adapter image (Dockerfile.adapter ->
+# soctalk-adapter). The soctalk-tenant chart runs this as the adapter
+# sidecar. The controller defaults to
+# ghcr.io/soctalk/soctalk-adapter:0.1.13-fixes; dev/values.local.yaml
+# repoints it at this local tag for k3d. No CI dependency for local work.
+build-adapter:
+    @echo "Building adapter image..."
+    docker build -f Dockerfile.adapter --network=host -t soctalk-adapter:latest .
+    @echo "Tagging image for registry..."
+    docker tag soctalk-adapter:latest {{registry}}/soctalk-adapter:latest
+    @echo "Adapter image ready: {{registry}}/soctalk-adapter:latest"
+
 # Build and tag the frontend image
 build-frontend:
     @echo "Building frontend image..."
@@ -185,6 +197,7 @@ system-up:
         cr.lab.atricore.io/soctalk-api:latest \
         cr.lab.atricore.io/soctalk-app-ui:latest \
         --cluster soctalk-local
+    just tenant-images
     helm upgrade --install soctalk-system charts/soctalk-system \
         --namespace soctalk-system --create-namespace \
         -f dev/values.local.yaml \
@@ -209,3 +222,22 @@ system-reload:
 system-down:
     -helm -n soctalk-system uninstall soctalk-system
     -kubectl delete ns soctalk-system --ignore-not-found
+
+# Build + import the per-tenant images (adapter + runs-worker) into the
+# soctalk-local cluster. The runs-worker reuses the orchestrator image
+# with a flipped entrypoint (python -m soctalk.runs_worker.main, set by
+# the chart). pullPolicy is IfNotPresent, so the kubelet uses the
+# k3d-imported image with no registry round-trip. dev/values.local.yaml
+# points the controller at these tags via
+# tenantProvisioning.{adapter,runsWorker}Image{Repo,Tag}.
+#
+# Run standalone while iterating on the adapter, then re-provision (or
+# `kubectl -n tenant-<slug> rollout restart deploy`) to pick up changes
+# on existing tenants. `just system-up` calls this automatically.
+tenant-images:
+    just build-adapter build-orchestrator
+    k3d image import \
+        cr.lab.atricore.io/soctalk-adapter:latest \
+        cr.lab.atricore.io/soctalk-orchestrator:latest \
+        --cluster soctalk-local
+    @echo "Per-tenant images imported into soctalk-local."

@@ -4,7 +4,7 @@
   "title": "SocTalk Tenant Chart Values",
   "description": "Validation schema for soctalk-tenant Helm chart values (rendered by SocTalk controller from per-tenant config).",
   "type": "object",
-  "required": ["tenant", "branding", "llm", "components", "networkPolicies", "resourceQuota", "limitRange", "agentIngress", "adapter", "runsWorker"],
+  "required": ["tenant", "branding", "llm", "components", "networkPolicies", "resourceQuota", "limitRange", "adapter", "runsWorker"],
   "additionalProperties": false,
   "properties": {
     "tenant": {
@@ -136,8 +136,13 @@
       "properties": {
         "enabled":         { "type": "boolean" },
         "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
+        "externalSiemHosts": {
+          "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "fqdnEgress": {
-          "description": "Emit a CiliumNetworkPolicy permitting adapter egress to soctalkSystem.url's FQDN. Requires Cilium CRDs.",
+          "description": "Emit a CiliumNetworkPolicy permitting adapter egress to soctalkSystem.url and the externalSiemHosts FQDNs. Requires Cilium CRDs.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -232,6 +237,7 @@
             "credsSecret": { "type": "string" },
             "usernameKey": { "type": "string" },
             "passwordKey": { "type": "string" },
+            "verifySsl":   { "type": "boolean" },
             "minSeverity": { "type": "integer", "minimum": 0, "maximum": 15 }
           }
         }

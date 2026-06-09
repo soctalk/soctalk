@@ -81,6 +81,19 @@ class TenantOnboard(BaseModel):
     # LLM endpoint (optional; tenant can set API key later via detail page)
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o")
+    # External Wazuh connection — only meaningful for the ``provided`` profile,
+    # where the tenant brings their own Wazuh deployment rather than having
+    # SocTalk provision one in the tenant namespace. The Wazuh API (manager)
+    # and the Indexer (OpenSearch) authenticate with separate credentials.
+    # Persisted onto the tenant's IntegrationConfig (passwords/token land in
+    # the *_plain columns).
+    wazuh_api_url: str | None = Field(default=None, max_length=500)
+    wazuh_api_username: str | None = Field(default=None, max_length=255)
+    wazuh_api_password: str | None = Field(default=None, max_length=4096)
+    wazuh_api_token: str | None = Field(default=None, max_length=4096)
+    wazuh_indexer_url: str | None = Field(default=None, max_length=500)
+    wazuh_indexer_username: str | None = Field(default=None, max_length=255)
+    wazuh_indexer_password: str | None = Field(default=None, max_length=4096)
 
 
 class ProvisioningJobRead(BaseModel):
@@ -165,11 +178,22 @@ async def onboard_tenant(
     await session.flush()
 
     async with tenant_context(session, tenant.id):
+        # External Wazuh connection material is only captured for the
+        # 'provided' profile (BYO-SIEM). For poc/persistent these stay NULL
+        # and the controller fills wazuh_url/indexer_url in-cluster.
+        provided = payload.profile == "provided"
         session.add_all([
             IntegrationConfig(
                 tenant_id=tenant.id,
                 llm_base_url=payload.llm_base_url,
                 llm_model=payload.llm_model,
+                wazuh_api_url=payload.wazuh_api_url if provided else None,
+                wazuh_username=payload.wazuh_api_username if provided else None,
+                wazuh_password_plain=payload.wazuh_api_password if provided else None,
+                wazuh_api_token_plain=payload.wazuh_api_token if provided else None,
+                wazuh_indexer_url=payload.wazuh_indexer_url if provided else None,
+                wazuh_indexer_username=payload.wazuh_indexer_username if provided else None,
+                wazuh_indexer_password_plain=payload.wazuh_indexer_password if provided else None,
             ),
             BrandingConfig(
                 tenant_id=tenant.id,

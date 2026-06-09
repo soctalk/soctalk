@@ -58,7 +58,7 @@ spec:
               name: http
           env:
             - name: PUBLIC_API_URL
-              value: http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.cluster.local:8000
+              value: http://{{ .Release.Name }}-api.{{ .Release.Namespace }}.svc.cluster.local.:8000
           resources:
             requests:
               cpu: {{ .Values.resources.appUi.requests.cpu | quote }}

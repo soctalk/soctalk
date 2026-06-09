@@ -66,9 +66,46 @@ def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:
             },
         }
 
+    if profile == "provided":
+        return {
+            "resourceQuota": {
+                "enabled": True,
+                # No in-namespace Wazuh/TheHive/Cortex — only the adapter and
+                # runs-worker run here, so the quota is a fraction of poc's.
+                # Two PVCs cover the adapter's checkpoint volume plus one
+                # spare; ten pods cover the two Deployments with restart and
+                # rollout headroom.
+                "requests": {"cpu": "1", "memory": "2Gi"},
+                "limits": {"cpu": "2", "memory": "4Gi"},
+                "persistentVolumeClaims": "2",
+                "pods": "10",
+            },
+        }
+
     # legacy: no overrides. Caller should not normally re-render legacy
     # tenants; if they do, hand back the base values unchanged.
     return {}
+
+
+def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
+    """Deduped hostnames the adapter must reach for an external Wazuh.
+
+    Parses the host portion of the externally-provided indexer (:9200) and
+    Wazuh API (:55000) URLs. Order-preserving + deduped so a tenant whose
+    indexer and API share a hostname yields a single egress entry. Empty/None
+    URLs are skipped. Feeds ``networkPolicies.externalSiemHosts`` (the Cilium
+    FQDN egress allow-list) for the ``provided`` profile.
+    """
+    from urllib.parse import urlparse
+
+    hosts: list[str] = []
+    for url in (integration.wazuh_indexer_url, integration.wazuh_api_url):
+        if not url:
+            continue
+        host = urlparse(url).hostname
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
 
 
 def render_tenant_values(
@@ -112,6 +149,27 @@ def render_tenant_values(
         host = urlparse(integration.llm_base_url).hostname
         allowed_llm_hosts = [host] if host else []
 
+    # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
+    # SocTalk deploys only the adapter + runs-worker here and points the
+    # adapter at the external indexer using credentials the controller stores
+    # in the ``tenant-external-siem-creds`` Secret (created by a later feature,
+    # tenant.profile.provided.controller — referenced by name only here).
+    is_provided = profile == "provided"
+
+    if is_provided:
+        indexer_url = integration.wazuh_indexer_url
+        indexer_creds_secret = "tenant-external-siem-creds"
+    else:
+        # In-cluster Wazuh provisioned by the wazuh subchart: derive the
+        # indexer Service DNS + the chart-minted ``*-wazuh-creds`` Secret.
+        indexer_url = f"https://wazuh-{tenant.slug}-wazuh-indexer:9200"
+        indexer_creds_secret = f"wazuh-{tenant.slug}-wazuh-creds"
+
+    # For 'provided', the Cilium FQDN egress allow-list must include every
+    # external SIEM host the adapter talks to (indexer :9200 + API :55000).
+    # Empty for in-cluster profiles (poc/persistent) — egress stays in-ns.
+    external_siem_hosts = _external_siem_hosts(integration) if is_provided else []
+
     values: dict[str, Any] = {
         "tenant": {
             "id": str(tenant.id),
@@ -154,14 +212,25 @@ def render_tenant_values(
             },
         },
         "components": {
-            "wazuh": {"enabled": integration.wazuh_enabled},
-            "thehive": {"enabled": integration.thehive_enabled},
-            "cortex": {"enabled": integration.cortex_enabled},
+            # 'provided' tenants run no in-namespace SOC stack — the adapter
+            # talks to the tenant's external Wazuh. Force these OFF regardless
+            # of the integration flags so a stale ``wazuh_enabled=true`` row
+            # can't accidentally re-deploy the in-cluster bundle.
+            "wazuh": {"enabled": False if is_provided else integration.wazuh_enabled},
+            "thehive": {
+                "enabled": False if is_provided else integration.thehive_enabled
+            },
+            "cortex": {
+                "enabled": False if is_provided else integration.cortex_enabled
+            },
             "misp": {"enabled": False},  # V1: MISP deferred regardless of config
         },
         "networkPolicies": {
             "enabled": network_policies_enabled,
             "allowedLlmHosts": allowed_llm_hosts,
+            # Cilium FQDN egress allow-list for the external SIEM. Empty list
+            # for in-cluster profiles; populated for 'provided'.
+            "externalSiemHosts": external_siem_hosts,
         },
         "resourceQuota": {
             "enabled": True,
@@ -205,10 +274,18 @@ def render_tenant_values(
                 "key": "token",
             },
             "wazuhIndexer": {
-                "url": f"https://wazuh-{tenant.slug}-wazuh-indexer:9200",
-                "credsSecret": f"wazuh-{tenant.slug}-wazuh-creds",
+                # In-cluster indexer Service + chart Secret for poc/persistent;
+                # external indexer URL + ``tenant-external-siem-creds`` for
+                # 'provided'. The credential KEY names are identical either way
+                # (the external Secret mirrors the in-cluster 4-key layout).
+                "url": indexer_url,
+                "credsSecret": indexer_creds_secret,
                 "usernameKey": "INDEXER_USERNAME",
                 "passwordKey": "INDEXER_PASSWORD",
+                # Rendered for ALL profiles so the adapter honours the tenant's
+                # TLS-verification preference whether the indexer is in-cluster
+                # (self-signed chart cert) or external.
+                "verifySsl": integration.wazuh_verify_ssl,
                 "minSeverity": int(
                     os.getenv("SOCTALK_ADAPTER_MIN_SEVERITY", "10")
                 ),
@@ -247,6 +324,14 @@ def render_tenant_values(
             "managed-by": "soctalk",
         },
     }
+
+    if is_provided:
+        # No Wazuh agents enroll against this namespace — the tenant's own
+        # Wazuh fronts its agents — so there is no agent ingress to publish.
+        values.pop("agentIngress", None)
+        # Emit the CiliumNetworkPolicy that permits adapter egress to the
+        # external SIEM FQDNs listed in networkPolicies.externalSiemHosts.
+        values["networkPolicies"]["fqdnEgress"] = {"enabled": True}
 
     # Layer profile overrides on top. Shallow-merge at the top level.
     # (No top-level "profile" key: the chart's values.schema.json rejects

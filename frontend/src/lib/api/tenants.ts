@@ -64,6 +64,17 @@ export interface TenantOnboard {
 	contact_email?: string | null;
 	llm_base_url?: string;
 	llm_model?: string;
+	// External Wazuh connection — only meaningful for the ``provided`` profile,
+	// where the tenant brings their own Wazuh deployment instead of having
+	// SocTalk provision one. The Wazuh API (manager) and the Indexer
+	// (OpenSearch) authenticate with separate credentials.
+	wazuh_api_url?: string | null;
+	wazuh_api_username?: string | null;
+	wazuh_api_password?: string | null;
+	wazuh_api_token?: string | null;
+	wazuh_indexer_url?: string | null;
+	wazuh_indexer_username?: string | null;
+	wazuh_indexer_password?: string | null;
 }
 
 export interface LifecycleEvent {

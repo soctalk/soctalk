@@ -29,11 +29,31 @@
 		branding_secondary_color: '#fbbc04',
 		contact_email: '',
 		llm_base_url: 'https://api.openai.com/v1',
-		llm_model: 'gpt-4o'
+		llm_model: 'gpt-4o',
+		// External Wazuh — only sent when profile === 'provided'. The API
+		// (manager) and Indexer (OpenSearch) take separate credentials.
+		wazuh_api_url: '',
+		wazuh_api_username: '',
+		wazuh_api_password: '',
+		wazuh_api_token: '',
+		wazuh_indexer_url: '',
+		wazuh_indexer_username: '',
+		wazuh_indexer_password: ''
 	};
 
 	$: slugValid = /^[a-z0-9-]{3,32}$/.test(form.slug);
 	$: step1Valid = !!form.display_name.trim() && slugValid;
+	// The 'provided' profile needs at least the external endpoints + an
+	// auth method (password or pre-minted token) before we let the wizard
+	// advance past the profile step.
+	$: providedValid =
+		form.profile !== 'provided' ||
+		(!!form.wazuh_api_url?.trim() &&
+			(!!form.wazuh_api_token?.trim() ||
+				(!!form.wazuh_api_username?.trim() && !!form.wazuh_api_password?.trim())) &&
+			!!form.wazuh_indexer_url?.trim() &&
+			!!form.wazuh_indexer_username?.trim() &&
+			!!form.wazuh_indexer_password?.trim());
 
 	function next() {
 		if (step < 4) step += 1;
@@ -46,7 +66,22 @@
 	async function submit() {
 		submitting = true;
 		try {
-			const tenant = await tenantsApi.onboard(form);
+			// Only carry the external-Wazuh fields for the 'provided' profile;
+			// strip them otherwise so we don't persist empty strings.
+			const payload: TenantOnboard =
+				form.profile === 'provided'
+					? form
+					: {
+						...form,
+						wazuh_api_url: null,
+						wazuh_api_username: null,
+						wazuh_api_password: null,
+						wazuh_api_token: null,
+						wazuh_indexer_url: null,
+						wazuh_indexer_username: null,
+						wazuh_indexer_password: null
+					};
+			const tenant = await tenantsApi.onboard(payload);
 			addToast({
 				type: 'success',
 				title: 'Tenant created',
@@ -124,6 +159,69 @@
 					</div>
 				</div>
 			</label>
+			<label class="flex items-start gap-3 p-3 rounded border border-surface-500/30 hover:border-primary-500 cursor-pointer">
+				<input type="radio" class="radio" bind:group={form.profile} value="provided" />
+				<div>
+					<div class="font-medium">Provided (bring your own Wazuh)</div>
+					<div class="text-sm opacity-70">
+						The tenant already runs Wazuh. SocTalk deploys only the adapter + runs-worker
+						and points them at your external indexer + API with the credentials below.
+					</div>
+				</div>
+			</label>
+
+			{#if form.profile === 'provided'}
+				<div class="card p-4 space-y-4 bg-surface-500/10">
+					<div>
+						<div class="text-sm font-medium">Wazuh API (manager)</div>
+						<label class="label">
+							<span class="text-sm">API URL</span>
+							<input
+								class="input"
+								bind:value={form.wazuh_api_url}
+								placeholder="https://wazuh.example.com:55000"
+							/>
+						</label>
+						<label class="label">
+							<span class="text-sm">API username</span>
+							<input class="input" bind:value={form.wazuh_api_username} placeholder="wazuh-wui" />
+						</label>
+						<div class="grid grid-cols-2 gap-3">
+							<label class="label">
+								<span class="text-sm">API password</span>
+								<input type="password" class="input" bind:value={form.wazuh_api_password} />
+							</label>
+							<label class="label">
+								<span class="text-sm">API token (optional)</span>
+								<input type="password" class="input" bind:value={form.wazuh_api_token} />
+							</label>
+						</div>
+						<small class="opacity-60">Provide an API password or a pre-minted API token.</small>
+					</div>
+					<div>
+						<div class="text-sm font-medium">Wazuh Indexer (OpenSearch)</div>
+						<label class="label">
+							<span class="text-sm">Indexer URL</span>
+							<input
+								class="input"
+								bind:value={form.wazuh_indexer_url}
+								placeholder="https://indexer.example.com:9200"
+							/>
+						</label>
+						<div class="grid grid-cols-2 gap-3">
+							<label class="label">
+								<span class="text-sm">Indexer username</span>
+								<input class="input" bind:value={form.wazuh_indexer_username} placeholder="admin" />
+							</label>
+							<label class="label">
+								<span class="text-sm">Indexer password</span>
+								<input type="password" class="input" bind:value={form.wazuh_indexer_password} />
+							</label>
+						</div>
+						<small class="opacity-60">The indexer uses its own credentials, separate from the API.</small>
+					</div>
+				</div>
+			{/if}
 			<details class="card p-3 bg-surface-500/10">
 				<summary class="cursor-pointer text-sm opacity-80">LLM (advanced)</summary>
 				<div class="mt-3 space-y-2">
@@ -167,6 +265,12 @@
 				<div class="flex justify-between"><dt class="opacity-60">Display name</dt><dd>{form.display_name}</dd></div>
 				<div class="flex justify-between"><dt class="opacity-60">Slug</dt><dd><code class="text-xs">{form.slug}</code></dd></div>
 				<div class="flex justify-between"><dt class="opacity-60">Profile</dt><dd>{form.profile}</dd></div>
+				{#if form.profile === 'provided'}
+					<div class="flex justify-between"><dt class="opacity-60">Wazuh API</dt><dd><code class="text-xs">{form.wazuh_api_url || '—'}</code></dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">API user</dt><dd>{form.wazuh_api_username || '—'}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">Wazuh indexer</dt><dd><code class="text-xs">{form.wazuh_indexer_url || '—'}</code></dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">Indexer user</dt><dd>{form.wazuh_indexer_username || '—'}</dd></div>
+				{/if}
 				<div class="flex justify-between"><dt class="opacity-60">Contact</dt><dd>{form.contact_email || '—'}</dd></div>
 				<div class="flex justify-between"><dt class="opacity-60">App name</dt><dd>{form.branding_app_name || form.display_name}</dd></div>
 				<div class="flex justify-between"><dt class="opacity-60">Primary</dt><dd>
@@ -189,7 +293,7 @@
 			<button
 				class="btn variant-filled-primary"
 				on:click={next}
-				disabled={(step === 1 && !step1Valid) || submitting}
+				disabled={(step === 1 && !step1Valid) || (step === 2 && !providedValid) || submitting}
 			>
 				Next
 			</button>

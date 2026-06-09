@@ -114,6 +114,10 @@ def test_v1_0012_external_wazuh_is_reversible():
         # Make sure we're at head before the test (some other test may
         # have left us mid-stream).
         command.upgrade(cfg, "head")
+        # v1_0012 is no longer the migration head (v1_0015 stacks on top of
+        # it), so step back down to v1_0012 explicitly before exercising its
+        # own up/down. Keeps this test independent of what's layered above.
+        command.downgrade(cfg, "v1_0012_integration_external_wazuh")
 
         # Other tests in this session may have inserted tenant rows whose
         # ``profile`` value would violate the *narrower* pre-v1_0012
