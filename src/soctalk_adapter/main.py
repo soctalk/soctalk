@@ -104,6 +104,32 @@ def _wazuh_indexer_creds() -> tuple[str, str]:
     )
 
 
+def _wazuh_indexer_verify_ssl() -> bool:
+    """Resolve TLS verification for the Wazuh indexer httpx client.
+
+    Reads ``WAZUH_INDEXER_VERIFY_SSL`` (default ``"true"``). Recognises the
+    canonical spellings ``true``/``1`` (verify ON) and ``false``/``0`` (verify
+    OFF), case-insensitive and whitespace-trimmed. Any other value is
+    malformed: log a warning and fail safe to verification ON — a typo must
+    never silently disable TLS verification against the indexer. The chart
+    feeds this from ``IntegrationConfig.wazuh_verify_ssl`` so a tenant whose
+    external (or in-cluster self-signed) indexer needs ``verify=False`` can
+    opt out explicitly.
+    """
+    raw = os.environ.get("WAZUH_INDEXER_VERIFY_SSL", "true")
+    normalized = raw.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    logger.warning(
+        "WAZUH_INDEXER_VERIFY_SSL=%r is not a recognised boolean; "
+        "defaulting to verify=True",
+        raw,
+    )
+    return True
+
+
 def _severity_from_rule_level(level: int | None) -> int:
     if level is None:
         return 0
@@ -334,9 +360,14 @@ async def _ingest_loop() -> None:
     tenant_id = os.environ["SOCTALK_TENANT_ID"]
     token = _read_token()
 
+    # TLS verification against the indexer is tenant-controlled via
+    # WAZUH_INDEXER_VERIFY_SSL (default on); resolved once here instead of the
+    # former hard-coded verify=False so externally-provided CA-signed indexers
+    # are verified while self-signed in-cluster ones can opt out.
+    verify_indexer_tls = _wazuh_indexer_verify_ssl()
     async with (
         httpx.AsyncClient() as api_client,
-        httpx.AsyncClient(verify=False) as wazuh_client,
+        httpx.AsyncClient(verify=verify_indexer_tls) as wazuh_client,
     ):
         while True:
             try:

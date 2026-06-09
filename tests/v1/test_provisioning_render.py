@@ -216,6 +216,34 @@ def test_render_provided_profile():
     _assert_validates_against_tenant_schema(v_poc)
 
 
+@pytest.mark.parametrize("profile", ["poc", "persistent", "provided"])
+@pytest.mark.parametrize("verify", [True, False])
+def test_verify_ssl_flows_from_integration_for_all_profiles(profile, verify):
+    """``adapter.wazuhIndexer.verifySsl`` mirrors ``integration.wazuh_verify_ssl``
+    for EVERY profile (not just 'provided') and for both boolean inputs.
+
+    This is the value the adapter image consumes via ``WAZUH_INDEXER_VERIFY_SSL``
+    (feature tenant.profile.provided.adapter-tls); it must be wired for in-cluster
+    profiles too so a tenant's self-signed-vs-CA TLS preference is honoured
+    regardless of where the indexer lives.
+    """
+    t = _make_tenant(profile)
+    integration = _make_integration(t.id)
+    integration.wazuh_verify_ssl = verify
+    # 'provided' derives its external-SIEM shape from the indexer URL.
+    integration.wazuh_indexer_url = "https://indexer.siem.example:9200"
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile=profile,
+    )
+    assert v["adapter"]["wazuhIndexer"]["verifySsl"] is verify
+
+
 def test_tenant_identity_always_rendered():
     """Regardless of profile, tenant / branding / llm blocks are filled."""
     t = _make_tenant("poc")

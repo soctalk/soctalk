@@ -92,6 +92,15 @@ spec:
                 secretKeyRef:
                   name: {{ .credsSecret | quote }}
                   key: {{ .passwordKey | default "INDEXER_PASSWORD" | quote }}
+            {{/*
+            TLS verification for the indexer client. Emitted as a string the
+            adapter parses (true/1 -> verify, false/0 -> skip). Use hasKey,
+            not `default true`, because sprig's `default` treats boolean
+            false as empty and would clobber an explicit verifySsl: false.
+            Defaults to "true" when the key is absent.
+            */}}
+            - name: WAZUH_INDEXER_VERIFY_SSL
+              value: {{ if hasKey . "verifySsl" }}{{ .verifySsl | quote }}{{ else }}"true"{{ end }}
             {{- if .minSeverity }}
             - name: SOCTALK_ADAPTER_MIN_SEVERITY
               value: {{ .minSeverity | quote }}
