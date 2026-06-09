@@ -86,7 +86,7 @@ jobs:
                  [ -z \"\$container\" ] && { echo \"skipping \$d (not found)\"; continue; }
                  # Image base differs per deployment; preserve it and just swap tag.
                  base=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/:.*//')
-                 echo \"rolling \$d: \$base:\$SHA\"
+                 echo \"rolling \$d: \$base:$SHA\"
                  kubectl -n soctalk-system set image deploy/\$d \$container=\$base:$SHA
                done
                for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
