@@ -97,6 +97,51 @@ export interface LifecycleEvent {
 	details: Record<string, unknown>;
 }
 
+// Masked view of a tenant's external-SIEM connection. Plaintext secrets are
+// NEVER returned — only ``has_*`` booleans signal presence (mirrors the
+// backend ``ExternalSiemRead``).
+export interface ExternalSiemRead {
+	indexer_url: string | null;
+	indexer_username: string | null;
+	api_url: string | null;
+	api_username: string | null;
+	has_indexer_password: boolean;
+	has_api_password: boolean;
+	has_api_token: boolean;
+	verify_ssl: boolean;
+}
+
+// All-optional credential patch — only the fields the operator actually
+// changed are sent. ``null`` / omitted means "leave unchanged"; a blank
+// secret is never sent so the existing value is preserved. Mirrors the
+// backend ``ExternalSiemPatch``.
+export interface ExternalSiemUpdate {
+	indexer_url?: string | null;
+	indexer_username?: string | null;
+	indexer_password?: string | null;
+	api_url?: string | null;
+	api_username?: string | null;
+	api_password?: string | null;
+	api_token?: string | null;
+	verify_ssl?: boolean | null;
+}
+
+// Live adapter ingest status — the control plane server-side proxies the
+// per-tenant adapter's /health/ready (the browser cannot reach it). On a
+// reachable adapter the ingest fields are present; on failure the proxy
+// returns ``{ reachable: false, error }`` with HTTP 200.
+export interface AdapterStatus {
+	reachable?: boolean;
+	ok?: boolean;
+	alerts_forwarded?: number;
+	last_alert_ts?: string | null;
+	last_ingest_error?: string | null;
+	last_heartbeat_ok?: string | null;
+	last_heartbeat_error?: string | null;
+	error?: string;
+	[key: string]: unknown;
+}
+
 export const tenantsApi = {
 	list: () => _request<Tenant[]>('/mssp/tenants'),
 	get: (id: string) => _request<Tenant>(`/mssp/tenants/${id}`),
@@ -114,7 +159,18 @@ export const tenantsApi = {
 	decommission: (id: string) =>
 		_request<Tenant>(`/mssp/tenants/${id}:decommission`, { method: 'POST' }),
 	events: (id: string, limit = 100) =>
-		_request<LifecycleEvent[]>(`/mssp/tenants/${id}/events?limit=${limit}`)
+		_request<LifecycleEvent[]>(`/mssp/tenants/${id}/events?limit=${limit}`),
+	// External SIEM (Wazuh) connection — masked read, credential patch, and a
+	// server-side proxied live adapter status. Available for any profile.
+	getExternalSiem: (id: string) =>
+		_request<ExternalSiemRead>(`/mssp/tenants/${id}/external-siem`),
+	updateExternalSiem: (id: string, payload: ExternalSiemUpdate) =>
+		_request<ExternalSiemRead>(`/mssp/tenants/${id}/external-siem`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload)
+		}),
+	getAdapterStatus: (id: string) =>
+		_request<AdapterStatus>(`/mssp/tenants/${id}/adapter-status`)
 };
 
 export function tenantStateBadge(state: TenantState): string {

@@ -802,3 +802,203 @@ async def test_onboard_provided_profile_partial_creds(
         await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
     ).scalars().all()
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Adapter-status proxy: GET /api/mssp/tenants/{id}/adapter-status
+# ---------------------------------------------------------------------------
+#
+# The detail-page External-SIEM panel polls live adapter ingest status. The
+# browser CANNOT reach the per-tenant adapter Service (cluster-internal DNS,
+# no ingress), so the control plane SERVER-SIDE proxies to the adapter's
+# /health/ready and relays the JSON. A wedged/absent adapter must degrade
+# softly — HTTP 200 with ``{"reachable": false, "error": "<msg>"}`` — so the
+# poller renders a degraded badge instead of surfacing an API error.
+
+
+class _FakeAdapterResponse:
+    """Minimal stand-in for the ``httpx.Response`` the adapter returns."""
+
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self) -> None:
+        # The tests only exercise the 200 success path + a connection error
+        # raised from .get(); a non-2xx here would simply be caught by the
+        # handler's blanket except and folded into the soft-fail body.
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeAdapterHttpClient:
+    """Stand-in for ``httpx.AsyncClient`` used by the adapter-status proxy.
+
+    Records the URL fetched and either returns a canned response or raises a
+    connection error to simulate an unreachable adapter — so the test never
+    opens a real socket to the (non-existent) per-tenant adapter Service.
+    """
+
+    last_url: str | None = None
+
+    def __init__(
+        self, *, payload: dict | None = None, exc: Exception | None = None
+    ) -> None:
+        self._payload = payload
+        self._exc = exc
+
+    async def __aenter__(self) -> "_FakeAdapterHttpClient":
+        return self
+
+    async def __aexit__(self, *_a) -> bool:
+        return False
+
+    async def get(self, url: str) -> _FakeAdapterResponse:
+        type(self).last_url = url
+        if self._exc is not None:
+            raise self._exc
+        assert self._payload is not None
+        return _FakeAdapterResponse(self._payload)
+
+
+async def test_adapter_status_proxies_adapter_health_ready(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """GET /api/mssp/tenants/{id}/adapter-status server-side proxies to the
+    tenant adapter's ``/health/ready`` and relays the JSON verbatim.
+
+    The outbound httpx call is mocked — no real adapter is contacted. The
+    proxied URL must be the in-cluster Service address
+    ``http://soctalk-adapter.tenant-<slug>.svc.cluster.local:8080/health/ready``
+    (NOT a browser-reachable URL), proving this is a server-side proxy rather
+    than browser CORS.
+    """
+    import soctalk.core.api.tenants as tenants_mod
+    from soctalk.core.api.tenants import get_tenant_adapter_status
+
+    slug = f"as{uuid4().hex[:8]}"
+    tenant = Tenant(
+        slug=slug,
+        display_name="Adapter Status",
+        state=TenantState.ACTIVE.value,
+        profile="poc",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.commit()
+    await mssp_session.refresh(tenant)
+
+    payload = {
+        "ok": True,
+        "alerts_forwarded": 7,
+        "last_alert_ts": "2026-06-09T00:00:00+00:00",
+        "last_ingest_error": None,
+    }
+    captured: dict[str, _FakeAdapterHttpClient] = {}
+
+    def _factory() -> _FakeAdapterHttpClient:
+        client = _FakeAdapterHttpClient(payload=payload)
+        captured["client"] = client
+        return client
+
+    monkeypatch.setattr(tenants_mod, "_new_adapter_http_client", _factory)
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await get_tenant_adapter_status(tenant.id, FakeRequest())
+
+    # Adapter JSON is proxied through unchanged.
+    assert result["alerts_forwarded"] == 7
+    assert result["last_alert_ts"] == "2026-06-09T00:00:00+00:00"
+    assert result["last_ingest_error"] is None
+
+    # Server-side proxy → in-cluster Service DNS, NOT a browser CORS request.
+    assert (
+        captured["client"].last_url
+        == f"http://soctalk-adapter.tenant-{slug}"
+        ".svc.cluster.local:8080/health/ready"
+    )
+
+
+async def test_adapter_status_soft_fails_on_unreachable_adapter(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """When the adapter is unreachable (DNS / connection error), the proxy must
+    NOT raise / 5xx. It returns HTTP 200 with
+    ``{"reachable": false, "error": "<msg>"}`` so the detail-page poller renders
+    a degraded state instead of an API error.
+    """
+    import httpx
+
+    import soctalk.core.api.tenants as tenants_mod
+    from soctalk.core.api.tenants import get_tenant_adapter_status
+
+    slug = f"dn{uuid4().hex[:8]}"
+    tenant = Tenant(
+        slug=slug,
+        display_name="Adapter Down",
+        state=TenantState.ACTIVE.value,
+        profile="poc",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.commit()
+    await mssp_session.refresh(tenant)
+
+    boom = httpx.ConnectError("Name or service not known")
+    monkeypatch.setattr(
+        tenants_mod,
+        "_new_adapter_http_client",
+        lambda: _FakeAdapterHttpClient(exc=boom),
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    # Must NOT raise — the soft-fail body is returned as the default HTTP 200.
+    result = await get_tenant_adapter_status(tenant.id, FakeRequest())
+    assert result["reachable"] is False
+    assert "Name or service not known" in result["error"]
+
+
+async def test_adapter_status_unknown_tenant_404(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """An unknown tenant id is a real 404 — distinct from the soft-fail body
+    used for an unreachable (but existing) tenant's adapter.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import get_tenant_adapter_status
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_tenant_adapter_status(uuid4(), FakeRequest())
+    assert exc_info.value.status_code == 404
+
+
+def test_adapter_status_route_declares_no_error_status():
+    """The adapter-status route declares no explicit (error) status_code so the
+    soft-fail body is served as the default HTTP 200, not a 4xx/5xx.
+    """
+    from soctalk.core.api.tenants import router
+
+    for route in router.routes:
+        if getattr(route, "path", "").endswith("/adapter-status"):
+            assert route.status_code in (None, 200)
+            return
+    raise AssertionError("adapter-status route not registered")

@@ -8,6 +8,7 @@
 		type LifecycleEvent
 	} from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
+	import ExternalSiemPanel from '$lib/components/tenants/ExternalSiemPanel.svelte';
 
 	let tenant: Tenant | null = null;
 	let events: LifecycleEvent[] = [];
@@ -15,7 +16,12 @@
 	let error: string | null = null;
 	let loadedFor: string | null = null;
 
-	$: id = $page.params.id;
+	// $page.params.id is typed ``string | undefined``; normalize to a concrete
+	// string so every tenantsApi.*(id) call (load + lifecycle actions) type-checks
+	// and never forwards ``undefined``. The reactive load + the action buttons are
+	// only reachable once a non-empty id has resolved (guarded below / gated on a
+	// loaded ``tenant``), so the '' fallback is an inert placeholder.
+	$: id = $page.params.id ?? '';
 
 	$: if ($authSession.user && id) {
 		if (!$isMsspScope) {
@@ -144,6 +150,12 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- External SIEM connection + live adapter status. Shown for ANY profile;
+		     keyed by id so switching tenant remounts (fresh fetch + poll cycle). -->
+		{#key id}
+			<ExternalSiemPanel tenantId={id} />
+		{/key}
 
 		<div class="card p-4">
 			<h3 class="h4 mb-4">Lifecycle Events</h3>

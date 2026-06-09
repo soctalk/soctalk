@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -911,6 +912,83 @@ async def _apply_external_siem_k8s(
             tenant_id=str(tenant_id),
             error=str(exc),
         )
+
+
+# ---------------------------------------------------------------------------
+# Adapter ingest status — server-side proxy to the tenant adapter.
+# ---------------------------------------------------------------------------
+#
+# The detail-page External-SIEM panel polls live ingest status. The BROWSER
+# cannot reach the per-tenant adapter Service (cluster-internal DNS, no
+# ingress, no CORS), so the MSSP control plane — which IS on the cluster
+# network — proxies to the adapter's ``/health/ready`` and relays the JSON.
+# A wedged / absent adapter degrades SOFTLY (HTTP 200 + ``reachable: false``)
+# so a 10s poll never surfaces a red API error on a healthy detail page.
+
+# Cluster-internal readiness endpoint of a tenant's adapter Deployment. The
+# Service is ``soctalk-adapter`` in namespace ``tenant-<slug>`` on port 8080
+# (matching the chart's adapter Service). Reachable only from inside the
+# cluster — hence the server-side proxy rather than a browser fetch.
+_ADAPTER_STATUS_PORT = 8080
+_ADAPTER_STATUS_PATH = "/health/ready"
+
+
+def _adapter_status_url(tenant_slug: str) -> str:
+    return (
+        f"http://soctalk-adapter.tenant-{tenant_slug}"
+        f".svc.cluster.local:{_ADAPTER_STATUS_PORT}{_ADAPTER_STATUS_PATH}"
+    )
+
+
+def _new_adapter_http_client() -> httpx.AsyncClient:
+    """Build the httpx client used to reach a tenant adapter.
+
+    Short timeouts so an unreachable / wedged adapter can't stall the detail
+    page poll. Factored out as a seam the tests monkeypatch to mock the
+    outbound call (no real adapter required).
+    """
+    return httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
+
+
+@router.get(
+    "/{tenant_id}/adapter-status",
+    dependencies=[
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
+    ],
+)
+async def get_tenant_adapter_status(tenant_id: UUID, request: Request) -> dict:
+    """Server-side proxy to the tenant adapter's ``/health/ready``.
+
+    Relays the adapter JSON verbatim on success (``ok``, ``alerts_forwarded``,
+    ``last_alert_ts``, ``last_ingest_error`` …), defaulting ``reachable`` to
+    ``True`` so the poller has one uniform field to branch on. On ANY failure
+    (DNS, connect timeout, non-2xx, malformed body) returns HTTP 200 with a
+    soft-failure body ``{"reachable": false, "error": "<msg>"}`` — never a
+    5xx — so the detail page renders a degraded badge instead of an error.
+
+    NOT a browser CORS call: the per-tenant adapter Service has no ingress and
+    is only reachable from the control plane's cluster network.
+    """
+    session = _db(request)
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(404, "tenant not found")
+
+    try:
+        async with _new_adapter_http_client() as client:
+            response = await client.get(_adapter_status_url(tenant.slug))
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:  # noqa: BLE001 — any failure → soft HTTP 200
+        return {"reachable": False, "error": str(exc)}
+
+    if isinstance(data, dict):
+        data.setdefault("reachable", True)
+        return data
+    # Adapter returned a non-object body — still reachable, surface it raw.
+    return {"reachable": True, "data": data}
 
 
 # ---------------------------------------------------------------------------
