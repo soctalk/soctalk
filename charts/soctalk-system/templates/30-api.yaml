@@ -334,6 +334,15 @@ spec:
             - name: SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG
               value: {{ .Values.tenantProvisioning.runsWorkerImageTag | quote }}
             {{- end }}
+            {{- /*
+                Master switch for tenant-chart NetworkPolicies. "0" lets
+                clusters without Cilium CRDs (or with broken NP
+                enforcement) provision tenants — the 'provided' profile
+                otherwise renders a CiliumNetworkPolicy that fails the
+                whole helm install on such clusters.
+            */}}
+            - name: SOCTALK_TENANT_NETWORK_POLICIES_ENABLED
+              value: {{ ternary "1" "0" .Values.tenantProvisioning.tenantNetworkPoliciesEnabled | quote }}
             - name: SOCTALK_TENANT_CHART_REF
               value: {{ .Values.tenantProvisioning.tenantChartRef | quote }}
             - name: SOCTALK_TENANT_CHART_VERSION

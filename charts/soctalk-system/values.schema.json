@@ -250,7 +250,7 @@
         },
         "orchestrator": {
           "$ref": "#/$defs/componentResources",
-          "description": "Deprecated — the legacy SecOpsOrchestrator pod was retired (per-tenant runs-worker replaces it). Accepted in the schema so existing values files / --reuse-values upgrades from the prior chart still validate; chart templates ignore the value."
+          "description": "Deprecated \u2014 the legacy SecOpsOrchestrator pod was retired (per-tenant runs-worker replaces it). Accepted in the schema so existing values files / --reuse-values upgrades from the prior chart still validate; chart templates ignore the value."
         }
       }
     },
@@ -365,6 +365,9 @@
         },
         "runsWorkerImageTag": {
           "type": "string"
+        },
+        "tenantNetworkPoliciesEnabled": {
+          "type": "boolean"
         }
       }
     },

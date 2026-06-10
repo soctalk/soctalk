@@ -97,6 +97,14 @@ tenantProvisioning:
   # ``python -m soctalk.runs_worker.main``.
   runsWorkerImageRepo: ''
   runsWorkerImageTag: ''
+  # Master switch for the tenant chart's networkPolicies (rendered as
+  # SOCTALK_TENANT_NETWORK_POLICIES_ENABLED on the api pod). Set false on
+  # clusters whose CNI cannot serve them — e.g. no Cilium CRDs (the
+  # 'provided' profile's adapter-fqdn-egress is a CiliumNetworkPolicy and
+  # fails the whole helm install with "no matches for kind
+  # CiliumNetworkPolicy" otherwise), or CNIs whose NP enforcement breaks
+  # soctalk-system <-> tenant-* traffic. Default true (safe).
+  tenantNetworkPoliciesEnabled: true
 auth:
   # Secure flag on the session cookie. Production with TLS leaves this
   # true; HTTP-only dev installs flip to false so browsers actually

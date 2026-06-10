@@ -50,6 +50,12 @@ tenantProvisioning:
   adapterImageTag: latest
   runsWorkerImageRepo: cr.lab.atricore.io/soctalk-orchestrator
   runsWorkerImageTag: latest
+  # local-up.sh's cluster has no Cilium CRDs. The 'provided' profile
+  # renders a CiliumNetworkPolicy (adapter-fqdn-egress) into the tenant
+  # chart, which fails the WHOLE tenant helm install with "no matches
+  # for kind CiliumNetworkPolicy" unless tenant NetworkPolicies are off.
+  # Rendered as SOCTALK_TENANT_NETWORK_POLICIES_ENABLED=0 on the api pod.
+  tenantNetworkPoliciesEnabled: false
 
 ingress:
   # local-up.sh installs nginx-ingress in the ``ingress-system``
