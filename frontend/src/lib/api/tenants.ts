@@ -126,6 +126,31 @@ export interface ExternalSiemUpdate {
 	verify_ssl?: boolean | null;
 }
 
+// Masked view of a tenant's LLM configuration. The plaintext API key is
+// NEVER returned — only ``has_api_key`` signals presence and
+// ``api_key_preview`` shows a ``sk-…ABCD`` style tail (empty string when
+// no key is set) so the operator can sanity-check WHICH key is in use.
+// ``provider`` echoes the stored canonical value. Mirrors the backend
+// ``LlmConfigRead`` 1:1.
+export interface TenantLlmRead {
+	provider: string;
+	base_url: string;
+	model: string;
+	has_api_key: boolean;
+	api_key_preview: string;
+}
+
+// All-optional config patch — only the fields the operator actually
+// changed are sent. Omitted means "leave unchanged"; a blank ``api_key``
+// is never sent so the existing secret is preserved. Mirrors the
+// backend ``LlmConfigUpdate``.
+export interface TenantLlmUpdate {
+	provider?: 'openai' | 'anthropic' | 'openai-compatible';
+	base_url?: string;
+	model?: string;
+	api_key?: string;
+}
+
 // Live adapter ingest status — the control plane server-side proxies the
 // per-tenant adapter's /health/ready (the browser cannot reach it). On a
 // reachable adapter the ingest fields are present; on failure the proxy
@@ -170,7 +195,17 @@ export const tenantsApi = {
 			body: JSON.stringify(payload)
 		}),
 	getAdapterStatus: (id: string) =>
-		_request<AdapterStatus>(`/mssp/tenants/${id}/adapter-status`)
+		_request<AdapterStatus>(`/mssp/tenants/${id}/adapter-status`),
+	// Per-tenant LLM configuration — masked read, changed-fields-only
+	// patch, and an explicit key clear (204, no body).
+	getLlm: (id: string) => _request<TenantLlmRead>(`/mssp/tenants/${id}/llm`),
+	updateLlm: (id: string, payload: TenantLlmUpdate) =>
+		_request<TenantLlmRead>(`/mssp/tenants/${id}/llm`, {
+			method: 'PATCH',
+			body: JSON.stringify(payload)
+		}),
+	clearLlmKey: (id: string) =>
+		_request<void>(`/mssp/tenants/${id}/llm/api-key`, { method: 'DELETE' })
 };
 
 export function tenantStateBadge(state: TenantState): string {
