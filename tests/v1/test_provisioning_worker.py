@@ -40,6 +40,25 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _stub_k8s_client(monkeypatch):
+    """Keep worker tests cluster-free.
+
+    ``TenantController.__init__`` eagerly builds a Kubernetes client via
+    ``new_k8s_client()`` (in-cluster config, falling back to kubeconfig).
+    Worker tests exercise queue claim/dispatch mechanics only and never
+    talk to a real cluster; CI runs the integration suite against Postgres
+    with no Kubernetes. Stub the factory so constructing a controller in
+    ``_dispatch`` never depends on a loadable kubeconfig.
+    """
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(
+        "soctalk.core.provisioning.controller.new_k8s_client",
+        lambda: MagicMock(name="StubK8sClient"),
+    )
+
+
 def _mssp_url() -> str:
     return os.getenv(
         "DATABASE_URL_MSSP",
@@ -352,3 +371,108 @@ async def test_run_forever_survives_iteration_error(
     await asyncio.wait_for(worker.run_forever(), timeout=5)
     # Proves it kept looping past the error (>=3 iterations, not 1).
     assert calls["n"] >= 3
+
+
+# ---------------------------------------------------------------------------
+# tenant.reconcile dispatch (tenant.llm.reconcile-active)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_job_dispatches_tenant_reconcile_to_controller(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    """A claimed job with kind='tenant.reconcile' must reach
+    ``TenantController.reconcile`` (not provision/decommission), and the
+    job lands in 'succeeded' on a clean run.
+    """
+    from soctalk.core.provisioning.controller import TenantController
+
+    called: dict = {}
+
+    async def fake_reconcile(self, tenant_id, *, actor_id=None):
+        called["tenant_id"] = tenant_id
+        called["actor_id"] = actor_id
+
+    monkeypatch.setattr(TenantController, "reconcile", fake_reconcile)
+
+    async with mssp_sessionmaker() as s:
+        job = ProvisioningJob(
+            tenant_id=seeded_tenant.id,
+            kind="tenant.reconcile",
+            status="pending",
+        )
+        s.add(job)
+        await s.commit()
+        job_id = job.id
+
+    worker = ProvisioningWorker(mssp_sessionmaker, worker_id="test-worker")
+    async with mssp_sessionmaker() as s:
+        claimed = await worker._claim(s)
+    assert claimed is not None and claimed.id == job_id
+
+    await worker._run_job(claimed)
+
+    assert called["tenant_id"] == seeded_tenant.id
+    assert called["actor_id"] == "worker:test-worker"
+
+    async with mssp_sessionmaker() as s:
+        row = (
+            await s.execute(
+                select(ProvisioningJob).where(ProvisioningJob.id == job_id)
+            )
+        ).scalar_one()
+    assert row.status == "succeeded"
+    assert row.last_error is None
+
+
+async def test_run_job_reconcile_failure_records_backoff(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    """A reconcile failure goes through the same _record_failure path as
+    every other kind: status back to 'pending', last_error captured,
+    next_attempt_at pushed into the future (capped exponential backoff),
+    claim released.
+    """
+    from soctalk.core.provisioning.controller import (
+        ProvisionError,
+        TenantController,
+    )
+
+    async def failing_reconcile(self, tenant_id, *, actor_id=None):
+        raise ProvisionError("helm upgrade failed: boom", step="helm_apply_tenant")
+
+    monkeypatch.setattr(TenantController, "reconcile", failing_reconcile)
+
+    async with mssp_sessionmaker() as s:
+        job = ProvisioningJob(
+            tenant_id=seeded_tenant.id,
+            kind="tenant.reconcile",
+            status="pending",
+        )
+        s.add(job)
+        await s.commit()
+        job_id = job.id
+
+    worker = ProvisioningWorker(
+        mssp_sessionmaker, worker_id="test-worker", backoff_base=30.0
+    )
+    async with mssp_sessionmaker() as s:
+        claimed = await worker._claim(s)
+    assert claimed is not None
+
+    before = datetime.utcnow()
+    await worker._run_job(claimed)
+
+    async with mssp_sessionmaker() as s:
+        row = (
+            await s.execute(
+                select(ProvisioningJob).where(ProvisioningJob.id == job_id)
+            )
+        ).scalar_one()
+    # attempts=1 < max_attempts → retriable: back to pending with backoff.
+    assert row.status == "pending"
+    assert row.attempts == 1
+    assert "boom" in row.last_error
+    assert row.claimed_at is None
+    assert row.claimed_by is None
+    assert row.next_attempt_at.replace(tzinfo=None) > before

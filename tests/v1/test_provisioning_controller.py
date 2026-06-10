@@ -24,6 +24,7 @@ from soctalk.core.provisioning.controller import (
     ControllerSettings,
     ProvisionError,
     TenantController,
+    TenantLifecycleError,
 )
 from soctalk.core.tenancy.models import (
     BrandingConfig,
@@ -773,3 +774,211 @@ async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
     assert not any(
         "soctalk-system-llm-api-key" in c for c in fake_k8s.calls
     ), f"install-wide LLM Secret must not be read: {fake_k8s.calls}"
+
+
+# ---------------------------------------------------------------------------
+# reconcile: re-render + helm upgrade for ACTIVE tenants (tenant.llm.reconcile-active)
+# ---------------------------------------------------------------------------
+#
+# ``TenantController.reconcile`` re-runs the value-affecting idempotent steps
+# (render_tenant_values + helm upgrade of tenant-<slug>, plus the
+# external-SIEM Secret rewrite for 'provided', plus wait_workloads) WITHOUT
+# any lifecycle transition. Success leaves the tenant 'active'; failure
+# degrades it with a 'reconcile_failed' event naming the step + error.
+
+
+def _quick_settings() -> ControllerSettings:
+    return ControllerSettings(
+        wazuh_chart_path="charts/wazuh",
+        readiness_poll_interval_seconds=0.01,
+        readiness_timeout_seconds=5.0,
+    )
+
+
+async def _events_for(session: AsyncSession, tenant_id) -> list[TenantLifecycleEvent]:
+    return (
+        await session.execute(
+            select(TenantLifecycleEvent)
+            .where(TenantLifecycleEvent.tenant_id == tenant_id)
+            .order_by(TenantLifecycleEvent.timestamp)
+        )
+    ).scalars().all()
+
+
+async def test_reconcile_active_rerenders_values_and_helm_upgrades(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Happy path: an ACTIVE tenant's base_url change propagates into the
+    values handed to helm during reconcile — new host present in BOTH
+    values.llm.baseUrl and networkPolicies.allowedLlmHosts — the tenant
+    stays 'active', and the only reconcile-emitted events are step markers
+    (from_state == to_state) plus reconcile_started / reconcile_succeeded.
+    """
+    fake_k8s = FakeK8s()
+    controller = TenantController(session, k8s=fake_k8s, settings=_quick_settings())
+
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # Chart-affecting LLM edit: new base_url host.
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.llm_base_url = "https://llm.newhost.example/v1"
+    await session.commit()
+
+    # Recording helm shim for the reconcile pass.
+    upgrade_calls: list[dict] = []
+
+    async def rec_upgrade(*_a, **kw):
+        upgrade_calls.append(kw)
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_upgrade)
+
+    n_events_before = len(await _events_for(session, seeded_tenant.id))
+
+    result = await controller.reconcile(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # helm upgrade of release tenant-<slug> with re-rendered values.
+    assert len(upgrade_calls) == 1
+    call = upgrade_calls[0]
+    assert call["release_name"] == f"tenant-{seeded_tenant.slug}"
+    assert call["namespace"] == f"tenant-{seeded_tenant.slug}"
+    values = call["values"]
+    assert values["llm"]["baseUrl"] == "https://llm.newhost.example/v1"
+    assert "llm.newhost.example" in values["networkPolicies"]["allowedLlmHosts"]
+
+    # Lifecycle events: reconcile_started + reconcile_succeeded, and NO
+    # state-change events (every reconcile event keeps from_state == to_state).
+    evs = (await _events_for(session, seeded_tenant.id))[n_events_before:]
+    kinds = [e.event_type for e in evs]
+    assert kinds[0] == "reconcile_started"
+    assert kinds[-1] == "reconcile_succeeded"
+    for e in evs:
+        assert e.from_state == e.to_state == TenantState.ACTIVE.value, (
+            f"reconcile must not transition state: {e.event_type} "
+            f"{e.from_state} -> {e.to_state}"
+        )
+
+
+async def test_reconcile_failure_degrades_with_reconcile_failed_event(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Failure path: helm upgrade blows up → tenant transitions
+    active → degraded with event_type='reconcile_failed' carrying the
+    failing step and error message in details.
+    """
+    fake_k8s = FakeK8s()
+    controller = TenantController(session, k8s=fake_k8s, settings=_quick_settings())
+    await controller.provision(seeded_tenant.id, actor_id="test")
+
+    async def boom(*_a, **_kw):
+        raise controller_mod.HelmError("simulated upgrade failure")
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", boom)
+
+    with pytest.raises(ProvisionError) as exc_info:
+        await controller.reconcile(seeded_tenant.id, actor_id="test")
+    assert exc_info.value.step == "helm_apply_tenant"
+
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == seeded_tenant.id))
+    ).scalar_one()
+    assert tenant.state == TenantState.DEGRADED.value
+
+    evs = await _events_for(session, seeded_tenant.id)
+    failed = [e for e in evs if e.event_type == "reconcile_failed"]
+    assert len(failed) == 1
+    assert failed[0].from_state == TenantState.ACTIVE.value
+    assert failed[0].to_state == TenantState.DEGRADED.value
+    assert failed[0].details["step"] == "helm_apply_tenant"
+    assert "simulated upgrade failure" in failed[0].details["error"]
+
+
+async def test_reconcile_non_active_raises_lifecycle_error(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm
+):
+    """reconcile() only applies to 'active' tenants; callers route every
+    other state to provision(). The seeded tenant is still 'pending'.
+    """
+    fake_k8s = FakeK8s()
+    controller = TenantController(session, k8s=fake_k8s, settings=_quick_settings())
+
+    with pytest.raises(TenantLifecycleError):
+        await controller.reconcile(seeded_tenant.id, actor_id="test")
+
+    # No reconcile events, no state mutation.
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == seeded_tenant.id))
+    ).scalar_one()
+    assert tenant.state == TenantState.PENDING.value
+    kinds = [e.event_type for e in await _events_for(session, seeded_tenant.id)]
+    assert "reconcile_started" not in kinds
+
+
+async def test_reconcile_provided_rewrites_siem_secret_never_touches_wazuh(
+    session: AsyncSession, provided_tenant: Tenant, monkeypatch
+):
+    """'provided' reconcile rewrites Secret/tenant-external-siem-creds from
+    the current IntegrationConfig row and never installs/upgrades a
+    wazuh-<slug> release.
+    """
+    fake_k8s = FakeK8s()
+
+    tenant_calls: list[dict] = []
+    wazuh_calls: list[dict] = []
+
+    def _ok():
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    async def rec_install_tenant(*_a, **kw):
+        tenant_calls.append(kw)
+        return _ok()
+
+    async def rec_install_wazuh(*_a, **kw):
+        wazuh_calls.append(kw)
+        return _ok()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+    monkeypatch.setattr(controller_mod, "helm_install_wazuh", rec_install_wazuh)
+    from soctalk.core.provisioning import helm as helm_mod
+    monkeypatch.setattr(helm_mod, "helm_version", _fake_helm_version)
+
+    controller = TenantController(session, k8s=fake_k8s, settings=_quick_settings())
+    result = await controller.provision(provided_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+    assert len(tenant_calls) == 1
+    assert wazuh_calls == []
+
+    # Rotate the external indexer password, then reconcile.
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == provided_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.wazuh_indexer_password_plain = "rotated-idx-pass"
+    await session.commit()
+
+    result = await controller.reconcile(provided_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # Secret rewritten with the rotated credential.
+    ns = f"tenant-{provided_tenant.slug}"
+    secret = fake_k8s.secrets[(ns, "tenant-external-siem-creds")]
+    assert secret["INDEXER_PASSWORD"] == "rotated-idx-pass"
+
+    # Exactly one more tenant-chart upgrade; STILL zero wazuh installs.
+    assert len(tenant_calls) == 2
+    assert wazuh_calls == [], "reconcile must never touch a wazuh-<slug> release"

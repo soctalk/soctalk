@@ -1,10 +1,12 @@
 """Reversibility test for v1_0015_wazuh_indexer_credentials.
 
 Boots a synchronous SQLAlchemy engine against the test Postgres
-(``DATABASE_URL_ADMIN``), upgrades to head, downgrades exactly the new
-revision, then upgrades again. The two new indexer-credential columns on
-``integration_configs`` must toggle present/absent accordingly, while the
-v1_0012-owned API-credential columns survive the downgrade untouched.
+(``DATABASE_URL_ADMIN``), upgrades to head, downgrades to v1_0015's
+parent revision (pinned explicitly — a head-relative ``-1`` would break
+every time a newer migration lands on top, as v1_0016 did), then upgrades
+again. The two new indexer-credential columns on ``integration_configs``
+must toggle present/absent accordingly, while the v1_0012-owned
+API-credential columns survive the downgrade untouched.
 
 Marked ``@pytest.mark.integration`` since it needs Postgres.
 """
@@ -32,6 +34,10 @@ _NEW_COLUMNS = {
     "wazuh_indexer_username",
     "wazuh_indexer_password_plain",
 }
+
+# v1_0015's parent in the migration chain — the downgrade target that
+# unwinds v1_0015 itself regardless of how many revisions sit above it.
+_PARENT_REVISION = "v1_0012_integration_external_wazuh"
 
 # v1_0012-owned API columns that must survive this revision's downgrade.
 _SURVIVES = {
@@ -68,8 +74,9 @@ def _column_names(engine, table: str) -> set[str]:
 
 
 def test_v1_0015_wazuh_indexer_creds_is_reversible():
-    """upgrade -> downgrade -1 -> upgrade round-trips, toggling exactly the
-    two indexer-credential columns while leaving the API columns intact.
+    """upgrade -> downgrade to v1_0015's parent -> upgrade round-trips,
+    toggling exactly the two indexer-credential columns while leaving the
+    API columns intact.
     """
     from alembic import command
     from sqlalchemy import create_engine
@@ -87,11 +94,12 @@ def test_v1_0015_wazuh_indexer_creds_is_reversible():
         )
         assert _SURVIVES.issubset(cols_at_head)
 
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, _PARENT_REVISION)
 
         cols_after_down = _column_names(engine, "integration_configs")
         assert not (_NEW_COLUMNS & cols_after_down), (
-            "downgrade -1 should have dropped the indexer-credential columns, "
+            "downgrade to the parent revision should have dropped the "
+            "indexer-credential columns, "
             f"still present: {sorted(_NEW_COLUMNS & cols_after_down)}"
         )
         # The API credential columns (owned by v1_0012) must survive.

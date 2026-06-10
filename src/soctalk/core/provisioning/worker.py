@@ -1,7 +1,8 @@
 """Provisioning worker.
 
 Claims rows from ``provisioning_jobs``, instantiates :class:`TenantController`,
-and drives ``provision`` or ``decommission`` to completion. One worker per
+and drives ``provision``, ``reconcile``, or ``decommission`` to completion.
+One worker per
 replica; rows are claim-locked via ``SELECT ... FOR UPDATE SKIP LOCKED`` so
 multiple replicas can run safely in parallel.
 
@@ -211,6 +212,16 @@ class ProvisioningWorker:
             controller = TenantController(session)
             if job.kind == "tenant.provision":
                 await controller.provision(
+                    job.tenant_id,
+                    actor_id=f"worker:{self._worker_id}",
+                )
+            elif job.kind == "tenant.reconcile":
+                # Re-render + helm upgrade of an ACTIVE tenant's release
+                # without lifecycle transitions (chart-affecting LLM
+                # edits). Raises TenantLifecycleError for non-active
+                # tenants — handled by the caller like any other failure,
+                # so retry/backoff bookkeeping applies identically.
+                await controller.reconcile(
                     job.tenant_id,
                     actor_id=f"worker:{self._worker_id}",
                 )

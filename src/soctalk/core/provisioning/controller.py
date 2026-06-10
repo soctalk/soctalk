@@ -8,6 +8,10 @@ Operations exposed:
   Structured as a sequence of idempotent, resumable steps — a crashed
   worker simply re-enters ``provision()`` and each step short-circuits
   when its postcondition already holds.
+- :meth:`TenantController.reconcile`: re-render + helm-upgrade an
+  ``active`` tenant's release without any lifecycle transition, so
+  chart-affecting config edits (e.g. LLM provider/base_url/model)
+  actually propagate to the running release.
 - :meth:`TenantController.suspend`: scale data plane to zero.
 - :meth:`TenantController.resume`: scale back up.
 - :meth:`TenantController.decommission`: teardown.
@@ -364,6 +368,113 @@ class TenantController:
                 await self.session.commit()
                 raise ProvisionError(str(e), step=name) from e
 
+        await self.session.commit()
+        return tenant
+
+    async def reconcile(self, tenant_id: UUID, *, actor_id: str | None = None) -> Tenant:
+        """Re-render + helm-upgrade an ``active`` tenant's release in place.
+
+        Why this exists: chart-affecting LLM edits (provider/base_url/model)
+        flow through ``render_tenant_values`` into ``values.llm.*`` and the
+        networkPolicies LLM-host FQDN egress allow-list. ``provision()``
+        early-returns on ``active`` and the active→provisioning transition
+        is illegal, so without this operation a PATCHed config never reached
+        the running release (stale env schema + stale egress allow-list).
+
+        Runs ONLY the value-affecting subset of the provision step list —
+        each step is idempotent by design, so this is a strict reuse, not a
+        re-implementation:
+
+        - ``write_external_siem_secret`` (profile='provided' only): rewrite
+          ``Secret/tenant-external-siem-creds`` from the current
+          IntegrationConfig row,
+        - ``helm_apply_tenant``: re-render + ``helm upgrade`` of release
+          ``tenant-<slug>``,
+        - ``wait_workloads``: poll the namespace back to Ready.
+
+        No lifecycle transition on success — the tenant stays ``active`` and
+        the run is bracketed by ``reconcile_started`` / ``reconcile_succeeded``
+        events. On failure the tenant transitions active → degraded (legal
+        per the transition table) with a ``reconcile_failed`` event naming
+        the step + error. Never touches the ``wazuh-<slug>`` release: SIEM
+        topology changes are a provision/decommission concern.
+
+        Raises :class:`TenantLifecycleError` for non-active tenants —
+        callers route every other state to :meth:`provision`.
+        """
+        tenant = await self._load_tenant(tenant_id)
+
+        if tenant.state != TenantState.ACTIVE.value:
+            raise TenantLifecycleError(
+                f"tenant {tenant.id}: cannot reconcile from state={tenant.state}; "
+                "reconcile applies only to 'active' tenants "
+                "(use provision() for the rest)"
+            )
+
+        org = await self._load_organization(tenant.organization_id)
+        integration = await self._load_integration(tenant.id)
+        branding = await self._load_branding(tenant.id)
+
+        profile: Profile = (
+            tenant.profile
+            if tenant.profile in ("poc", "persistent", "provided")
+            else "poc"
+        )
+        ctx = _StepContext(
+            tenant=tenant,
+            organization=org,
+            integration=integration,
+            branding=branding,
+            namespace=f"tenant-{tenant.slug}",
+            release_tenant=f"tenant-{tenant.slug}",
+            release_wazuh=f"wazuh-{tenant.slug}",
+            profile=profile,
+            actor_id=actor_id,
+            llm_secret_name=f"tenant-{tenant.id}-llm",
+        )
+
+        await self._emit_event(
+            ctx, "reconcile_started", details={"profile": profile}
+        )
+
+        steps: list[tuple[str, _StepFn]] = []
+        if ctx.profile == "provided":
+            steps.append(
+                ("write_external_siem_secret", self._step_write_external_siem_secret)
+            )
+        steps.append(("helm_apply_tenant", self._step_helm_apply_tenant))
+        steps.append(("wait_workloads", self._step_wait_workloads))
+
+        for name, step in steps:
+            try:
+                await step(ctx)
+            except ProvisionError as e:
+                e.step = e.step or name
+                await self._transition(
+                    tenant,
+                    TenantState.DEGRADED.value,
+                    actor_id=actor_id,
+                    event_type="reconcile_failed",
+                    details={"step": e.step, "error": str(e)},
+                )
+                await self.session.commit()
+                raise
+            except Exception as e:  # noqa: BLE001
+                await self._transition(
+                    tenant,
+                    TenantState.DEGRADED.value,
+                    actor_id=actor_id,
+                    event_type="reconcile_failed",
+                    details={"step": name, "error": str(e)},
+                )
+                await self.session.commit()
+                raise ProvisionError(str(e), step=name) from e
+
+        await self._emit_event(
+            ctx,
+            "reconcile_succeeded",
+            details={"release": ctx.release_tenant, "profile": profile},
+        )
         await self.session.commit()
         return tenant
 

@@ -417,7 +417,8 @@ class ProvisioningJob(SQLModel, table=True):
     tenant_id: UUID = Field(
         sa_column=Column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     )
-    kind: str = Field(max_length=32)  # 'tenant.provision' | 'tenant.decommission'
+    kind: str = Field(max_length=32)
+    # 'tenant.provision' | 'tenant.reconcile' | 'tenant.decommission'
     status: str = Field(default="pending", max_length=16)
     attempts: int = Field(default=0)
     max_attempts: int = Field(default=5)

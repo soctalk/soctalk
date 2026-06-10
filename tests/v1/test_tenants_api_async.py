@@ -1361,3 +1361,153 @@ async def test_onboard_422_detail_never_contains_llm_key(
         await onboard_tenant(payload, FakeRequest())
     assert exc_info.value.status_code == 422
     assert key not in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/mssp/tenants/{id}/llm — job-kind routing (tenant.llm.reconcile-active)
+# ---------------------------------------------------------------------------
+#
+# Chart-affecting LLM edits (provider/base_url/model) must actually
+# propagate. For an ACTIVE tenant the handler enqueues 'tenant.reconcile'
+# (provision() early-returns on active and active→provisioning is illegal);
+# for any other state it keeps enqueuing 'tenant.provision'. A key-only
+# PATCH never enqueues anything.
+
+
+async def _seed_llm_tenant(
+    mssp_session: AsyncSession, seeded_org: Organization, *, state: str
+) -> Tenant:
+    tenant = Tenant(
+        slug=f"lm{uuid4().hex[:8]}",
+        display_name="LLM Patch Tenant",
+        state=state,
+        profile="poc",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.flush()
+    mssp_session.add(
+        IntegrationConfig(
+            tenant_id=tenant.id,
+            llm_base_url="https://api.openai.com/v1",
+        )
+    )
+    await mssp_session.commit()
+    await mssp_session.refresh(tenant)
+    return tenant
+
+
+async def _llm_jobs_by_kind(
+    mssp_session: AsyncSession, tenant_id
+) -> dict[str, int]:
+    jobs = (
+        await mssp_session.execute(
+            select(ProvisioningJob).where(ProvisioningJob.tenant_id == tenant_id)
+        )
+    ).scalars().all()
+    out: dict[str, int] = {}
+    for j in jobs:
+        out[j.kind] = out.get(j.kind, 0) + 1
+    return out
+
+
+async def test_patch_llm_base_url_active_tenant_enqueues_reconcile(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """base_url change on an ACTIVE tenant → exactly one tenant.reconcile
+    job, zero tenant.provision jobs.
+    """
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(base_url="https://llm.newhost.example/v1"),
+        FakeRequest(),
+    )
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+    assert "tenant.provision" not in kinds
+
+    # Idempotent under double-PATCH: the pre-check sees the pending
+    # reconcile job and does not enqueue a second one.
+    await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(base_url="https://llm.other.example/v1"),
+        FakeRequest(),
+    )
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+
+
+async def test_patch_llm_base_url_degraded_tenant_enqueues_provision(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """The same PATCH on a DEGRADED tenant keeps the existing behavior:
+    enqueue tenant.provision (provision() handles degraded → provisioning).
+    """
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.DEGRADED.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(base_url="https://llm.newhost.example/v1"),
+        FakeRequest(),
+    )
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.provision") == 1
+    assert "tenant.reconcile" not in kinds
+
+
+async def test_patch_llm_key_only_enqueues_no_job(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """A key-only PATCH is propagated by the Secret rewrite + rolling
+    restart — no chart re-render needed, so neither job kind is enqueued.
+    """
+    import soctalk.core.api.llm_config as llm_mod
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    async def _noop_write(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(llm_mod, "_write_api_key", _noop_write)
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(api_key="sk-rotated-" + uuid4().hex),
+        FakeRequest(),
+    )
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds == {}, f"key-only PATCH must not enqueue jobs, got {kinds}"

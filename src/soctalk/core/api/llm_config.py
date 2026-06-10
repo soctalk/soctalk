@@ -165,12 +165,19 @@ async def update_tenant_llm(
     session = _db(request)
     # Resolve the tenant slug — the runs-worker mounts the LLM Secret
     # in ``tenant-<slug>`` and we need to write there in addition to the
-    # legacy ``soctalk-system/tenant-<id>-llm`` audit copy.
+    # legacy ``soctalk-system/tenant-<id>-llm`` audit copy. The state is
+    # needed below to pick the right provisioning-job kind for
+    # chart-affecting changes.
     from soctalk.core.tenancy.models import Tenant as _Tenant
+    from soctalk.core.tenancy.models import TenantState
 
-    tenant_slug: str | None = (
-        await session.execute(select(_Tenant.slug).where(_Tenant.id == tenant_id))
-    ).scalar_one_or_none()
+    tenant_row = (
+        await session.execute(
+            select(_Tenant.slug, _Tenant.state).where(_Tenant.id == tenant_id)
+        )
+    ).one_or_none()
+    tenant_slug: str | None = tenant_row.slug if tenant_row else None
+    tenant_state: str | None = tenant_row.state if tenant_row else None
     async with tenant_context(session, tenant_id):
         cfg = (await session.execute(
             select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
@@ -210,24 +217,38 @@ async def update_tenant_llm(
             or cfg.llm_model != prior_model
         )
         if chart_affecting_changed:
-            # Enqueue a tenant.provision job so the provisioning worker
-            # picks it up and helm-upgrades the release with the new
-            # values from integration_configs.
+            # Enqueue a provisioning job so the worker helm-upgrades the
+            # release with the new values from integration_configs.
+            #
+            # Kind selection is state-aware: for an ACTIVE tenant we must
+            # enqueue ``tenant.reconcile`` — ``provision()`` early-returns
+            # on active and active→provisioning is illegal per the
+            # transition table, so a tenant.provision job would silently
+            # never re-render the release (stale env schema + stale
+            # LLM-host FQDN egress allow-list). Every other state keeps
+            # the existing ``tenant.provision`` path (e.g. degraded →
+            # provisioning is the legal retry route).
             #
             # The partial unique index ``uq_provisioning_jobs_active``
             # rejects a second pending/in_flight row for the same
-            # (tenant, kind) — pre-check rather than catch IntegrityError
-            # so the PATCH transaction doesn't get poisoned. When an
-            # active job already exists, that job's eventual run will
-            # read the latest integration_configs row, so the LLM-config
-            # change still propagates.
+            # (tenant, kind) — pre-check for the kind we are about to
+            # enqueue rather than catch IntegrityError so the PATCH
+            # transaction doesn't get poisoned. When an active job
+            # already exists, that job's eventual run will read the
+            # latest integration_configs row, so the LLM-config change
+            # still propagates.
             from soctalk.core.tenancy.models import ProvisioningJob
 
+            job_kind = (
+                "tenant.reconcile"
+                if tenant_state == TenantState.ACTIVE.value
+                else "tenant.provision"
+            )
             existing_active = (
                 await session.execute(
                     select(ProvisioningJob).where(
                         ProvisioningJob.tenant_id == tenant_id,
-                        ProvisioningJob.kind == "tenant.provision",
+                        ProvisioningJob.kind == job_kind,
                         ProvisioningJob.status.in_(["pending", "in_flight"]),
                     )
                 )
@@ -236,7 +257,7 @@ async def update_tenant_llm(
                 session.add(
                     ProvisioningJob(
                         tenant_id=tenant_id,
-                        kind="tenant.provision",
+                        kind=job_kind,
                         status="pending",
                     )
                 )
