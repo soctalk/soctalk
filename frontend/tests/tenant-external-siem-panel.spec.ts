@@ -75,6 +75,10 @@ async function mockApi(page: Page): Promise<MockHandles> {
 		const req = route.request();
 		const method = req.method();
 		const path = new URL(req.url()).pathname;
+		// The '**/api/**' glob also matches Vite dev-module URLs such as
+		// /src/lib/api/client.ts — let anything that is not a real backend
+		// call fall through so the app bundle can load.
+		if (!path.startsWith('/api/')) return route.continue();
 		const json = (body: unknown, status = 200) =>
 			route.fulfill({
 				status,
@@ -206,8 +210,11 @@ test.describe('Tenant detail — External SIEM panel', () => {
 			api_password: 'rotated-api-pw'
 		});
 
-		// Toast confirms + the read view returns (form closed).
-		await expect(page.getByText('External SIEM')).toBeVisible();
+		// Toast confirms + the read view returns (form closed). The success toast
+		// title is also 'External SIEM', so target the toast message and the
+		// panel toggle by testid to stay strict-mode safe.
+		await expect(page.getByText('Connection updated')).toBeVisible();
+		await expect(page.getByTestId('siem-collapse-toggle')).toBeVisible();
 		await expect(page.locator('input[name="api_password"]')).toHaveCount(0);
 	});
 });

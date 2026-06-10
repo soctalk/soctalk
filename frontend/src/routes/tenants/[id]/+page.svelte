@@ -9,6 +9,7 @@
 	} from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
 	import ExternalSiemPanel from '$lib/components/tenants/ExternalSiemPanel.svelte';
+	import LlmConfigPanel from '$lib/components/tenants/LlmConfigPanel.svelte';
 
 	let tenant: Tenant | null = null;
 	let events: LifecycleEvent[] = [];
@@ -155,6 +156,9 @@
 		     keyed by id so switching tenant remounts (fresh fetch + poll cycle). -->
 		{#key id}
 			<ExternalSiemPanel tenantId={id} />
+			<!-- Per-tenant LLM config (masked key). Shown for ANY profile; same
+			     keyed block so switching tenant remounts (fresh fetch). -->
+			<LlmConfigPanel tenantId={id} />
 		{/key}
 
 		<div class="card p-4">
