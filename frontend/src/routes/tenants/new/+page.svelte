@@ -44,6 +44,12 @@
 		contact_email: string;
 		llm_base_url: string;
 		llm_model: string;
+		// Per-tenant LLM credentials. Optional for poc/persistent (blank →
+		// MSSP shared install key); REQUIRED for 'provided' where the key
+		// gates the External SIEM step. Both inputs (Profile disclosure and
+		// the External SIEM sub-section) bind to these same fields.
+		llm_provider: 'openai-compatible' | 'anthropic';
+		llm_api_key: string;
 		// Present only while profile === 'provided'; cleared otherwise.
 		external_siem?: SiemForm;
 	}
@@ -81,6 +87,8 @@
 		contact_email: '',
 		llm_base_url: 'https://api.openai.com/v1',
 		llm_model: 'gpt-4o',
+		llm_provider: 'openai-compatible',
+		llm_api_key: '',
 		external_siem: undefined
 	};
 
@@ -132,13 +140,18 @@
 		!!form.external_siem.api_username.trim() &&
 		!!form.external_siem.api_password.trim();
 
+	// For 'provided' the tenant must bring their own LLM key — the backend
+	// rejects a blank llm_api_key with a 422, so the External SIEM step
+	// (where the key is surfaced prominently) gates on it too.
+	$: llmKeyValid = !!form.llm_api_key.trim();
+
 	// Validity of the *current* step gates the Next button. Profile/Branding
 	// have no required input so they are always advanceable.
 	$: stepValid =
 		currentLabel === 'Identity'
 			? identityValid
 			: currentLabel === 'External SIEM'
-				? siemValid
+				? siemValid && llmKeyValid
 				: true;
 
 	function next() {
@@ -165,6 +178,11 @@
 			llm_base_url: form.llm_base_url,
 			llm_model: form.llm_model
 		};
+		// LLM credentials follow the api_token pattern: only included when
+		// non-blank so the backend falls back to the MSSP shared install key
+		// for poc/persistent tenants that leave them empty.
+		if (form.llm_provider.trim()) payload.llm_provider = form.llm_provider;
+		if (form.llm_api_key.trim()) payload.llm_api_key = form.llm_api_key;
 		if (form.profile === 'provided' && form.external_siem) {
 			const s = form.external_siem;
 			const external_siem: ExternalSiemOnboard = {
@@ -291,6 +309,28 @@
 						<span class="text-sm">Model</span>
 						<input class="input" bind:value={form.llm_model} />
 					</label>
+					<label class="label">
+						<span class="text-sm">Provider</span>
+						<select name="llm_provider" class="select" bind:value={form.llm_provider}>
+							<option value="openai-compatible">openai-compatible</option>
+							<option value="anthropic">anthropic</option>
+						</select>
+					</label>
+					<label class="label">
+						<span class="text-sm">API key</span>
+						<input
+							name="llm_api_key"
+							type="password"
+							autocomplete="off"
+							class="input"
+							bind:value={form.llm_api_key}
+						/>
+						{#if form.profile === 'provided'}
+							<small class="opacity-60">Required for provided tenants — you'll confirm it on the External SIEM step.</small>
+						{:else}
+							<small class="opacity-60">leave blank to use the MSSP shared install key</small>
+						{/if}
+					</label>
 				</div>
 			</details>
 		{:else if currentLabel === 'External SIEM'}
@@ -386,6 +426,33 @@
 					</label>
 				</div>
 			{/if}
+			<!-- Provided tenants bring their own LLM key — REQUIRED here (the
+			     backend 422s without it), bound to the same form fields as the
+			     'LLM (advanced)' disclosure on the Profile step. -->
+			<div class="card p-4 space-y-2 bg-surface-500/10" data-testid="wizard-llm-credentials">
+				<div class="text-sm font-medium">LLM credentials (required)</div>
+				<p class="text-sm opacity-70">
+					Provided tenants use their own LLM API key — the MSSP shared install key
+					does not apply to this profile.
+				</p>
+				<label class="label">
+					<span class="text-sm">Provider</span>
+					<select name="llm_provider" class="select" bind:value={form.llm_provider}>
+						<option value="openai-compatible">openai-compatible</option>
+						<option value="anthropic">anthropic</option>
+					</select>
+				</label>
+				<label class="label">
+					<span class="text-sm">API key</span>
+					<input
+						name="llm_api_key"
+						type="password"
+						autocomplete="off"
+						class="input"
+						bind:value={form.llm_api_key}
+					/>
+				</label>
+			</div>
 		{:else if currentLabel === 'Branding'}
 			<h3 class="h3">Branding</h3>
 			<label class="label">
@@ -430,7 +497,9 @@
 					<span class="inline-block w-4 h-4 rounded align-middle mr-2" style="background:{form.branding_primary_color}"></span>
 					<code class="text-xs">{form.branding_primary_color}</code>
 				</dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd>{form.llm_model}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider} · {form.llm_model}</dd></div>
+				<!-- Key is NEVER rendered in full — set/not-set plus a last-4 mask only. -->
+				<div class="flex justify-between"><dt class="opacity-60">LLM API key</dt><dd data-testid="review-llm-key">{form.llm_api_key.trim() ? `set (…${form.llm_api_key.trim().slice(-4)})` : 'not set'}</dd></div>
 			</dl>
 			<p class="text-xs opacity-60">
 				Submitting kicks off namespace + chart provisioning. The tenant will land in <code>pending → provisioning → active</code>.

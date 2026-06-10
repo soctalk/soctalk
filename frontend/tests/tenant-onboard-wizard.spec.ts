@@ -10,6 +10,13 @@ import { test, expect, type Page } from '@playwright/test';
  *  - submit posts a nested ``external_siem`` object (not flat wazuh_* fields),
  *  - switching profile away from provided clears the captured creds.
  *
+ * And tenant.llm.wizard-fields:
+ *  - the External SIEM step surfaces a REQUIRED 'LLM credentials' sub-section
+ *    (provider select + password key input) that also gates Next,
+ *  - the provided payload carries llm_provider + llm_api_key,
+ *  - the poc flow submits without a key and the payload OMITS llm_api_key,
+ *  - the plaintext key never appears in the Review step content.
+ *
  * The whole /api surface is mocked at the browser so neither the FastAPI
  * backend nor Postgres need to be up.
  */
@@ -38,6 +45,11 @@ async function mockApi(page: Page) {
 	await page.route('**/api/**', async (route) => {
 		const req = route.request();
 		const url = req.url();
+		// The '**/api/**' glob also matches Vite dev-module URLs such as
+		// /src/lib/api/client.ts — let anything that is not a real backend
+		// call fall through so the app bundle can load.
+		const path = new URL(url).pathname;
+		if (!path.startsWith('/api/')) return route.continue();
 		if (url.includes('/auth/me')) {
 			return route.fulfill({
 				status: 200,
@@ -127,13 +139,24 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		await expect(page.locator('input[name="verify_ssl"]')).toBeChecked();
 	});
 
-	test('cannot advance past External SIEM with empty api_password; full creds POST nested external_siem', async ({
+	test('cannot advance past External SIEM with empty api_password or LLM key; full creds POST nested external_siem + llm fields', async ({
 		page
 	}) => {
+		const LLM_KEY = 'sk-provided-tenant-key-9876';
 		await gotoWizard(page);
 		await fillIdentityAndContinue(page);
 		await page.check('input[value="provided"]');
 		await page.getByRole('button', { name: 'Next' }).click();
+
+		// The prominent LLM credentials sub-section is always visible on this
+		// step: provider select + password-type key input (autocomplete off).
+		await expect(page.getByTestId('wizard-llm-credentials')).toBeVisible();
+		await expect(page.locator('select[name="llm_provider"]')).toBeVisible();
+		await expect(page.locator('input[name="llm_api_key"]')).toHaveAttribute('type', 'password');
+		await expect(page.locator('input[name="llm_api_key"]')).toHaveAttribute(
+			'autocomplete',
+			'off'
+		);
 
 		// Fill every required field EXCEPT api_password — Next stays disabled.
 		await page.fill('input[name="indexer_url"]', 'https://indexer.example.com:9200');
@@ -143,13 +166,22 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		await page.fill('input[name="api_username"]', 'wazuh-wui');
 		await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled();
 
-		// Supplying api_password satisfies the step validity.
+		// Supplying api_password is NOT enough — the LLM key is required too.
 		await page.fill('input[name="api_password"]', 'apipass');
+		await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+		// The LLM key completes the step validity.
+		await page.selectOption('select[name="llm_provider"]', 'anthropic');
+		await page.fill('input[name="llm_api_key"]', LLM_KEY);
 		await expect(page.getByRole('button', { name: 'Next' })).toBeEnabled();
 
 		// External SIEM → Branding → Review.
 		await page.getByRole('button', { name: 'Next' }).click();
 		await page.getByRole('button', { name: 'Next' }).click();
+
+		// Review shows set + last-4 mask; the plaintext key is NEVER rendered.
+		await expect(page.getByTestId('review-llm-key')).toContainText('set (…9876)');
+		expect(await page.content()).not.toContain(LLM_KEY);
 
 		const onboardReq = page.waitForRequest(
 			(r) => r.url().includes('/tenants/onboard') && r.method() === 'POST'
@@ -158,6 +190,8 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		const body = (await onboardReq).postDataJSON();
 
 		expect(body.profile).toBe('provided');
+		expect(body.llm_provider).toBe('anthropic');
+		expect(body.llm_api_key).toBe(LLM_KEY);
 		// Nested object — supersedes the old flat wazuh_* payload.
 		expect(body.external_siem).toMatchObject({
 			indexer_url: 'https://indexer.example.com:9200',
@@ -172,6 +206,35 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		expect(body.wazuh_api_url).toBeUndefined();
 		expect(body.wazuh_indexer_url).toBeUndefined();
 		expect(body.wazuh_api_password).toBeUndefined();
+	});
+
+	test('poc flow submits without an LLM key and the payload OMITS llm_api_key', async ({
+		page
+	}) => {
+		await gotoWizard(page);
+		await fillIdentityAndContinue(page);
+
+		// Default poc profile — the optional key lives inside the disclosure
+		// with the shared-install-key helper text.
+		await page.getByText('LLM (advanced)').click();
+		await expect(page.locator('input[name="llm_api_key"]')).toHaveAttribute('type', 'password');
+		await expect(
+			page.getByText('leave blank to use the MSSP shared install key')
+		).toBeVisible();
+
+		// Profile → Branding → Review with the key left blank.
+		await page.getByRole('button', { name: 'Next' }).click();
+		await page.getByRole('button', { name: 'Next' }).click();
+		await expect(page.getByTestId('review-llm-key')).toContainText('not set');
+
+		const onboardReq = page.waitForRequest(
+			(r) => r.url().includes('/tenants/onboard') && r.method() === 'POST'
+		);
+		await page.getByTestId('create-tenant').click();
+		const body = (await onboardReq).postDataJSON();
+
+		expect(body.profile).toBe('poc');
+		expect(body.llm_api_key).toBeUndefined();
 	});
 
 	test('switching provided → poc clears external_siem and drops back to 4 steps', async ({

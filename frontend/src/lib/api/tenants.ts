@@ -81,6 +81,13 @@ export interface TenantOnboard {
 	contact_email?: string | null;
 	llm_base_url?: string;
 	llm_model?: string;
+	// Optional per-tenant LLM credentials. ``llm_provider`` is one of
+	// 'openai' | 'anthropic' | 'openai-compatible' (normalized server-side);
+	// ``llm_api_key`` is REQUIRED by the backend for profile='provided'
+	// (422 otherwise) and optional for poc/persistent (blank → MSSP shared
+	// install key). Both are omitted entirely when blank.
+	llm_provider?: string;
+	llm_api_key?: string;
 	// Nested external-SIEM block — only sent for the ``provided`` profile.
 	// Supersedes the earlier flat ``wazuh_*`` fields. Omitted entirely for
 	// poc/persistent so the controller fills wazuh_url/indexer_url in-cluster.
