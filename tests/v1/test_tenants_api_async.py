@@ -328,6 +328,7 @@ async def test_onboard_provided_persists_external_wazuh_fields(
         slug=f"pv{uuid4().hex[:8]}",
         display_name="BYO Wazuh Tenant",
         profile="provided",
+        llm_api_key="sk-byo-" + uuid4().hex,
         external_siem=ExternalSiemOnboard(
             indexer_url="https://indexer.example.com:9200",
             indexer_username="indexer-ro",
@@ -685,6 +686,7 @@ async def test_onboard_provided_profile_happy_path(
         slug=slug,
         display_name="Provided Happy Path",
         profile="provided",
+        llm_api_key="sk-happy-" + uuid4().hex,
         external_siem=ExternalSiemOnboard(
             indexer_url="https://indexer.example.com:9200",
             indexer_username="indexer-ro",
@@ -1002,3 +1004,360 @@ def test_adapter_status_route_declares_no_error_status():
             assert route.status_code in (None, 200)
             return
     raise AssertionError("adapter-status route not registered")
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant LLM credentials on onboard (tenant.llm.onboard-key)
+# ---------------------------------------------------------------------------
+#
+# TenantOnboard carries llm_api_key + llm_provider. REQUIRED for
+# profile='provided' (field-level 422 BEFORE any DB write → zero Tenant
+# rows); optional for poc/persistent (install-shared fallback unchanged).
+# Non-null values persist onto IntegrationConfig (llm_api_key_plain /
+# llm_provider) in the SAME transaction as the Tenant row. The raw key is
+# never echoed in any response body or error detail.
+
+
+def _complete_external_siem():
+    from soctalk.core.api.tenants import ExternalSiemOnboard
+
+    return ExternalSiemOnboard(
+        indexer_url="https://indexer.example.com:9200",
+        indexer_username="indexer-ro",
+        indexer_password="idx-pw-" + uuid4().hex,
+        api_url="https://wazuh.example.com:55000",
+        api_username="soctalk-adapter",
+        api_password="api-pw-" + uuid4().hex,
+    )
+
+
+async def test_onboard_provided_without_llm_key_422_no_tenant_row(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """profile='provided' with complete external_siem but NO llm_api_key →
+    HTTP 422 with a field-level error at ['body', 'llm_api_key'], raised
+    BEFORE any DB write so zero Tenant rows exist for the slug.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"nk{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="No LLM Key",
+        profile="provided",
+        external_siem=_complete_external_siem(),
+        # llm_api_key intentionally omitted.
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    # Field-level error shape: loc points at body.llm_api_key.
+    locs = [tuple(e["loc"]) for e in exc_info.value.detail]
+    assert ("body", "llm_api_key") in locs
+
+    # Zero Tenant rows created for the rejected onboard.
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_onboard_provided_blank_llm_key_422(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A whitespace-only llm_api_key is just as missing as an absent one —
+    422 with the field-level error, no Tenant row, and the (blank) key value
+    never reflected into the error detail.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"bk{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Blank LLM Key",
+        profile="provided",
+        llm_api_key="   ",
+        external_siem=_complete_external_siem(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    locs = [tuple(e["loc"]) for e in exc_info.value.detail]
+    assert ("body", "llm_api_key") in locs
+
+    rows = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_onboard_provided_with_llm_key_persists_never_echoes(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """provided onboard with a key → 202 declared on the route, the key
+    persists onto IntegrationConfig.llm_api_key_plain in the same transaction
+    as the Tenant row, and the raw key is absent from the response body.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    key = "sk-proj-onboard-" + uuid4().hex
+    slug = f"lk{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="LLM Key Onboard",
+        profile="provided",
+        llm_api_key=key,
+        external_siem=_complete_external_siem(),
+    )
+
+    assert _onboard_route_status() == 202
+    result = await onboard_tenant(payload, FakeRequest())
+
+    # The key is NEVER echoed in the response body.
+    assert key not in str(result.model_dump())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_api_key_plain == key
+
+
+async def test_onboard_llm_provider_normalized_openai(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """llm_provider='openai' is canonicalized to 'openai-compatible' on the
+    persisted IntegrationConfig row (same normalizer as LlmConfigUpdate) so
+    the next helm render passes the tenant chart's values.schema.json.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"no{uuid4().hex[:8]}",
+        display_name="Normalized Provider",
+        profile="provided",
+        llm_api_key="sk-openai-" + uuid4().hex,
+        llm_provider="openai",
+        external_siem=_complete_external_siem(),
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_provider == "openai-compatible"
+
+
+async def test_onboard_sk_ant_key_infers_anthropic_and_flips_model(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """An sk-ant- key with no explicit provider → llm_provider='anthropic'
+    is inferred, and the clearly-mismatched default model (gpt-4o) is
+    flipped to the Anthropic default so the runs-worker never renders an
+    OpenAI model name against the Anthropic SDK.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"an{uuid4().hex[:8]}",
+        display_name="Anthropic Inference",
+        profile="provided",
+        llm_api_key="sk-ant-" + uuid4().hex,
+        # llm_provider intentionally omitted → inferred from the key prefix.
+        external_siem=_complete_external_siem(),
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_provider == "anthropic"
+    # Default model flipped off gpt-4o (Anthropic SDK would reject it).
+    assert integration.llm_model != "gpt-4o"
+    assert integration.llm_model.startswith("claude")
+
+
+async def test_onboard_non_sk_ant_key_keeps_openai_compatible_default(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A non-sk-ant key with no explicit provider keeps the
+    openai-compatible default and the default model stays gpt-4o.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"oc{uuid4().hex[:8]}",
+        display_name="OpenAI-compatible Inference",
+        profile="provided",
+        llm_api_key="sk-proj-" + uuid4().hex,
+        external_siem=_complete_external_siem(),
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_provider == "openai-compatible"
+    assert integration.llm_model == "gpt-4o"
+
+
+async def test_onboard_poc_without_llm_key_still_succeeds(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """For poc the LLM key stays optional: onboarding without one succeeds
+    (202 route contract) and llm_api_key_plain stays NULL so the controller's
+    install-shared fallback path is unchanged.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"po{uuid4().hex[:8]}",
+        display_name="PoC No Key",
+        profile="poc",
+        # llm_api_key intentionally omitted — must NOT 422.
+    )
+
+    assert _onboard_route_status() == 202
+    result = await onboard_tenant(payload, FakeRequest())
+    assert result.profile == "poc"
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_api_key_plain is None
+    # Column default preserved when no provider was supplied or inferred.
+    assert integration.llm_provider == "openai-compatible"
+
+
+async def test_onboard_poc_with_llm_key_persists(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Optional-for-poc still means *persisted* when supplied: a poc onboard
+    carrying a key lands it on llm_api_key_plain in the same transaction.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    key = "sk-poc-" + uuid4().hex
+    payload = TenantOnboard(
+        slug=f"pk{uuid4().hex[:8]}",
+        display_name="PoC With Key",
+        profile="poc",
+        llm_api_key=key,
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+    assert key not in str(result.model_dump())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_api_key_plain == key
+
+
+async def test_onboard_422_detail_never_contains_llm_key(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A provided onboard that fails validation on the external-SIEM block
+    while carrying an llm_api_key must not reflect the key into the 422
+    error detail.
+    """
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    key = "sk-secret-" + uuid4().hex
+    payload = TenantOnboard(
+        slug=f"se{uuid4().hex[:8]}",
+        display_name="Secret Never Echoed",
+        profile="provided",
+        llm_api_key=key,
+        external_siem=None,  # forces the 422
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await onboard_tenant(payload, FakeRequest())
+    assert exc_info.value.status_code == 422
+    assert key not in str(exc_info.value.detail)

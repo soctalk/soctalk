@@ -1,0 +1,87 @@
+"""Shared LLM provider/model helpers.
+
+Single source of truth for the provider-string canonicalization and the
+provider↔model consistency rules that previously lived in two places —
+``api/llm_config.LlmConfigUpdate._normalize_provider`` and the inline
+``_is_openai_model`` / ``_is_anthropic_model`` closures in
+``provisioning/controller._copy_llm_key_to_tenant_ns``. Both the API layer
+(onboard + PATCH /llm) and the provisioning controller import from here so
+the two cannot drift.
+
+No soctalk imports — this module must stay dependency-free to avoid
+circular imports between ``core.api`` and ``core.provisioning``.
+"""
+
+from __future__ import annotations
+
+ANTHROPIC_DEFAULT_MODEL = "claude-3-5-sonnet-latest"
+OPENAI_DEFAULT_MODEL = "gpt-4o"
+
+# The canonical fallback provider. The tenant chart's values.schema.json
+# only admits ``openai-compatible`` or ``anthropic`` for ``llm.provider``
+# (the runs-worker template maps ``openai-compatible`` → the SDK's
+# ``openai`` env-side).
+DEFAULT_PROVIDER = "openai-compatible"
+
+
+def normalize_provider(provider: str | None) -> str | None:
+    """Canonicalize ``openai`` → ``openai-compatible`` for storage.
+
+    Every value persisted to ``integration_configs.llm_provider`` (and
+    consequently flowed into ``values.llm.provider`` at helm-render time)
+    must be accepted by ``charts/soctalk-tenant/values.schema.json``, which
+    only admits ``openai-compatible`` or ``anthropic``. The chart maps
+    ``openai-compatible`` back to the SDK's ``openai`` provider for
+    SOCTALK_LLM_PROVIDER, so functional behavior is identical — only the
+    on-disk string differs. Without this normalization, storing the bare
+    ``openai`` saves cleanly but the next install/upgrade for that tenant
+    fails chart schema validation.
+    """
+    if provider == "openai":
+        return DEFAULT_PROVIDER
+    return provider
+
+
+def is_openai_model(model: str | None) -> bool:
+    """Heuristic: does the model name clearly belong to OpenAI?"""
+    if not model:
+        return False
+    lowered = model.lower()
+    return (
+        lowered.startswith("gpt-")
+        or lowered.startswith("o1")
+        or lowered.startswith("o3")
+    )
+
+
+def is_anthropic_model(model: str | None) -> bool:
+    """Heuristic: does the model name clearly belong to Anthropic?"""
+    return model is not None and model.lower().startswith("claude")
+
+
+def infer_provider_from_key(api_key: str) -> str:
+    """Infer the provider from a raw API key's vendor prefix.
+
+    ``sk-ant-`` keys are unambiguously Anthropic; everything else keeps the
+    ``openai-compatible`` default (covers ``sk-``, ``sk-proj-``, and any
+    OpenAI-compatible gateway credential).
+    """
+    if api_key.startswith("sk-ant-"):
+        return "anthropic"
+    return DEFAULT_PROVIDER
+
+
+def reconcile_provider_model(provider: str, model: str | None) -> str | None:
+    """Flip a clearly-mismatched model to the provider's default.
+
+    A tenant configured with ``llm.model=gpt-4o`` but switched to anthropic
+    would render ``SOCTALK_FAST_MODEL=gpt-4o`` on the runs-worker, which the
+    Anthropic SDK rejects on every call (and vice versa). Only overwrite the
+    model when the existing one clearly belongs to the *other* provider —
+    preserves operator-set custom models that already match.
+    """
+    if provider == "anthropic" and is_openai_model(model):
+        return ANTHROPIC_DEFAULT_MODEL
+    if provider in ("openai", DEFAULT_PROVIDER) and is_anthropic_model(model):
+        return OPENAI_DEFAULT_MODEL
+    return model

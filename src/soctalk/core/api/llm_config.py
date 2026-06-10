@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.llm_provider import normalize_provider
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
@@ -100,21 +101,11 @@ class LlmConfigUpdate(BaseModel):
     @field_validator("provider")
     @classmethod
     def _normalize_provider(cls, v):
-        # Storage canonicalizes ``openai`` → ``openai-compatible`` so
-        # every value persisted to ``integration_configs.llm_provider``
-        # (and consequently flowed into ``values.llm.provider`` at
-        # helm-render time) is accepted by
-        # ``charts/soctalk-tenant/values.schema.json``, which only
-        # admits ``openai-compatible`` or ``anthropic``. The chart
-        # maps ``openai-compatible`` back to the SDK's ``openai``
-        # provider for SOCTALK_LLM_PROVIDER, so functional behavior
-        # is identical — only the on-disk string differs. Without
-        # this normalization, a PATCH with ``provider=openai`` saves
-        # cleanly but the next install/upgrade for that tenant fails
-        # chart schema validation.
-        if v == "openai":
-            return "openai-compatible"
-        return v
+        # Storage canonicalizes ``openai`` → ``openai-compatible`` via the
+        # shared helper (single source of truth, also used by the onboard
+        # wizard's TenantOnboard) — see soctalk.core.llm_provider for the
+        # chart-schema rationale.
+        return normalize_provider(v)
 
     @field_validator("base_url")
     @classmethod

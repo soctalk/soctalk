@@ -15,10 +15,15 @@ from uuid import UUID
 import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.llm_provider import (
+    infer_provider_from_key,
+    normalize_provider,
+    reconcile_provider_model,
+)
 from soctalk.core.provisioning import TenantController
 from soctalk.core.provisioning.k8s import new_k8s_client
 from soctalk.core.tenancy.context import tenant_context
@@ -107,11 +112,31 @@ class TenantOnboard(BaseModel):
     # LLM endpoint (optional; tenant can set API key later via detail page)
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o")
+    # Per-tenant LLM credentials. REQUIRED for ``provided`` (enforced
+    # server-side with a field-level 422 in :func:`_llm_key_errors` before
+    # any DB read/write); optional for poc/persistent, where the
+    # install-shared key fallback in the controller still applies.
+    # ``llm_provider`` is normalized openai → openai-compatible (same
+    # canonicalization as ``LlmConfigUpdate``); when omitted alongside a key
+    # it is inferred from the key's vendor prefix at onboard time.
+    llm_api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+    llm_provider: str | None = Field(
+        default=None,
+        pattern=r"^(openai|anthropic|openai-compatible)$",
+    )
     # External SIEM connection — only meaningful for the ``provided`` profile.
     # Required for ``provided`` (enforced server-side with a 422 in
     # :func:`_validate_external_siem`); ignored entirely for poc/persistent so
     # the controller fills wazuh_url/indexer_url in-cluster.
     external_siem: ExternalSiemOnboard | None = None
+
+    @field_validator("llm_provider")
+    @classmethod
+    def _normalize_llm_provider(cls, v: str | None) -> str | None:
+        # Shared canonicalization with LlmConfigUpdate (llm_config.py) —
+        # storage must only ever see ``openai-compatible`` / ``anthropic``
+        # so chart values.schema.json validation never fails on render.
+        return normalize_provider(v)
 
 
 class ProvisioningJobRead(BaseModel):
@@ -206,6 +231,26 @@ def _validate_external_siem(siem: ExternalSiemOnboard | None) -> None:
         raise HTTPException(status_code=422, detail=errors)
 
 
+def _llm_key_errors(llm_api_key: str | None) -> list[dict[str, object]]:
+    """Field-level error for a ``provided`` onboard missing its LLM key.
+
+    The ``provided`` profile has no install-shared fallback contract — the
+    tenant brings their own SIEM *and* their own LLM credential — so a
+    missing/blank ``llm_api_key`` must be rejected with the same field-level
+    422 shape as :func:`_external_siem_errors`, BEFORE any DB read/write.
+    The key value itself is never reflected into the error detail.
+    """
+    if (llm_api_key or "").strip():
+        return []
+    return [
+        {
+            "loc": ["body", "llm_api_key"],
+            "msg": "llm_api_key is required when profile='provided'",
+            "type": "value_error.missing",
+        }
+    ]
+
+
 # ----- Endpoints --------------------------------------------------------------
 
 
@@ -230,10 +275,15 @@ async def onboard_tenant(
     """
     session = _db(request)
 
-    # Validate external SIEM material up front for the ``provided`` profile,
-    # *before* any DB read/write, so a rejected onboard creates NO Tenant row.
+    # Validate external SIEM material + the per-tenant LLM key up front for
+    # the ``provided`` profile, *before* any DB read/write, so a rejected
+    # onboard creates NO Tenant row. Errors are combined so the wizard
+    # surfaces every missing field in one round-trip.
     if payload.profile == "provided":
-        _validate_external_siem(payload.external_siem)
+        errors = _external_siem_errors(payload.external_siem)
+        errors += _llm_key_errors(payload.llm_api_key)
+        if errors:
+            raise HTTPException(status_code=422, detail=errors)
 
     org = await _get_organization(session)
 
@@ -254,18 +304,39 @@ async def onboard_tenant(
     session.add(tenant)
     await session.flush()
 
+    # Per-tenant LLM credentials. When a key is supplied without an explicit
+    # provider, infer it from the key's vendor prefix (sk-ant- → anthropic,
+    # else the openai-compatible default) and flip a clearly-mismatched
+    # default model via the same shared helper the controller uses — so an
+    # sk-ant- onboard never renders SOCTALK_FAST_MODEL=gpt-4o on the
+    # runs-worker. The raw key is NEVER logged or echoed in any response.
+    llm_provider = payload.llm_provider  # already normalized by the validator
+    llm_model: str = payload.llm_model
+    if payload.llm_api_key and llm_provider is None:
+        llm_provider = infer_provider_from_key(payload.llm_api_key)
+    if llm_provider is not None:
+        llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
+    # Only pass llm_provider when set so the column default
+    # ('openai-compatible') applies for a provider-less, key-less onboard.
+    llm_kwargs: dict[str, str] = {"llm_model": llm_model}
+    if llm_provider is not None:
+        llm_kwargs["llm_provider"] = llm_provider
+    if payload.llm_api_key is not None:
+        llm_kwargs["llm_api_key_plain"] = payload.llm_api_key
+
     async with tenant_context(session, tenant.id):
         # External SIEM connection material is only captured for the
         # 'provided' profile (BYO-SIEM, validated above). For poc/persistent
         # ``siem`` is None and these columns stay NULL so the controller fills
         # wazuh_url/indexer_url in-cluster. Lands in the SAME transaction as
-        # the Tenant row (single commit below).
+        # the Tenant row (single commit below) — as do the per-tenant LLM
+        # credentials above.
         siem = payload.external_siem if payload.profile == "provided" else None
         session.add_all([
             IntegrationConfig(
                 tenant_id=tenant.id,
                 llm_base_url=payload.llm_base_url,
-                llm_model=payload.llm_model,
+                **llm_kwargs,
                 wazuh_indexer_url=siem.indexer_url if siem else None,
                 wazuh_indexer_username=siem.indexer_username if siem else None,
                 wazuh_indexer_password_plain=(

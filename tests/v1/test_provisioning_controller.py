@@ -686,3 +686,90 @@ async def test_llm_key_install_wide_unchanged(
     }
     # The install-wide Secret WAS read this time.
     assert any(_INSTALL_LLM_SECRET in c for c in fake_k8s.calls)
+
+
+async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
+    session: AsyncSession, admin_session: AsyncSession, patched_helm, monkeypatch
+):
+    """tenant.llm.onboard-key, criterion 6: a tenant onboarded with
+    profile='provided' + llm_api_key provisions via the existing
+    precedence-1 branch in ``_copy_llm_key_to_tenant_ns`` —
+    Secret/tenant-llm-key in tenant-<slug> contains the ONBOARD key and the
+    install-wide Secret ``soctalk-system-llm-api-key`` is NEVER read, even
+    though it exists and holds a different key.
+    """
+    from sqlalchemy import text
+
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        TenantOnboard,
+        onboard_tenant,
+    )
+
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    await admin_session.execute(
+        text(
+            "TRUNCATE tenant_lifecycle_events, integration_configs, "
+            "branding_configs, tenant_secrets, provisioning_jobs, "
+            "tenants, organizations CASCADE"
+        )
+    )
+    await admin_session.commit()
+
+    org = Organization(
+        mssp_id=uuid4(), mssp_name="Onboard MSSP", slug="onboard-mssp",
+        install_id=uuid4(), install_label="test",
+    )
+    session.add(org)
+    await session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = session
+        state = State()
+
+    onboard_key = "sk-onboard-PROVIDED-" + uuid4().hex
+    payload = TenantOnboard(
+        slug=f"ob{uuid4().hex[:8]}",
+        display_name="Provided Onboard → Provision",
+        profile="provided",
+        llm_api_key=onboard_key,
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://indexer.acme.example:9200",
+            indexer_username="idx-user",
+            indexer_password="idx-pass",
+            api_url="https://wazuh.acme.example:55000",
+            api_username="api-user",
+            api_password="api-pass",
+        ),
+    )
+    result = await onboard_tenant(payload, FakeRequest())
+
+    fake_k8s = FakeK8s()
+    # Install-wide Secret present with a DIFFERENT key — precedence 1 must
+    # short-circuit so it is never even read.
+    fake_k8s.secrets[("soctalk-system", "soctalk-system-llm-api-key")] = {
+        "openai-api-key": "sk-install-MUST-NOT-BE-USED",
+    }
+
+    controller = TenantController(
+        session, k8s=fake_k8s,
+        settings=ControllerSettings(
+            wazuh_chart_path="charts/wazuh",
+            readiness_poll_interval_seconds=0.01,
+            readiness_timeout_seconds=5.0,
+        ),
+    )
+    provisioned = await controller.provision(result.id, actor_id="test")
+    assert provisioned.state == TenantState.ACTIVE.value
+
+    ns = f"tenant-{payload.slug}"
+    assert (ns, "tenant-llm-key") in fake_k8s.secrets
+    assert fake_k8s.secrets[(ns, "tenant-llm-key")] == {"api_key": onboard_key}
+    # The install-wide Secret was never read.
+    assert not any(
+        "soctalk-system-llm-api-key" in c for c in fake_k8s.calls
+    ), f"install-wide LLM Secret must not be read: {fake_k8s.calls}"

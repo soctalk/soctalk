@@ -1182,27 +1182,19 @@ class TenantController:
             # ``llm.model=gpt-4o`` and then auto-switched to anthropic
             # would render ``SOCTALK_FAST_MODEL=gpt-4o`` on the
             # runs-worker, which the Anthropic SDK rejects on every
-            # call. Only overwrite the model when the existing one
-            # clearly belongs to the *other* provider — preserves
-            # operator-set custom models that already match.
-            ANTHROPIC_DEFAULT_MODEL = "claude-3-5-sonnet-latest"
-            OPENAI_DEFAULT_MODEL = "gpt-4o"
-
-            def _is_openai_model(m: str | None) -> bool:
-                return bool(m) and (
-                    m.lower().startswith("gpt-")
-                    or m.lower().startswith("o1")
-                    or m.lower().startswith("o3")
-                )
-
-            def _is_anthropic_model(m: str | None) -> bool:
-                return bool(m) and m.lower().startswith("claude")
+            # call. The shared ``reconcile_provider_model`` helper
+            # (also used by the onboard API) only overwrites the model
+            # when the existing one clearly belongs to the *other*
+            # provider — preserves operator-set custom models that
+            # already match.
+            from soctalk.core.llm_provider import reconcile_provider_model
 
             if chosen_key_name == "anthropic-api-key":
                 if ctx.integration.llm_provider != "anthropic":
                     ctx.integration.llm_provider = "anthropic"
-                    if _is_openai_model(ctx.integration.llm_model):
-                        ctx.integration.llm_model = ANTHROPIC_DEFAULT_MODEL
+                    ctx.integration.llm_model = reconcile_provider_model(
+                        "anthropic", ctx.integration.llm_model
+                    )
                     await self.session.flush()
             elif chosen_key_name == "openai-api-key":
                 if ctx.integration.llm_provider not in ("openai", "openai-compatible"):
@@ -1214,8 +1206,9 @@ class TenantController:
                     # Helm validation on the next retry and leave
                     # the tenant degraded.
                     ctx.integration.llm_provider = "openai-compatible"
-                    if _is_anthropic_model(ctx.integration.llm_model):
-                        ctx.integration.llm_model = OPENAI_DEFAULT_MODEL
+                    ctx.integration.llm_model = reconcile_provider_model(
+                        "openai-compatible", ctx.integration.llm_model
+                    )
                     await self.session.flush()
         await self.k8s.put_secret(
             ctx.namespace,
