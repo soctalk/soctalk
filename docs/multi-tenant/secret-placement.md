@@ -20,7 +20,8 @@ Gate artifact: Defines where every secret lives, who can read it, how it's rotat
 | User JWT signing key | HMAC secret or RSA/Ed25519 private key | `Secret/soctalk-jwt-signing-key` in `soctalk-system` | SocTalk API pod | Manual; automated in a future release | HMAC for MVP simplicity; asymmetric when multi-pod |
 | Adapter token signing key | HMAC key | `Secret/soctalk-adapter-signing-key` in `soctalk-system` | SocTalk API + controller pod only | Manual; automated in a future release | Never mounted into tenant namespaces |
 | Tenant adapter bearer token | bearer token | `Secret/adapter-token` in `tenant-<slug>` | Tenant adapter pod | Minted on tenant provisioning; rotated by controller | Tenant-bound; cannot mint other tokens |
-| Per-tenant LLM API key | bearer token | `Secret/tenant-<id>-llm` in `soctalk-system` | Orchestrator pod (projected by tenant context) | MSSP-initiated via tenant config UI → SocTalk rewrites Secret | Never appears in any other tenant's context |
+| Per-tenant LLM API key (legacy/audit copy) | API key | `Secret/tenant-<id>-llm` in `soctalk-system` | Orchestrator pod (projected by tenant context) | Rewritten alongside `tenant-llm-key` on every `PATCH /api/mssp/tenants/{id}/llm` | Never appears in any other tenant's context; not read back for `has_api_key` — the Postgres column is authoritative |
+| Per-tenant LLM API key (mounted) | API key | `Secret/tenant-llm-key` in `tenant-<slug>` | runs-worker (+ adapter) via the tenant chart's `llm.apiKeyRef` (same-namespace `secretKeyRef`) | `PATCH /api/mssp/tenants/{id}/llm` (Postgres-first dual-write → rewrites both Secrets → rolling-restarts the runs-worker) | Written during provisioning's `apply_secrets`, before `helm_apply_tenant`. Carries the **per-tenant** key whenever `IntegrationConfig.llm_api_key_plain` is set (precedence); only key-less tenants get a mirror of the install-shared `soctalk-system-llm-api-key`. See [provided-profile.md](provided-profile.md) §4 |
 | Per-tenant Wazuh API credentials | user/pw or token | `Secret/tenant-<id>-wazuh` in `soctalk-system` | Orchestrator MCP subprocess (env at spawn time, tenant context) | MSSP-initiated | |
 | Per-tenant TheHive API token | token | `Secret/tenant-<id>-thehive` in `soctalk-system` | Orchestrator MCP subprocess | MSSP-initiated | |
 | Per-tenant Cortex API key | token | `Secret/tenant-<id>-cortex` in `soctalk-system` | Orchestrator MCP subprocess | MSSP-initiated | |
@@ -88,11 +89,10 @@ SocTalk stores references and version labels; it does not keep the material in m
 
 For, rotation is a runbook operation:
 
-1. **Per-tenant LLM key rotation** (MSSP initiates via tenant config UI):
-   - MSSP admin updates tenant's LLM config with new key.
-   - SocTalk controller `kubectl patch secret tenant-<id>-llm ...` in `soctalk-system`.
-   - Orchestrator pod picks up change on next worker context build (reads Secret freshly per job).
-   - No pod restart.
+1. **Per-tenant LLM key rotation** (MSSP initiates via the detail page's LLM panel or `PATCH /api/mssp/tenants/{id}/llm`):
+   - Postgres column `IntegrationConfig.llm_api_key_plain` is committed first (authoritative).
+   - SocTalk rewrites `tenant-<id>-llm` in `soctalk-system` AND `tenant-llm-key` in `tenant-<slug>`.
+   - runs-worker is rolling-restarted (`secretKeyRef` env vars don't refresh on a Secret update).
 
 2. **Wazuh / TheHive / Cortex admin credential rotation** (runbook):
    - Operator runs SocTalk CLI (deliverable): `soctalk-cli rotate-admin --tenant=acme --service=wazuh`.

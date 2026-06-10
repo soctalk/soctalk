@@ -64,10 +64,48 @@ inspect the `adapter-egress` NetworkPolicy.
 
 ## Rotate per-tenant LLM key
 
-1. MSSP admin → customer detail → Settings → LLM → paste new key → Save.
-2. SocTalk controller overwrites `tenant-<id>-llm` Secret in
-   `soctalk-system`. Orchestrator picks up the change on next worker
-   context build (no pod restart needed).
+1. MSSP admin → tenant detail → LLM panel → paste new key → Save. Or via API:
+   ```bash
+   curl -X PATCH https://mssp.../api/mssp/tenants/<id>/llm \
+     -H 'Content-Type: application/json' \
+     -d '{"api_key": "<NEW-KEY-PLACEHOLDER>"}'
+   ```
+2. Postgres (`IntegrationConfig.llm_api_key_plain`) is committed first
+   (authoritative), then SocTalk rewrites **both** Secrets —
+   `tenant-llm-key` in `tenant-<slug>` (mounted by the runs-worker) and
+   `tenant-<id>-llm` in `soctalk-system` (legacy/audit copy) — and
+   rolling-restarts the runs-worker. `secretKeyRef` env vars don't refresh
+   on a Secret update; without the restart the worker keeps the old key.
+3. Changing provider / base URL / model in the same PATCH also enqueues a
+   `tenant.reconcile` job for an active tenant (see below) so the new
+   values reach the rendered release.
+
+## `tenant.reconcile` job failed
+
+`tenant.reconcile` re-renders + helm-upgrades an **active** tenant's release
+in place. Enqueued by chart-affecting LLM edits (provider / base URL / model)
+via `PATCH /api/mssp/tenants/{id}/llm`; the provisioning worker dispatches it
+like any other job kind.
+
+What it re-runs:
+
+- `provided` profile only: rewrite `Secret/tenant-external-siem-creds` from
+  the current IntegrationConfig row.
+- All profiles: `helm upgrade` of release `tenant-<slug>` + wait for
+  workloads Ready. Never touches the `wazuh-<slug>` release.
+
+On success the tenant **stays `active`** — no state transition; the run is
+bracketed by `reconcile_started` / `reconcile_succeeded` lifecycle events.
+On failure the tenant flips active → `degraded` with a `reconcile_failed`
+event naming the step + error. Recover with the existing retry path:
+
+```bash
+curl -X POST https://mssp.../api/mssp/tenants/<id>:retry
+```
+
+`:retry` is valid from `degraded` and re-enqueues the full idempotent
+provision pipeline, which converges the release and returns the tenant to
+`active`.
 
 ## Rotate data plane bootstrap secrets
 

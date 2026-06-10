@@ -90,7 +90,10 @@ adapter restart.
    `indexer_password`, `api_url`, `api_username`, `api_password`, optional
    `api_token`, `verify_ssl`). Missing required fields are rejected **422**
    server-side with field-level errors and **no** Tenant row is created
-   (`api_token` / `verify_ssl` never trigger 422). The values persist onto the
+   (`api_token` / `verify_ssl` never trigger 422). The same 422 also covers a
+   missing/blank `llm_api_key` (see the LLM key subsection below) — errors for
+   both blocks are combined into one response so the wizard surfaces every
+   missing field in a single round-trip. The values persist onto the
    tenant's `IntegrationConfig` in the same transaction as the Tenant row:
    `indexer_*` → `wazuh_indexer_*`, `api_username/api_password/api_url` →
    `wazuh_username` / `wazuh_password_plain` / `wazuh_api_url`, `api_token` →
@@ -121,6 +124,49 @@ adapter restart.
    are best-effort: failures are logged via structlog and do **not** roll back
    the committed Postgres update.
 
+### Per-tenant LLM key lifecycle
+
+A `provided` tenant also brings its **own LLM credential** — the profile has
+no install-shared fallback contract, so the onboard payload's `llm_api_key`
+is **REQUIRED** alongside `external_siem`. A missing/blank key is rejected
+with the same field-level **422** shape as the SIEM fields, before any DB
+read/write, so a rejected onboard creates **no** Tenant row. `llm_provider`
+is optional (`openai` | `anthropic` | `openai-compatible`; `openai` is
+canonicalized to `openai-compatible` for storage); when omitted alongside a
+key it is inferred from the key's vendor prefix (`sk-ant-…` → `anthropic`,
+anything else keeps the `openai-compatible` default). For `poc` /
+`persistent` both fields are optional in the onboard payload and the
+install-shared key fallback below still applies. The key moves through the
+system in the same one-way direction as the SIEM credentials:
+
+1. **Onboard.** `llm_api_key` persists onto
+   `IntegrationConfig.llm_api_key_plain` in the same transaction as the
+   Tenant row. The raw key is never logged or echoed in any response — reads
+   return only a `has_api_key` boolean and a masked preview.
+2. **Secret materialization.** During the provisioning `apply_secrets` step —
+   **before** `helm_apply_tenant`, so the runs-worker Deployment is never
+   created without the Secret it mounts — the controller writes
+   `Secret/tenant-llm-key` in `tenant-<slug>`. The per-tenant key takes
+   precedence: when `IntegrationConfig.llm_api_key_plain` is set it is used
+   verbatim and the install-shared Secret
+   (`soctalk-system/soctalk-system-llm-api-key`) is **not** read; only
+   key-less tenants get a mirror of the install-shared key.
+   When neither source yields a key, provisioning fails fast with a
+   `llm_key_missing` lifecycle event rather than stranding the runs-worker.
+3. **runs-worker mount.** The tenant chart's `llm.apiKeyRef` points the
+   runs-worker at `tenant-llm-key` (same-namespace `secretKeyRef`).
+4. **Rotation via the PATCH endpoint.** `PATCH /api/mssp/tenants/{id}/llm`
+   (the detail page's **LLM** panel drives the same endpoint). **Postgres is
+   committed first**, then the endpoint rewrites the Secret in **both**
+   namespaces — the mounted `tenant-<slug>/tenant-llm-key` and the
+   legacy/audit copy `soctalk-system/tenant-<id>-llm` — and rolling-restarts
+   the runs-worker (`secretKeyRef` env vars do **not** refresh on a Secret
+   update). The K8s side effects are best-effort and never roll back the
+   committed Postgres update. Chart-affecting edits in the same PATCH
+   (provider / base_url / model) additionally enqueue a `tenant.reconcile`
+   job for an active tenant so the new values reach the rendered release —
+   see the [runbook](runbook/README.md).
+
 ## 5 Connectivity prerequisites
 
 Because the SIEM is outside the cluster, **two** egress paths must be open:
@@ -145,15 +191,19 @@ external Wazuh's firewall must admit the cluster's egress IPs.
 
 ## 6 Failure modes
 
-Two failure classes dominate `provided`, both surfaced to the operator through
-the tenant detail page's **External SIEM** panel (which polls
-`GET /api/mssp/tenants/{id}/adapter-status`) and the tenant lifecycle events.
+Two failure classes dominate `provided`'s external SIEM path, both surfaced
+to the operator through the tenant detail page's **External SIEM** panel
+(which polls `GET /api/mssp/tenants/{id}/adapter-status`) and the tenant
+lifecycle events. The per-tenant LLM credential adds two more, surfaced
+through failed runs and the detail page's **LLM** panel.
 
 | Symptom | Likely cause | How the operator surfaces / fixes it |
 |---|---|---|
 | **Authentication failure** | Wrong/expired indexer or API credentials; rotated on the customer side; `WAZUH_API_TOKEN` expired | Adapter ingest returns 401/403 → `adapter-status.last_ingest_error` shows the auth error; the chat resolver surfaces `external Wazuh API not configured` (a typed `ExternalSiemNotConfigured`, never an unhandled 500). Fix by `PATCH /api/mssp/tenants/{id}/external-siem` with fresh creds (which rolls the adapter). |
 | **Network unreachable** | FQDN egress allow-list missing the host; external Wazuh down; DNS or firewall blocking; wrong URL/port | Adapter / resolver connection times out → `adapter-status` returns `{"reachable": false, "error": "<msg>"}`. Fix by confirming `externalSiemHosts` covers both URLs, the `soctalk-system` egress reaches `:55000`, DNS resolves, and the external Wazuh is up. |
 | **TLS verification failure** | Self-signed external indexer/manager cert with verification on | Connection fails on cert validation. Set `verify_ssl = false` (→ `WAZUH_INDEXER_VERIFY_SSL=false` and resolver `verify=false`) via onboard or the PATCH endpoint when the external cert is self-signed. |
+| **Invalid LLM key** | Wrong/revoked `llm_api_key` supplied at onboard; rotated on the provider side | Provisioning still **succeeds** — the key is not validated at provision time. Runs fail at runtime with provider 401s from the runs-worker's LLM calls. Fix via the detail page's **LLM** panel or `PATCH /api/mssp/tenants/{id}/llm` (which rewrites the Secret and rolls the runs-worker). |
+| **LLM endpoint unreachable** | Custom `llm_base_url` host missing from the rendered egress allow-list | `render.py` derives `networkPolicies.allowedLlmHosts` from the host portion of `llm_base_url`; a policy rendered before a base-URL change drops the runs-worker's LLM egress. A `tenant.reconcile` re-render updates the allow-list (enqueued automatically when a chart-affecting `PATCH /llm` lands on an active tenant). |
 
 The credentials themselves never appear in logs or API responses; only presence
 booleans and masked URLs/usernames are returned. See
