@@ -124,6 +124,7 @@ def render_tenant_values(
     cert_issuer: str | None = None,
     profile: Profile = "poc",
     network_policies_enabled: bool = True,
+    include_llm_api_key: bool = True,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
 
@@ -139,6 +140,16 @@ def render_tenant_values(
             Defaults to the host portion of ``integration.llm_base_url``.
         agent_hostname: public hostname used by Wazuh agents (see wazuh-ingress).
         cert_issuer: cert-manager ClusterIssuer for per-tenant TLS.
+        include_llm_api_key: whether to pass the plaintext LLM key through
+            ``values.llm.apiKey`` so the chart's 25-secrets.yaml materializes
+            ``tenant-llm-key``. MUST be False on the L1 controller path —
+            there the controller already writes ``Secret/tenant-llm-key``
+            directly (``_copy_llm_key_to_tenant_ns``, no Helm ownership
+            metadata), and letting the chart render the same Secret name
+            makes ``helm install`` fail with "invalid ownership metadata".
+            True (default) is for the cross-cluster L2 install-spec path,
+            where no controller pre-writes Secrets on the remote cluster and
+            the chart template is the ONLY way the Secret materializes.
 
     Returns:
         A dict matching ``soctalk-tenant/values.schema.json``.
@@ -189,16 +200,24 @@ def render_tenant_values(
             "provider": integration.llm_provider,
             "baseUrl": integration.llm_base_url,
             "model": integration.llm_model,
-            # Pass the plaintext through so the chart's 25-secrets.yaml
-            # materializes ``tenant-llm-key`` on install. Without this
-            # the chart's ``{{- if .Values.llm.apiKey }}`` guard skips
-            # the Secret, the runs-worker mounts an empty secretKeyRef,
-            # and triage fails with "No LLM API key configured" until
-            # an admin PATCHes /api/mssp/tenants/{id}/llm post-install.
-            # Empty string when the MSSP hasn't seeded a key yet — the
-            # chart treats that as "operator will pre-provision",
-            # matching the original collapsed-tier contract.
-            "apiKey": integration.llm_api_key_plain or "",
+            # Cross-cluster (L2) install-spec path only: pass the
+            # plaintext through so the chart's 25-secrets.yaml
+            # materializes ``tenant-llm-key`` on install — there is no
+            # controller on the remote cluster to pre-write the Secret.
+            # On the L1 controller path ``include_llm_api_key=False``
+            # forces this to "" so the chart's
+            # ``{{- if .Values.llm.apiKey }}`` guard skips the Secret
+            # template: the controller already wrote
+            # ``Secret/tenant-llm-key`` in apply_secrets (per-tenant key
+            # or install-shared fallback), and a chart-rendered Secret
+            # with the same name fails helm install with "invalid
+            # ownership metadata" (the pre-existing Secret has no
+            # meta.helm.sh/release-* annotations).
+            "apiKey": (
+                (integration.llm_api_key_plain or "")
+                if include_llm_api_key
+                else ""
+            ),
             "apiKeyRef": {
                 # Tenant-local Secret. The controller mirrors the
                 # install's shared LLM key into the tenant ns under

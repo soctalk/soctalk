@@ -454,6 +454,39 @@ def test_llm_api_key_empty_when_unset():
     assert v["llm"]["apiKey"] == ""
 
 
+def test_llm_api_key_suppressed_on_controller_path():
+    """``include_llm_api_key=False`` (the L1 controller path) renders
+    ``llm.apiKey`` as "" even when the integration row holds a key.
+
+    Regression: the controller writes ``Secret/tenant-llm-key`` directly
+    in apply_secrets (no Helm ownership metadata). When a per-tenant key
+    was set at onboard, the renderer passed the plaintext through,
+    the chart's ``{{- if .Values.llm.apiKey }}`` guard fired, and helm
+    refused to install: 'Secret "tenant-llm-key" ... exists and cannot
+    be imported into the current release: invalid ownership metadata'.
+    The controller path must keep a single Secret owner (the controller);
+    the plaintext-through-values path is reserved for the cross-cluster
+    L2 install-spec where no controller pre-writes Secrets.
+    """
+    t = _make_tenant("provided")
+    integration = _make_integration(t.id)
+    integration.llm_api_key_plain = "sk-test-llm-key-deadbeef"
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="provided",
+        include_llm_api_key=False,
+    )
+    assert v["llm"]["apiKey"] == ""
+    # The mount reference is untouched — the runs-worker still reads the
+    # controller-written Secret.
+    assert v["llm"]["apiKeyRef"]["name"] == "tenant-llm-key"
+
+
 # ---------------------------------------------------------------------------
 # render_wazuh_values: per-tenant layer
 # ---------------------------------------------------------------------------

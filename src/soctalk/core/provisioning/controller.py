@@ -889,6 +889,17 @@ class TenantController:
             cert_issuer=self.settings.default_cert_issuer,
             profile=ctx.profile,
             network_policies_enabled=self.settings.tenant_network_policies_enabled,
+            # The controller path NEVER ships the plaintext key through
+            # chart values: ``_copy_llm_key_to_tenant_ns`` (apply_secrets,
+            # earlier in this same step list) already wrote
+            # ``Secret/tenant-llm-key`` directly. Letting the chart render
+            # the same Secret name fails install/upgrade with helm's
+            # "invalid ownership metadata" — the controller-written Secret
+            # carries no meta.helm.sh/release-* annotations and helm
+            # refuses to adopt it. ``values.llm.apiKey`` stays for the
+            # cross-cluster L2 install-spec (agents/api.py), where no
+            # controller pre-writes Secrets on the remote cluster.
+            include_llm_api_key=False,
         )
         if self.settings.tenant_values_overlay:
             values = _deep_merge(values, self.settings.tenant_values_overlay)

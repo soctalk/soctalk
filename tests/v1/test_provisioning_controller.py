@@ -756,6 +756,21 @@ async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
         "openai-api-key": "sk-install-MUST-NOT-BE-USED",
     }
 
+    # Record the values handed to helm: the controller path must NOT pass
+    # the plaintext key through values.llm.apiKey — the chart would render
+    # Secret/tenant-llm-key on top of the controller-written one and helm
+    # install fails with "invalid ownership metadata" (live-cluster
+    # regression, tenant a3c).
+    helm_values: list[dict] = []
+
+    async def rec_install_tenant(*_, values=None, **__):
+        helm_values.append(values or {})
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+
     controller = TenantController(
         session, k8s=fake_k8s,
         settings=ControllerSettings(
@@ -774,6 +789,16 @@ async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
     assert not any(
         "soctalk-system-llm-api-key" in c for c in fake_k8s.calls
     ), f"install-wide LLM Secret must not be read: {fake_k8s.calls}"
+    # Single Secret owner: the chart must not also render tenant-llm-key,
+    # so the plaintext key never travels through chart values on this path.
+    assert helm_values, "helm_install_tenant was not invoked"
+    assert helm_values[0]["llm"]["apiKey"] == "", (
+        "controller path must suppress values.llm.apiKey "
+        "(chart-rendered Secret would conflict with the controller-written one)"
+    )
+    assert onboard_key not in str(helm_values), (
+        "plaintext LLM key leaked into helm values on the controller path"
+    )
 
 
 # ---------------------------------------------------------------------------
