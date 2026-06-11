@@ -320,3 +320,35 @@ async def test_run_job_times_out_and_requeues(
     assert row.status == "pending"
     assert "timed out" in (row.last_error or "")
     assert row.claimed_at is None
+
+
+async def test_run_forever_survives_iteration_error(
+    mssp_sessionmaker, seeded_tenant: Tenant
+):
+    """A transient error inside the loop must NOT kill the worker — it
+    logs and keeps polling. Regression for the demo-box wedge where one
+    unhandled error froze the whole provisioning queue until a pod
+    restart (jobs piled up `pending` with zero `in_flight`).
+    """
+    worker = ProvisioningWorker(mssp_sessionmaker, poll_interval=0.01)
+    calls = {"n": 0}
+
+    async def flaky_claim() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient DB blip")
+        if calls["n"] >= 3:
+            await worker.stop()  # let the loop exit cleanly
+        return False
+
+    # No-op the reclaim so we isolate the claim path.
+    async def _noop():
+        return None
+
+    worker._maybe_reclaim_stale = _noop  # type: ignore[assignment]
+    worker._claim_and_run_one = flaky_claim  # type: ignore[assignment]
+
+    # If the error escaped, run_forever would raise here. It must not.
+    await asyncio.wait_for(worker.run_forever(), timeout=5)
+    # Proves it kept looping past the error (>=3 iterations, not 1).
+    assert calls["n"] >= 3

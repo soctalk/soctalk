@@ -82,12 +82,25 @@ class ProvisioningWorker:
     async def run_forever(self) -> None:
         logger.info("provisioning_worker_start", worker_id=self._worker_id)
         while not self._stop_event.is_set():
-            # Reclaim before claiming: a crashed worker's in_flight row
-            # may be blocking a replacement (partial unique index on the
-            # active status set). Cheap — bounded by how many rows went
-            # stale since last pass.
-            await self._maybe_reclaim_stale()
-            claimed = await self._claim_and_run_one()
+            try:
+                # Reclaim before claiming: a crashed worker's in_flight row
+                # may be blocking a replacement (partial unique index on the
+                # active status set). Cheap — bounded by how many rows went
+                # stale since last pass.
+                await self._maybe_reclaim_stale()
+                claimed = await self._claim_and_run_one()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # NEVER let a transient error (DB blip, k8s API hiccup)
+                # escape the loop — that kills the worker task while the
+                # API pod keeps serving, silently freezing the whole queue
+                # until a manual pod restart. Log and keep polling.
+                logger.exception(
+                    "provisioning_worker_iteration_error",
+                    worker_id=self._worker_id,
+                )
+                claimed = False
             if not claimed:
                 try:
                     await asyncio.wait_for(
