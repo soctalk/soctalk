@@ -27,18 +27,28 @@ INSTALL_SENTINEL=/var/lib/soctalk-firstboot.done
 # unit has Before this unit (set via firstboot.service [Unit] section),
 # so this loop is normally a no-op for the cloud-init path; it only
 # matters when the wizard is the source of values.
-WAIT_DEADLINE=$(( $(date +%s) + 1800 ))
+#
+# Count elapsed time by summing the sleeps, NOT by reading the wall
+# clock: an appliance VM frequently boots with a stale RTC (frozen at
+# image-build time) and corrects forward by hours once systemd-timesyncd
+# syncs. A wall-clock deadline ($(date +%s)+1800) trips instantly on
+# that jump, failing first boot before the operator can finish the
+# wizard. A sleep-counted budget is immune to clock steps.
+WAIT_BUDGET_SECONDS=1800
+WAIT_POLL_SECONDS=5
+waited=0
 while [[ ! -s "$VALUES" || ! -s "$LLM_KEY" ]]; do
   if [[ -f "$INSTALL_SENTINEL" ]]; then
     echo "install sentinel present; nothing to do"
     exit 0
   fi
-  if [[ $(date +%s) -ge $WAIT_DEADLINE ]]; then
+  if (( waited >= WAIT_BUDGET_SECONDS )); then
     echo "ERROR: timed out waiting for /etc/soctalk/values.yaml and /etc/soctalk/llm.key"
     echo "  (expected from cloud-init user-data OR from the setup wizard)"
     exit 1
   fi
-  sleep 5
+  sleep "$WAIT_POLL_SECONDS"
+  waited=$(( waited + WAIT_POLL_SECONDS ))
 done
 
 echo "==> values + llm key ready, proceeding to install"
