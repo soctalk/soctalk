@@ -232,3 +232,91 @@ async def test_claim_skips_rows_whose_next_attempt_is_in_the_future(
     async with mssp_sessionmaker() as s:
         claimed = await worker._claim(s)
     assert claimed is None
+
+
+# ---------------------------------------------------------------------------
+# Terminal-tenant guard + job timeout
+# ---------------------------------------------------------------------------
+
+
+async def test_run_job_abandons_terminal_tenant(
+    mssp_sessionmaker, admin_session: AsyncSession, seeded_tenant: Tenant
+):
+    """A queued job whose tenant was archived after enqueue must be failed
+    terminally without invoking the controller — running it would at best
+    fail lifecycle assertions and at worst hang the single-coroutine queue
+    (the exact failure observed on demo.soctalk.ai, 2026-06-11).
+    """
+    await admin_session.execute(
+        text("UPDATE tenants SET state = 'archived' WHERE id = :tid"),
+        {"tid": str(seeded_tenant.id)},
+    )
+    await admin_session.commit()
+
+    async with mssp_sessionmaker() as s:
+        job = ProvisioningJob(
+            tenant_id=seeded_tenant.id,
+            kind="tenant.provision",
+            status="in_flight",
+            claimed_at=datetime.utcnow(),
+            claimed_by="me",
+            attempts=1,
+        )
+        s.add(job)
+        await s.commit()
+        job_id = job.id
+        job_detached = job
+
+    worker = ProvisioningWorker(mssp_sessionmaker)
+    await worker._run_job(job_detached)
+
+    async with mssp_sessionmaker() as s:
+        row = (
+            await s.execute(
+                select(ProvisioningJob).where(ProvisioningJob.id == job_id)
+            )
+        ).scalar_one()
+    # Terminal failure regardless of remaining retry budget.
+    assert row.status == "failed"
+    assert "terminal state" in (row.last_error or "")
+
+
+async def test_run_job_times_out_and_requeues(
+    mssp_sessionmaker, seeded_tenant: Tenant, monkeypatch
+):
+    """A dispatch that hangs past ``job_timeout_seconds`` is cancelled and
+    the job re-enters the retry/backoff path instead of wedging the queue.
+    """
+    async with mssp_sessionmaker() as s:
+        job = ProvisioningJob(
+            tenant_id=seeded_tenant.id,
+            kind="tenant.provision",
+            status="in_flight",
+            claimed_at=datetime.utcnow(),
+            claimed_by="me",
+            attempts=1,
+        )
+        s.add(job)
+        await s.commit()
+        job_id = job.id
+        job_detached = job
+
+    worker = ProvisioningWorker(mssp_sessionmaker, job_timeout_seconds=0.05)
+
+    async def _hang(_job):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(worker, "_dispatch", _hang)
+    await worker._run_job(job_detached)
+
+    async with mssp_sessionmaker() as s:
+        row = (
+            await s.execute(
+                select(ProvisioningJob).where(ProvisioningJob.id == job_id)
+            )
+        ).scalar_one()
+    # attempts=1 < max_attempts, so the timeout lands it back in pending
+    # with backoff — not failed, not stuck in_flight.
+    assert row.status == "pending"
+    assert "timed out" in (row.last_error or "")
+    assert row.claimed_at is None

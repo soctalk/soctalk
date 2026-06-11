@@ -25,7 +25,7 @@ from soctalk.core.provisioning.controller import (
     TenantController,
     TenantLifecycleError,
 )
-from soctalk.core.tenancy.models import ProvisioningJob
+from soctalk.core.tenancy.models import ProvisioningJob, Tenant, TenantState
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -37,6 +37,18 @@ DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_BACKOFF_BASE_SECONDS = 30.0
 DEFAULT_STALE_CLAIM_SECONDS = 900.0  # 15 min — longer than wazuh readiness
 DEFAULT_RECLAIM_INTERVAL_SECONDS = 60.0
+# Hard cap on a single job execution. MUST stay below the stale-claim
+# window: the local asyncio cancel has to fire before another worker
+# reclaims the row, or the same job can end up running twice.
+DEFAULT_JOB_TIMEOUT_SECONDS = 840.0
+
+# Tenants in these states can never be provisioned or decommissioned
+# again; running a queued job against one would at best fail the
+# lifecycle assertions and at worst hang against deleted namespaces
+# (a hung job blocks the whole queue — single coroutine per replica).
+_TERMINAL_TENANT_STATES = frozenset(
+    {TenantState.ARCHIVED.value, TenantState.PURGED.value}
+)
 
 
 class ProvisioningWorker:
@@ -55,6 +67,7 @@ class ProvisioningWorker:
         backoff_base: float = DEFAULT_BACKOFF_BASE_SECONDS,
         stale_claim_seconds: float = DEFAULT_STALE_CLAIM_SECONDS,
         reclaim_interval_seconds: float = DEFAULT_RECLAIM_INTERVAL_SECONDS,
+        job_timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS,
     ) -> None:
         self._sf = session_factory
         self._worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
@@ -62,6 +75,7 @@ class ProvisioningWorker:
         self._backoff_base = backoff_base
         self._stale_claim_seconds = stale_claim_seconds
         self._reclaim_interval_seconds = reclaim_interval_seconds
+        self._job_timeout_seconds = job_timeout_seconds
         self._stop_event = asyncio.Event()
         self._last_reclaim_at = 0.0
 
@@ -171,27 +185,73 @@ class ProvisioningWorker:
         )
         return job
 
+    async def _tenant_state(self, tenant_id) -> str | None:
+        async with self._sf() as session:
+            return (
+                await session.execute(
+                    select(Tenant.state).where(Tenant.id == tenant_id)
+                )
+            ).scalar_one_or_none()
+
+    async def _dispatch(self, job: ProvisioningJob) -> None:
+        async with self._sf() as session:
+            controller = TenantController(session)
+            if job.kind == "tenant.provision":
+                await controller.provision(
+                    job.tenant_id,
+                    actor_id=f"worker:{self._worker_id}",
+                )
+            elif job.kind == "tenant.decommission":
+                await controller.decommission(
+                    job.tenant_id,
+                    actor_id=f"worker:{self._worker_id}",
+                    force=False,
+                )
+            else:
+                raise ProvisionError(
+                    f"unknown job kind: {job.kind}",
+                    step="dispatch",
+                )
+
     async def _run_job(self, job: ProvisioningJob) -> None:
         """Execute a claimed job; record outcome in a fresh session."""
+        # A job may have been enqueued before its tenant was archived or
+        # purged. Abandon it terminally instead of running it.
+        state = await self._tenant_state(job.tenant_id)
+        if state in _TERMINAL_TENANT_STATES:
+            await self._record_failure(
+                job.id,
+                f"tenant in terminal state {state!r}; job abandoned",
+                terminal=True,
+            )
+            logger.warning(
+                "provisioning_job_abandoned_terminal_tenant",
+                job_id=str(job.id),
+                tenant_id=str(job.tenant_id),
+                tenant_state=state,
+            )
+            return
+
         try:
-            async with self._sf() as session:
-                controller = TenantController(session)
-                if job.kind == "tenant.provision":
-                    await controller.provision(
-                        job.tenant_id,
-                        actor_id=f"worker:{self._worker_id}",
-                    )
-                elif job.kind == "tenant.decommission":
-                    await controller.decommission(
-                        job.tenant_id,
-                        actor_id=f"worker:{self._worker_id}",
-                        force=False,
-                    )
-                else:
-                    raise ProvisionError(
-                        f"unknown job kind: {job.kind}",
-                        step="dispatch",
-                    )
+            await asyncio.wait_for(
+                self._dispatch(job), timeout=self._job_timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            # The controller tolerates re-entry from ``provisioning``
+            # state, so a cancelled-mid-flight job is safe to retry via
+            # the normal backoff path.
+            await self._record_failure(
+                job.id,
+                f"job timed out after {self._job_timeout_seconds:.0f}s",
+            )
+            logger.error(
+                "provisioning_job_timeout",
+                job_id=str(job.id),
+                tenant_id=str(job.tenant_id),
+                kind=job.kind,
+                timeout_seconds=self._job_timeout_seconds,
+            )
+            return
         except (ProvisionError, TenantLifecycleError) as e:
             await self._record_failure(job.id, str(e))
             logger.warning(
@@ -231,7 +291,9 @@ class ProvisioningWorker:
             )
             await session.commit()
 
-    async def _record_failure(self, job_id, error_msg: str) -> None:
+    async def _record_failure(
+        self, job_id, error_msg: str, *, terminal: bool = False
+    ) -> None:
         async with self._sf() as session:
             # Fetch to decide terminal vs retriable.
             row = (
@@ -240,28 +302,27 @@ class ProvisioningWorker:
                 )
             ).scalar_one()
 
-            if row.attempts >= row.max_attempts:
-                final_status = "failed"
-                next_attempt = row.next_attempt_at
+            values: dict = {
+                "last_error": error_msg[:2000],
+                "claimed_at": None,
+                "claimed_by": None,
+                "updated_at": datetime.utcnow(),
+            }
+            if terminal or row.attempts >= row.max_attempts:
+                values["status"] = "failed"
+                # Leave next_attempt_at untouched — nothing will run again.
             else:
-                final_status = "pending"
+                values["status"] = "pending"
                 # Capped exponential backoff.
                 backoff = self._backoff_base * (2 ** (row.attempts - 1))
-                next_attempt = datetime.utcnow() + timedelta(
+                values["next_attempt_at"] = datetime.utcnow() + timedelta(
                     seconds=min(backoff, 1800)
                 )
 
             await session.execute(
                 update(ProvisioningJob)
                 .where(ProvisioningJob.id == job_id)
-                .values(
-                    status=final_status,
-                    last_error=error_msg[:2000],
-                    next_attempt_at=next_attempt,
-                    claimed_at=None,
-                    claimed_by=None,
-                    updated_at=datetime.utcnow(),
-                )
+                .values(**values)
             )
             await session.commit()
 
