@@ -301,9 +301,9 @@ print(cur.fetchone()[0])
 done
 (( last_count > 0 )) || {
   warn "no Case created within deadline — dumping diagnostics"
-  echo "== L2 forwarder logs =="
+  echo "== L2 adapter logs =="
   kubectl --context "$L2_CTX" -n "$TENANT_NS" \
-    logs -l app.kubernetes.io/name=soctalk-tenant-forwarder --tail=30 2>&1 || true
+    logs -l app.kubernetes.io/name=soctalk-adapter --tail=30 2>&1 || true
   echo "== L2 mock-endpoint logs =="
   kubectl --context "$L2_CTX" -n "$TENANT_NS" \
     logs -l app.kubernetes.io/name=soctalk-mock-endpoint --tail=15 2>&1 || true
