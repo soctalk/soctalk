@@ -1,0 +1,172 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// installWorker consumes installRequest from state.installCh. v3 design
+// (codex feedback): the wizard does NOT run helm. It writes config
+// files + a sentinel, then exits. soctalk-firstboot.service (the
+// existing installer) then runs the helm install with the supplied
+// values. This keeps the wizard a thin "values/secret generator" and
+// reuses the install path that already works for the cloud-init case.
+func installWorker(s *serverState) {
+	for req := range s.installCh {
+		s.updateStatus("running", "writing values file", "", "")
+		if err := writeConfig(s, req); err != nil {
+			s.updateStatus("error", "failed to write config files", "", err.Error())
+			continue
+		}
+
+		// Drop the wizard's done-sentinel — firstboot.service polls
+		// for it (or for cloud-init's values.yaml) before starting.
+		if err := os.WriteFile(s.wizardSentinelPath, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+			s.updateStatus("error", "wrote config but failed to mark wizard sentinel", "", err.Error())
+			continue
+		}
+
+		// Tell the customer where to go. We can't easily wait for
+		// helm install to finish here without re-implementing the
+		// installer; instead we hand them the UI URL plus a hint
+		// that boot is still progressing.
+		ui := uiURL(req.Hostname)
+		s.updateStatus("success",
+			"config saved. Installer is running in the background — give it ~3 minutes, then open the SocTalk URL.",
+			ui, "")
+
+		// Give the customer's poller time to grab the success
+		// response, then exit. systemd will not re-fire because of
+		// ConditionPathExists=!sentinel.
+		go func() {
+			time.Sleep(3 * time.Second)
+			os.Exit(0)
+		}()
+	}
+}
+
+func writeConfig(s *serverState, req installRequest) error {
+	if err := os.MkdirAll(filepath.Dir(s.valuesPath), 0o755); err != nil {
+		return err
+	}
+	values, err := renderValues(req)
+	if err != nil {
+		return fmt.Errorf("render values: %w", err)
+	}
+	// 0640 root:root — installer (running as root) reads, world cannot.
+	if err := os.WriteFile(s.valuesPath, []byte(values), 0o640); err != nil {
+		return fmt.Errorf("write values: %w", err)
+	}
+	if err := os.WriteFile(s.llmKeyPath, []byte(req.LLMAPIKey+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write llm.key: %w", err)
+	}
+	// Drop a shell-sourced env file with what firstboot.sh needs for the
+	// post-helm-install demo tenant onboarding step. Mirrors poc-funnel's
+	// cloud-init pattern. Slug is hardcoded "demo" — matches the demo
+	// box's seeded tenant.
+	host := req.Hostname
+	if host == "" {
+		host = "soctalk.local"
+	}
+	tenantName := req.MSSPName + " — Demo"
+	envContents := fmt.Sprintf(
+		"ADMIN_EMAIL=%s\nADMIN_PW=%s\nINGRESS_HOST=%s\nTENANT_SLUG=demo\nTENANT_NAME=%s\n",
+		shellQuote(req.AdminEmail),
+		shellQuote(req.AdminPW),
+		shellQuote(host),
+		shellQuote(tenantName),
+	)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(s.valuesPath), "onboard.env"), []byte(envContents), 0o600); err != nil {
+		return fmt.Errorf("write onboard.env: %w", err)
+	}
+	return nil
+}
+
+// shellQuote returns the string single-quoted, with embedded single
+// quotes escaped via the standard '\'' pattern. Safe for "VAR=$value"
+// shell-source files.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func renderValues(req installRequest) (string, error) {
+	msspID := uuid.New().String()
+	installID := uuid.New().String()
+	// Ingress hostnames MUST be DNS names (k8s rejects IP addresses on
+	// spec.rules[0].host). When the customer doesn't supply a hostname,
+	// use a placeholder DNS name for the Ingress. The auth layer derives
+	// the CSRF-acceptable Origin from ingress.hostnames, so the
+	// in-cluster onboarding curl (which sends Host: soctalk.local) and
+	// a browser that maps soctalk.local in /etc/hosts both pass the
+	// Origin check. We deliberately do NOT set auth.publicOriginOverride —
+	// setting it to the IP would block the legitimate soctalk.local
+	// Origin, and setting it to soctalk.local would be redundant.
+	host := req.Hostname
+	if host == "" {
+		host = "soctalk.local"
+	}
+
+	provider := req.LLMProvider
+
+	// NOTE: the installer reads /etc/soctalk/llm.key separately and
+	// creates the Secret from it (matches existing poc-funnel flow).
+	// We don't embed the key in values.yaml — codex's "no secrets in
+	// helm release history" concern.
+	// Matches demo.soctalk.ai's working values.yaml pattern. The chart's
+	// defaults handle defaults.llm.provider and llm.provider (which are
+	// strictly enum-typed in the schema — over-specifying them breaks
+	// helm install). The runtime uses both anthropic-api-key and
+	// openai-api-key data fields in the Secret created by firstboot.sh
+	// and picks based on chart-side env var defaults.
+	_ = provider  // chart picks from the Secret keys; provider field reserved for future explicit chart support
+
+	return fmt.Sprintf(`# Generated by soctalk-setup-wizard at %s. Do not hand-edit.
+install:
+  msspId: %q
+  msspName: %q
+  installId: %q
+  installLabel: "demo"
+  bootstrapAdmin:
+    email: %q
+    password: %q
+image:
+  registry: ghcr.io/soctalk
+  tag: "latest"
+ingress:
+  enabled: true
+  className: traefik
+  tls:
+    issuerRef: ""
+    secretName: soctalk-tls
+  hostnames:
+    mssp: %q
+    customer: %q
+postgres:
+  enabled: true
+  storage:
+    size: 20Gi
+preInstallCheck:
+  enabled: false
+`,
+		time.Now().UTC().Format(time.RFC3339),
+		msspID, req.MSSPName, installID,
+		req.AdminEmail, req.AdminPW,
+		host, host,
+	), nil
+}
+
+func uiURL(hostname string) string {
+	if hostname == "" {
+		ips := localIPs()
+		if len(ips) > 0 {
+			return "https://" + ips[0].String() + "/login"
+		}
+		return "https://soctalk.local/login"
+	}
+	return "https://" + hostname + "/login"
+}

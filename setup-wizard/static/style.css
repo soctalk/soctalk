@@ -1,0 +1,76 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #ef4444;
+  --error: #f87171;
+  --border: #334155;
+  --field: #0b1220;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 -apple-system, system-ui, sans-serif;
+}
+main {
+  max-width: 640px;
+  margin: 4rem auto;
+  padding: 2rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+h1 { font-size: 1.5rem; margin: 0 0 .5rem 0; }
+h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem 0; }
+.lede { color: var(--muted); margin-bottom: 2rem; }
+.hint { color: var(--muted); font-size: .85em; font-weight: normal; }
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 0 0 1.5rem 0;
+}
+legend { font-weight: 600; padding: 0 .5rem; }
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+input, select {
+  width: 100%;
+  padding: .6rem .75rem;
+  margin-top: .35rem;
+  background: var(--field);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+button {
+  width: 100%;
+  padding: .9rem;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: .6; cursor: wait; }
+#status { margin-top: 1rem; }
+#status-err { color: var(--error); font-size: .85em; white-space: pre-wrap; word-break: break-all; }
+#ui-link {
+  display: inline-block;
+  margin-top: 1rem;
+  color: var(--accent);
+  font-weight: 600;
+}

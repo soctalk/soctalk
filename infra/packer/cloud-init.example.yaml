@@ -1,0 +1,60 @@
+#cloud-config
+# What the customer pastes into the cloud's "User Data" field (or
+# `qm set --cicustom user=...` on Proxmox) when launching from a
+# SocTalk demo image.
+#
+# Replace the four placeholder values:
+#   - hostname
+#   - SSH authorized_keys
+#   - ingress hostnames (mssp / customer)
+#   - the LLM API key in write_files
+
+hostname: soctalk.example.com
+
+users:
+  - name: ops
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA...replace-me ops@example.com
+
+write_files:
+  # 1. Helm values for soctalk-system. firstboot reads this verbatim.
+  - path: /etc/soctalk/values.yaml
+    permissions: '0644'
+    content: |
+      install:
+        msspName: "Acme Security"
+        installLabel: "demo"
+        bootstrapAdmin:
+          email: "ops@soctalk.example.com"
+          password: "change-me-on-first-login"
+      image:
+        registry: ghcr.io/soctalk
+        tag: "latest"
+      ingress:
+        enabled: true
+        className: traefik
+        tls:
+          issuerRef: letsencrypt-prod
+          secretName: soctalk-tls
+        hostnames:
+          mssp: soctalk.example.com
+          customer: soctalk.example.com
+      postgres:
+        enabled: true
+        storage:
+          size: 20Gi
+      preInstallCheck:
+        enabled: false
+
+  # 2. LLM API key. firstboot loads this into the
+  #    soctalk-system-llm-api-key Secret.
+  - path: /etc/soctalk/llm.key
+    permissions: '0600'
+    content: |
+      sk-ant-api03-replace-with-your-key
+
+# No runcmd needed — the systemd unit baked into the image fires
+# automatically once cloud-init has finished. To inspect progress:
+#   journalctl -u soctalk-firstboot -f

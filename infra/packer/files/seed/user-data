@@ -1,0 +1,11 @@
+#cloud-config
+# Build-time seed only. Grants Packer SSH access while the image is being
+# built; cloud-init clean at the end of the build wipes this so the
+# resulting image is reusable.
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: packer
+ssh_pwauth: true

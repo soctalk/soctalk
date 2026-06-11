@@ -1,0 +1,50 @@
+[Unit]
+Description=SocTalk first-boot setup wizard (collects config, exits)
+# Hook into cloud-init.target (NOT multi-user.target) to:
+#  1) avoid an ordering cycle: WantedBy=multi-user.target +
+#     After=cloud-final.service creates a cycle through cloud-init →
+#     multi-user, which systemd resolves by silently deleting our job.
+#  2) guarantee cloud-init has finished BEFORE we bind :8443, so a
+#     cloud-init-supplied values.yaml lands on disk before our
+#     ConditionPathExists checks evaluate.
+After=cloud-init.target network-online.target
+Wants=network-online.target
+# Skip entirely on any subsequent boot once a sentinel exists OR
+# values.yaml is already present.
+ConditionPathExists=!/var/lib/soctalk-firstboot.done
+ConditionPathExists=!/var/lib/soctalk-wizard.done
+ConditionPathExists=!/etc/soctalk/values.yaml
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/soctalk-setup-wizard
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal+console
+StandardError=journal+console
+
+# Hardening (codex review: be explicit, not handwave).
+# We need root because we write to /etc/soctalk and /var/lib, but we
+# don't need most capabilities.
+User=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_CHOWN CAP_DAC_OVERRIDE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# We need to write these specific paths.
+ReadWritePaths=/etc/soctalk /var/log /var/lib/soctalk-wizard /var/lib
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=cloud-init.target

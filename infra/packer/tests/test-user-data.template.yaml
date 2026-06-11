@@ -1,0 +1,41 @@
+#cloud-config
+# User-data for boot-test CI runs only. NOT for customer distribution
+# (see cloud-init.example.yaml at the package root).
+#
+# The CI step substitutes ${SSH_PUBKEY} with the public half of an
+# ephemeral keypair it generates before booting the VM.
+hostname: soctalk-boot-test
+
+users:
+  - name: ops
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${SSH_PUBKEY}
+
+write_files:
+  - path: /etc/soctalk/values.yaml
+    permissions: '0644'
+    content: |
+      install:
+        msspName: "CI boot-test"
+        installLabel: "test"
+        bootstrapAdmin:
+          email: "ops@soctalk-boot-test.local"
+          password: "boot-test-password"
+      image:
+        registry: ghcr.io/soctalk
+        tag: "latest"
+      ingress:
+        enabled: false
+      postgres:
+        enabled: true
+        storage:
+          size: 20Gi
+      preInstallCheck:
+        enabled: false
+
+  - path: /etc/soctalk/llm.key
+    permissions: '0600'
+    content: |
+      sk-ant-api03-placeholder-ci-boot-test

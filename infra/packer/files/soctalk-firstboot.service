@@ -1,0 +1,19 @@
+[Unit]
+Description=SocTalk first-boot setup (k3s + helm install)
+# Hook into cloud-init.target (not multi-user.target) to avoid the
+# After=cloud-final.service ⇄ WantedBy=multi-user.target ordering
+# cycle that systemd silently resolves by deleting our job.
+After=cloud-init.target soctalk-setup-wizard.service network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/soctalk-firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/soctalk-firstboot
+RemainAfterExit=true
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=20m
+
+[Install]
+WantedBy=cloud-init.target

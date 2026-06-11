@@ -1,0 +1,36 @@
+# Example soctalk-system helm values consumed by /usr/local/bin/soctalk-firstboot.
+# The customer's cloud-init writes the real file at /etc/soctalk/values.yaml.
+# This file is shipped on the image only as a reference.
+install:
+  msspName: "Demo MSSP"
+  installLabel: "demo"
+  bootstrapAdmin:
+    email: "ops@change-me.example"
+    # Change after first login. Optional — leave unset to disable
+    # initial password auth and require post-install bootstrap.
+    password: ""
+
+image:
+  registry: ghcr.io/soctalk
+  tag: "latest"
+
+ingress:
+  enabled: true
+  className: traefik
+  tls:
+    issuerRef: letsencrypt-prod
+    secretName: soctalk-tls
+  hostnames:
+    # Replace with the hostname you set on the VM.
+    mssp: "soctalk.example.com"
+    customer: "soctalk.example.com"
+
+postgres:
+  enabled: true
+  storage:
+    size: 20Gi
+
+# Skip the cluster-prereqs check on single-node demo VMs (no MetalLB,
+# no external load balancer; ingress is k3s's bundled Traefik).
+preInstallCheck:
+  enabled: false

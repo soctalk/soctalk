@@ -1,0 +1,387 @@
+name: Build Packer Demo Images
+
+# Builds the SocTalk demo VM image via Packer. Currently only the QEMU
+# (QCOW2) source is built in CI — the AWS AMI source needs AWS creds
+# wired up separately.
+#
+# Manual only. Image builds are expensive (~10-15 min + nontrivial CI
+# minutes + multi-GB artifacts), and most code changes don't warrant
+# a fresh image. Fire intentionally when you have a new release to
+# distribute:
+#
+#   gh workflow run build-packer-images.yml -f version=0.1.0
+#
+# Output: a compressed QCOW2 image uploaded as a workflow artifact.
+# Attached to the GitHub Release if the workflow is fired from a v*
+# tag context (workflow_dispatch from a tag ref).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version tag (e.g. 0.1.0). Used in filename + AMI name."
+        required: false
+        default: "dev"
+      soctalk_chart_version:
+        description: "soctalk-system chart version to pre-pull into the image."
+        required: false
+        default: "0.1.0"
+
+permissions:
+  contents: write   # for attaching artifacts to releases on v* tags
+
+concurrency:
+  group: build-packer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-wizard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: setup-wizard/go.mod
+          cache-dependency-path: setup-wizard/go.sum
+      - name: Build wizard binary
+        working-directory: setup-wizard
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags='-s -w' -o ../infra/packer/build-artifacts/soctalk-setup-wizard ./...
+          ls -lh ../infra/packer/build-artifacts/soctalk-setup-wizard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-setup-wizard-binary
+          path: infra/packer/build-artifacts/soctalk-setup-wizard
+          if-no-files-found: error
+          retention-days: 14
+
+  build-qcow2:
+    needs: build-wizard
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: infra/packer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: '1.11.2'
+
+      - name: Install QEMU + cloud-image-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            cloud-image-utils \
+            xz-utils
+
+      - name: Detect KVM
+        id: kvm
+        run: |
+          # GitHub Actions ubuntu-22.04+ runners ship with nested KVM
+          # since early 2024. If /dev/kvm is missing, fall back to TCG
+          # (slower but works).
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "KVM available — using hardware acceleration."
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "KVM unavailable — falling back to TCG emulation (slow)."
+          fi
+
+      - name: Disk space (pre-build)
+        run: df -h /
+
+      - name: Download wizard binary
+        uses: actions/download-artifact@v4
+        with:
+          name: soctalk-setup-wizard-binary
+          path: infra/packer/build-artifacts/
+      - name: Mark wizard binary executable
+        # working-directory above resolves to infra/packer, so this is
+        # build-artifacts/soctalk-setup-wizard (NOT infra/packer/build-artifacts/...)
+        run: |
+          chmod 755 build-artifacts/soctalk-setup-wizard
+          ls -lh build-artifacts/
+
+      - name: packer init
+        run: packer init .
+
+      - name: packer validate
+        env:
+          PKR_VAR_version: ${{ inputs.version || 'dev' }}
+          PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
+        run: packer validate .
+
+      - name: packer build (qemu source)
+        env:
+          PKR_VAR_version: ${{ inputs.version || github.ref_name }}
+          PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
+          # Packer's QEMU builder honors PACKER_LOG=1 for verbose output.
+          PACKER_LOG: '1'
+        run: |
+          # If KVM unavailable, the .pkr.hcl's accelerator="kvm" would
+          # error out. Override to tcg via -var when that's the case.
+          if [ "${{ steps.kvm.outputs.available }}" = "true" ]; then
+            packer build -only="soctalk-demo.qemu.soctalk_demo" .
+          else
+            # Override accelerator via env (Packer doesn't expose CLI
+            # var-overrides for nested block fields, so we'd need a
+            # variable in the .pkr.hcl. For the starter we rely on KVM
+            # being available on modern runners — if this branch is
+            # hit, file an issue and we'll plumb a `qemu_accelerator`
+            # variable through soctalk-demo.pkr.hcl.
+            echo "::error::KVM unavailable; TCG fallback not yet wired up. Re-run on a KVM-capable runner."
+            exit 1
+          fi
+
+      - name: Disk space (post-build)
+        if: always()
+        run: df -h /
+
+      - name: Verify all formats produced + sizes
+        run: |
+          ls -lh build/dist/
+          # The post-processor emits qcow2, vmdk, vhdx, vhd, raw.
+          # Fail fast if any one is missing so we don't ship a partial release.
+          for ext in qcow2 vmdk vhdx vhd raw; do
+            test -f "build/dist/soctalk-demo-${{ inputs.version || 'dev' }}.${ext}" \
+              || { echo "::error::missing build/dist/*.${ext}"; exit 1; }
+          done
+
+      - name: Compress all formats (xz -9, parallel)
+        run: |
+          # raw and vhd are sparse-friendly; xz crushes both. vmdk
+          # streamOptimized is already deflate-compressed but xz still
+          # gains ~5-10% — worth it for download size.
+          cd build/dist
+          for f in *.qcow2 *.vmdk *.vhdx *.vhd *.raw; do
+            echo "==> compressing $f"
+            xz -T0 -9 "$f"
+          done
+          ls -lh
+
+      - name: Compute SHA256 sums
+        run: |
+          cd build/dist
+          sha256sum *.xz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload qcow2 artifact (KVM / Proxmox / libvirt)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-qcow2
+          path: infra/packer/build/dist/*.qcow2.xz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload vmdk artifact (VMware / VirtualBox)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-vmdk
+          path: infra/packer/build/dist/*.vmdk.xz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload vhdx artifact (Hyper-V)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-vhdx
+          path: infra/packer/build/dist/*.vhdx.xz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload vhd artifact (Azure)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-vhd
+          path: infra/packer/build/dist/*.vhd.xz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload raw artifact (generic cloud import)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-raw
+          path: infra/packer/build/dist/*.raw.xz
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-checksums
+          path: infra/packer/build/dist/SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Attach all formats to GitHub Release (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            infra/packer/build/dist/*.xz
+            infra/packer/build/dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+
+  boot-test:
+    # Boot the qcow2 in a fresh KVM VM, wait for soctalk-firstboot to
+    # complete, then run the Playwright validator against the SocTalk
+    # control plane via SSH-tunneled kubectl port-forwards. Fails the
+    # workflow if the image is broken so we don't ship it.
+    needs: build-qcow2
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: infra/packer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + cloud-image-utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils xz-utils
+
+      - name: Enable KVM
+        run: sudo chmod 666 /dev/kvm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Download QCOW2 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: soctalk-demo-qcow2
+          path: infra/packer/
+
+      - name: Decompress qcow2
+        run: |
+          xz -d *.qcow2.xz
+          ls -lh *.qcow2
+
+      - name: Generate ephemeral SSH key + seed.iso
+        run: |
+          ssh-keygen -t ed25519 -N '' -f bt_key -C 'boot-test@github-actions'
+          SSH_PUBKEY="$(cat bt_key.pub)" envsubst < tests/test-user-data.template.yaml > user-data
+          echo "instance-id: boot-test" > meta-data
+          cloud-localds seed.iso user-data meta-data
+          ls -la seed.iso bt_key bt_key.pub
+
+      - name: Boot VM in background
+        run: |
+          set -euo pipefail
+          QCOW=$(ls *.qcow2 | head -1)
+          nohup qemu-system-x86_64 -name boot-test \
+            -m 8G -smp 2 -enable-kvm -cpu host \
+            -drive file=$QCOW,format=qcow2,if=virtio \
+            -drive file=seed.iso,format=raw,if=virtio,readonly=on \
+            -netdev user,id=net0,hostfwd=tcp::8022-:22 \
+            -device virtio-net,netdev=net0 \
+            -nographic -display none \
+            -serial file:qemu.log \
+            >/dev/null 2>&1 &
+          echo $! > qemu.pid
+          echo "QEMU pid $(cat qemu.pid)"
+
+      - name: Wait for SSH on VM
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            if ssh -i bt_key -o StrictHostKeyChecking=accept-new \
+                   -o ConnectTimeout=3 -o BatchMode=yes \
+                   -p 8022 ops@127.0.0.1 'true' 2>/dev/null; then
+              echo "SSH up after $((i*5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "SSH never came up — serial console tail:"
+          tail -50 qemu.log
+          exit 1
+
+      - name: Wait for soctalk-firstboot
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            state=$(ssh -i bt_key -p 8022 -o BatchMode=yes ops@127.0.0.1 \
+                    'systemctl is-active soctalk-firstboot' 2>/dev/null || echo "?")
+            echo "t+${i}m firstboot=$state"
+            if [ "$state" = "inactive" ]; then
+              echo "soctalk-firstboot completed (inactive=done, ConditionPathExists fires)"
+              exit 0
+            fi
+            if [ "$state" = "failed" ]; then
+              echo "firstboot FAILED:"
+              ssh -i bt_key -p 8022 ops@127.0.0.1 \
+                'sudo journalctl -u soctalk-firstboot --no-pager -n 50'
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "firstboot didn't complete in 30 minutes"
+          ssh -i bt_key -p 8022 ops@127.0.0.1 \
+            'sudo journalctl -u soctalk-firstboot --no-pager -n 50' || true
+          exit 1
+
+      - name: Confirm pods are Running
+        run: |
+          ssh -i bt_key -p 8022 ops@127.0.0.1 \
+            'sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n soctalk-system get pods'
+
+      - name: Start kubectl port-forwards inside VM
+        run: |
+          set -e
+          ssh -i bt_key -p 8022 ops@127.0.0.1 \
+            'sudo bash -c "setsid kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n soctalk-system port-forward svc/soctalk-system-app-ui 3000:3000 >/tmp/pf-ui.log 2>&1 </dev/null &"; \
+             sudo bash -c "setsid kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml -n soctalk-system port-forward svc/soctalk-system-api 8000:8000 >/tmp/pf-api.log 2>&1 </dev/null &"'
+          sleep 3
+          ssh -i bt_key -p 8022 ops@127.0.0.1 'cat /tmp/pf-ui.log /tmp/pf-api.log'
+
+      - name: Open laptop->VM SSH tunnels
+        run: |
+          ssh -i bt_key -p 8022 -L 3000:localhost:3000 -L 8000:localhost:8000 \
+              -N -f -o ExitOnForwardFailure=yes ops@127.0.0.1
+          sleep 1
+          ss -tlnp 2>/dev/null | grep -E ':3000|:8000' || true
+
+      - name: Run Playwright validator
+        env:
+          QCOW_UI_URL: http://localhost:3000
+          QCOW_API_URL: http://localhost:8000
+        run: python tests/qcow_validate.py
+
+      - name: Upload validation screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcow-validate-screenshot
+          path: /tmp/qcow-validate.png
+          if-no-files-found: ignore
+
+      - name: Upload qemu serial log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcow-validate-qemu-log
+          path: infra/packer/qemu.log
+          if-no-files-found: ignore
+
+      - name: Tear down VM
+        if: always()
+        run: |
+          [ -f qemu.pid ] && sudo kill $(cat qemu.pid) 2>/dev/null || true

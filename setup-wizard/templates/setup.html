@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SocTalk first-boot setup</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+</head>
+<body>
+  <main>
+    <h1>SocTalk first-boot setup</h1>
+    <p class="lede">
+      This box is unconfigured. SSH in to retrieve the setup token
+      (<code>sudo cat /var/log/soctalk-setup-token</code>), then paste
+      it below.
+    </p>
+
+    {{ if not .Authenticated }}
+    <form method="POST" action="/auth" id="auth-form">
+      <fieldset>
+        <legend>Authenticate</legend>
+        <label>
+          Setup token
+          <input name="token" required autocomplete="off" autofocus>
+        </label>
+      </fieldset>
+      <button type="submit">Unlock setup</button>
+    </form>
+    {{ else }}
+    <form method="POST" action="/submit" id="setup-form">
+      <input type="hidden" name="csrf" value="{{ .CSRF }}">
+
+      <fieldset>
+        <legend>Identity</legend>
+
+        <label>
+          MSSP / organization name
+          <input name="mssp_name" required maxlength="120" placeholder="Acme Security">
+        </label>
+
+        <label>
+          Hostname <span class="hint">(optional FQDN; leave blank to use box IP)</span>
+          <input name="hostname" pattern="[A-Za-z0-9.\-]*" maxlength="253" placeholder="soctalk.acme.example">
+        </label>
+
+        <label>
+          Admin email
+          <input name="admin_email" type="email" required placeholder="ops@acme.example">
+        </label>
+
+        <label>
+          Admin password <span class="hint">(min 12 chars)</span>
+          <input name="admin_pw" type="password" required minlength="12" autocomplete="new-password">
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>LLM</legend>
+
+        <label>
+          Provider
+          <select name="llm_provider" required>
+            {{ range .Providers }}<option value="{{ . }}">{{ . }}</option>{{ end }}
+          </select>
+        </label>
+
+        <label>
+          API key
+          <input name="llm_api_key" type="password" required autocomplete="off" placeholder="sk-...">
+        </label>
+      </fieldset>
+
+      <button type="submit" id="submit">Save config → installer continues</button>
+    </form>
+
+    <section id="status" hidden>
+      <h2>Saving config…</h2>
+      <p id="status-msg">Working…</p>
+      <pre id="status-err"></pre>
+      <a id="ui-link" hidden>Open SocTalk →</a>
+      <p class="hint" id="install-hint" hidden>
+        The wizard has handed off. The installer is now running in the
+        background — give it ~3 minutes, then open the link above.
+      </p>
+    </section>
+
+    <script>
+      const form = document.getElementById('setup-form');
+      const statusBox = document.getElementById('status');
+      const msg = document.getElementById('status-msg');
+      const errBox = document.getElementById('status-err');
+      const link = document.getElementById('ui-link');
+      const hint = document.getElementById('install-hint');
+      const submit = document.getElementById('submit');
+
+      form.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        submit.disabled = true;
+        form.hidden = true;
+        statusBox.hidden = false;
+        const body = new FormData(form);
+        const r = await fetch('/submit', { method: 'POST', body, credentials: 'same-origin' });
+        if (!r.ok) {
+          msg.textContent = 'submit failed';
+          errBox.textContent = await r.text();
+          submit.disabled = false;
+          form.hidden = false;
+          statusBox.hidden = true;
+          return;
+        }
+        const s = await r.json();
+        msg.textContent = s.message || 'Config saved.';
+        if (s.ui_url) {
+          link.href = s.ui_url;
+          link.textContent = 'Open SocTalk: ' + s.ui_url;
+          link.hidden = false;
+        }
+        hint.hidden = false;
+      });
+    </script>
+    {{ end }}
+  </main>
+</body>
+</html>
