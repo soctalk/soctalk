@@ -31,7 +31,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-system
+              kubernetes.io/metadata.name: {{ .Values.ingress.controllerNamespace | default "ingress-system" }}
       ports:
         - port: 8000
     # From adapters in any tenant namespace.
@@ -69,7 +69,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-system
+              kubernetes.io/metadata.name: {{ .Values.ingress.controllerNamespace | default "ingress-system" }}
       ports:
         - port: 3000
 ---

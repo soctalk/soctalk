@@ -158,6 +158,9 @@
         "className": {
           "type": "string"
         },
+        "controllerNamespace": {
+          "type": "string"
+        },
         "annotations": {
           "type": "object"
         },

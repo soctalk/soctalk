@@ -16,6 +16,10 @@ image:
 ingress:
   enabled: true
   className: traefik
+  # The demo runs k3s with its bundled Traefik in kube-system, so the
+  # api/ui ingress NetworkPolicies must admit that namespace (the chart
+  # default `ingress-system` would firewall Traefik out → 502).
+  controllerNamespace: kube-system
   tls:
     issuerRef: letsencrypt-prod
     secretName: soctalk-tls

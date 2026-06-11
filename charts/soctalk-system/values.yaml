@@ -41,6 +41,13 @@ postgres:
 ingress:
   enabled: true
   className: traefik
+  # Namespace the ingress controller runs in — the NetworkPolicies that
+  # gate the api/ui pods only admit traffic from this namespace at L4.
+  # Default `ingress-system` matches a dedicated-controller install; set
+  # to `kube-system` for k3s's bundled Traefik (the demo + appliance
+  # topology), otherwise the controller is firewalled out and every
+  # request 502s.
+  controllerNamespace: ingress-system
   annotations: {}
   tls:
     secretName: soctalk-tls
