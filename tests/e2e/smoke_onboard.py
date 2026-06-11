@@ -59,6 +59,23 @@ def api_login() -> str:
     raise SystemExit("no soctalk_session cookie returned by login")
 
 
+def decommission(sess: str, tenant_id: str) -> None:
+    """Best-effort cleanup so the smoke tenant doesn't accumulate on the
+    demo box (each tenant runs a full Wazuh stack; left to pile up they
+    exhaust node memory and make later runs fail to schedule)."""
+    try:
+        req = urllib.request.Request(
+            f"{BASE}/api/mssp/tenants/{tenant_id}:decommission?force=true",
+            headers={"Cookie": f"soctalk_session={sess}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        print(f"  decommissioned {tenant_id}", flush=True)
+    except Exception as e:
+        print(f"  cleanup warning: decommission failed: {e}", flush=True)
+
+
 step(f"0. API login at {BASE}")
 sess = api_login()
 print(f"  cookie acquired ({len(sess)} chars)", flush=True)
@@ -125,12 +142,18 @@ with sync_playwright() as p:
             print(f"  active. runtime.health={health}", flush=True)
             final_state = "active"
             break
-        if state in ("failed", "error"):
+        # `degraded` is terminal for the smoke: provisioning failed, so
+        # fail fast instead of polling to the timeout.
+        if state in ("failed", "error", "degraded"):
             final_state = state
             break
         time.sleep(15)
 
     browser.close()
+
+# Always clean up the tenant we created — pass or fail — so the demo box
+# doesn't accumulate Wazuh stacks across runs.
+decommission(sess, tenant_id)
 
 if final_state == "active":
     print("\nSMOKE PASS", flush=True)
