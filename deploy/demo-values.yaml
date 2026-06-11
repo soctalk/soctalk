@@ -1,0 +1,46 @@
+# Helm values for the demo.soctalk.ai install.
+#
+# Values-as-code: this is the full, reviewable config the deploy-demo
+# workflow applies on every push via `helm upgrade --install`. It must
+# contain NO secrets — the bootstrap admin email + password are injected
+# at deploy time from the DEMO_ADMIN_EMAIL / DEMO_ADMIN_PW GitHub secrets
+# (`--set install.bootstrapAdmin.email=... --set ...password=...`).
+#
+# All images pull from ghcr.io/soctalk (the org namespace, where
+# publish-images.yml publishes them) — NOT a personal namespace.
+
+image:
+  registry: ghcr.io/soctalk   # → ghcr.io/soctalk/soctalk-{api,app-ui,...}:<tag>
+  tag: latest                 # demo tracks head of main
+
+ingress:
+  enabled: true
+  className: traefik
+  tls:
+    issuerRef: letsencrypt-prod
+    secretName: soctalk-tls
+  hostnames:
+    mssp: demo.soctalk.ai
+    customer: demo.soctalk.ai
+
+install:
+  msspName: PoC Demo Tenant
+  installLabel: poc
+  bootstrapAdmin:
+    # email + password injected from secrets at deploy time (see header).
+    {}
+
+postgres:
+  enabled: true
+  storage:
+    size: 20Gi
+
+preInstallCheck:
+  enabled: false
+
+# Override the per-tenant adapter / runs-worker image tags away from the
+# render.py default (0.1.13-fixes), which is not published to public
+# ghcr. Demo tenants pull :latest from ghcr.io/soctalk instead.
+tenantProvisioning:
+  adapterImageTag: latest
+  runsWorkerImageTag: latest

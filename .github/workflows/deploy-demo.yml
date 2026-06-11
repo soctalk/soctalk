@@ -16,9 +16,13 @@ name: Deploy to demo.soctalk.ai
 # Required vars (set via `gh variable set`):
 #   DEMO_BASE_URL       https://demo.soctalk.ai (defaults to https://${{ secrets.DEMO_HOST }})
 #
-# The workflow rolls the deployments to the new SHA, waits for rollout
-# to settle, then runs the smoke test. If smoke fails, the workflow
-# exits non-zero — no automatic rollback yet (operator inspects).
+# This is a FULL chart reconcile, not an image roll: every push runs
+# `helm upgrade --install` of the published soctalk-system chart, so new
+# templates, RBAC, NetworkPolicy, config, and image tags all apply. The
+# chart is pulled from ghcr.io/soctalk/charts (verifying the publish
+# pipeline produced it); pods pull images from ghcr.io/soctalk. A
+# completeness gate then fails the deploy if any soctalk-system container
+# can't pull its image. `--atomic` rolls back on failure.
 
 on:
   workflow_run:
@@ -27,8 +31,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      sha:
-        description: "Image SHA to deploy (default: short SHA of main HEAD)"
+      chart_version:
+        description: "soctalk-system chart version to deploy (default: Chart.yaml version)"
         required: false
         default: ""
 
@@ -45,24 +49,24 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     outputs:
-      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           # workflow_run gives us the SHA of the originating run; use it.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Resolve image SHA
+      - name: Resolve chart version
         id: resolve
         run: |
           set -euo pipefail
-          if [[ -n "${{ inputs.sha }}" ]]; then
-            sha="${{ inputs.sha }}"
+          if [[ -n "${{ inputs.chart_version }}" ]]; then
+            ver="${{ inputs.chart_version }}"
           else
-            sha="${GITHUB_SHA::7}"
+            ver="$(grep -E '^version:' charts/soctalk-system/Chart.yaml | awk '{print $2}')"
           fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Deploying SHA: $sha"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Deploying soctalk-system chart version: $ver"
 
       - name: Set up SSH
         run: |
@@ -72,39 +76,63 @@ jobs:
           chmod 600 ~/.ssh/id_demo
           ssh-keyscan -H "${{ secrets.DEMO_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Roll soctalk-system deployments to latest
+      - name: Copy values to demo node
+        run: |
+          scp -i ~/.ssh/id_demo -o StrictHostKeyChecking=accept-new \
+            deploy/demo-values.yaml \
+            "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}:/tmp/demo-values.yaml"
+
+      - name: helm upgrade --install soctalk-system
+        env:
+          VER: ${{ steps.resolve.outputs.version }}
+          ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
         run: |
           set -euo pipefail
-          # Always roll to :latest. publish-images.yml retags :latest on
-          # every successful image build, so this tracks the head of main
-          # regardless of whether the current commit itself triggered an
-          # image build (e.g. workflow-only changes skip publish-images
-          # via the path filter, but :latest still points at the most
-          # recent code change's image).
-          #
-          # SSH keepalive prevents the session dropping during slow rollouts.
+          # Full chart reconcile from the published OCI chart. --install
+          # bootstraps if absent; --atomic rolls back on any failure;
+          # --wait blocks until the release's workloads are Ready. The
+          # bootstrap admin creds are injected here, never written to the
+          # committed values file. SSH keepalive survives slow rollouts.
           ssh -i ~/.ssh/id_demo \
               -o StrictHostKeyChecking=accept-new \
               -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=20 \
+              -o ServerAliveCountMax=40 \
               "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
               "set -euo pipefail
-               for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
-                 # Skip absent deployments quietly (orchestrator may not be installed).
-                 kubectl -n soctalk-system get deploy \$d >/dev/null 2>&1 || { echo \"skipping \$d (not found)\"; continue; }
-                 container=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].name}')
-                 base=\$(kubectl -n soctalk-system get deploy \$d -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/:.*//')
-                 echo \"rolling \$d to \$base:latest\"
-                 # Pin the tag to :latest (no-op if already :latest) AND
-                 # rollout-restart so the pod re-pulls. imagePullPolicy for
-                 # :latest defaults to Always, but restart guarantees it.
-                 kubectl -n soctalk-system set image deploy/\$d \$container=\$base:latest
-                 kubectl -n soctalk-system rollout restart deploy/\$d
-               done
-               for d in soctalk-system-api soctalk-system-app-ui soctalk-system-orchestrator; do
-                 kubectl -n soctalk-system get deploy \$d >/dev/null 2>&1 || continue
-                 kubectl -n soctalk-system rollout status deploy/\$d --timeout=10m
-               done"
+               export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+               helm upgrade --install soctalk-system \
+                 oci://ghcr.io/soctalk/charts/soctalk-system \
+                 --version '$VER' \
+                 --namespace soctalk-system --create-namespace \
+                 -f /tmp/demo-values.yaml \
+                 --set-string install.bootstrapAdmin.email='$ADMIN_EMAIL' \
+                 --set-string install.bootstrapAdmin.password='$ADMIN_PW' \
+                 --wait --atomic --timeout 15m
+               rm -f /tmp/demo-values.yaml"
+
+      - name: Completeness gate (no image-pull failures)
+        run: |
+          set -euo pipefail
+          # helm --wait already gated readiness of the release's workloads.
+          # This explicitly fails the deploy if ANY soctalk-system container
+          # is stuck pulling its image — the exact class of breakage
+          # (unpublished tag, private package) a chart reconcile must catch.
+          ssh -i ~/.ssh/id_demo \
+              -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
+              "set -euo pipefail
+               export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+               bad=\$(kubectl -n soctalk-system get pods \
+                 -o jsonpath='{range .items[*].status.containerStatuses[*]}{.state.waiting.reason}{\"\n\"}{end}' \
+                 2>/dev/null | grep -cE 'ImagePullBackOff|ErrImagePull|InvalidImageName' || true)
+               if [ \"\$bad\" -gt 0 ]; then
+                 echo '::error::soctalk-system has containers failing image pull'
+                 kubectl -n soctalk-system get pods | grep -E 'ImagePull|ErrImage|InvalidImage' || true
+                 exit 1
+               fi
+               echo 'completeness gate OK: all soctalk-system images pulled'
+               kubectl -n soctalk-system get pods"
 
   smoke:
     needs: deploy
