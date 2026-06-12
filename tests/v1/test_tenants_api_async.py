@@ -1738,3 +1738,265 @@ async def test_onboard_model_overrides_render_into_runs_worker(
     assert values["runsWorker"]["reasoningModel"] == "o3"
     # llm.model fallback untouched.
     assert values["llm"]["model"] == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
+# GET/PATCH /api/mssp/tenants/{id}/llm — model overrides (tenant.llm.models.patch-api)
+# ---------------------------------------------------------------------------
+#
+# LlmConfigRead exposes fast_model / reasoning_model (null = falls back to
+# llm_model); LlmConfigUpdate accepts them with tri-state semantics:
+# omitted/None = leave unchanged, ''/whitespace = clear to NULL, anything
+# else = set verbatim. Changes count as chart-affecting (tenant.reconcile
+# for active, tenant.provision otherwise); no-op PATCHes enqueue nothing.
+
+
+async def test_get_llm_returns_null_model_overrides_for_default_tenant(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """GET on a tenant without overrides reports both fields as null —
+    meaning 'falls back to llm_model'."""
+    from soctalk.core.api.llm_config import get_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await get_tenant_llm(tenant.id, FakeRequest())
+    assert result.fast_model is None
+    assert result.reasoning_model is None
+
+
+async def test_patch_llm_fast_model_persists_returns_and_enqueues_reconcile(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """PATCH fast_model='gpt-4o-mini' on an ACTIVE tenant persists the
+    column, echoes it in the response, and enqueues tenant.reconcile."""
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(fast_model="gpt-4o-mini"),
+        FakeRequest(),
+    )
+    assert result.fast_model == "gpt-4o-mini"
+    assert result.reasoning_model is None
+
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_fast_model == "gpt-4o-mini"
+    assert cfg.llm_reasoning_model is None
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+    assert "tenant.provision" not in kinds
+
+
+async def test_patch_llm_reasoning_model_degraded_tenant_enqueues_provision(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """reasoning_model change on a DEGRADED tenant keeps the provision
+    kind — same state-aware routing as provider/base_url/model edits."""
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.DEGRADED.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(reasoning_model="o3"),
+        FakeRequest(),
+    )
+    assert result.reasoning_model == "o3"
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.provision") == 1
+    assert "tenant.reconcile" not in kinds
+
+
+async def test_patch_llm_empty_string_clears_override_to_null(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """PATCH reasoning_model='' on a tenant with a stored override clears
+    the column to NULL (revert to llm_model fallback) and enqueues a job
+    — the cleared override changes the rendered chart values."""
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_reasoning_model = "o3"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(reasoning_model=""),
+        FakeRequest(),
+    )
+    assert result.reasoning_model is None
+
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_reasoning_model is None
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+
+
+async def test_patch_llm_whitespace_string_also_clears_override(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Whitespace-only override strings behave exactly like '' — CLEAR."""
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_fast_model = "gpt-4o-mini"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(fast_model="   "),
+        FakeRequest(),
+    )
+    assert result.fast_model is None
+
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_fast_model is None
+
+
+async def test_patch_llm_no_model_fields_is_noop_and_enqueues_nothing(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """A PATCH carrying no model-override fields leaves both columns
+    untouched and enqueues no provisioning job. Same for a PATCH whose
+    override equals the stored value (no actual change)."""
+    from soctalk.core.api.llm_config import LlmConfigUpdate, update_tenant_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_fast_model = "gpt-4o-mini"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    # Empty payload → nothing changes, nothing enqueued.
+    await update_tenant_llm(tenant.id, LlmConfigUpdate(), FakeRequest())
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds == {}, f"empty PATCH must not enqueue jobs, got {kinds}"
+
+    # Override equal to the stored value → still a no-op.
+    await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(fast_model="gpt-4o-mini"),
+        FakeRequest(),
+    )
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds == {}, f"same-value PATCH must not enqueue jobs, got {kinds}"
+
+    await mssp_session.refresh(cfg)
+    assert cfg.llm_fast_model == "gpt-4o-mini"
+    assert cfg.llm_reasoning_model is None
+
+
+async def test_tenant_get_llm_carries_model_override_fields(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """The tenant-side GET /api/tenant/llm read model carries the new
+    fields — overrides are visible (read-only) to the tenant admin."""
+    from soctalk.core.api.llm_config import tenant_get_llm
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    cfg.llm_fast_model = "gpt-4o-mini"
+    await mssp_session.commit()
+
+    class FakeRequest:
+        class State:
+            user_identity = {
+                "user_id": str(uuid4()),
+                "email": "admin@tenant.example",
+                "user_type": "tenant",
+                "role": "tenant_admin",
+                "tenant_id": str(tenant.id),
+            }
+            db = mssp_session
+        state = State()
+
+    result = await tenant_get_llm(FakeRequest())
+    assert result.fast_model == "gpt-4o-mini"
+    assert result.reasoning_model is None

@@ -53,6 +53,11 @@ class LlmConfigRead(BaseModel):
     provider: str
     base_url: str
     model: str
+    # Per-role model overrides. ``None`` means "no override — falls
+    # back to ``model``" (render.py resolves override-or-llm_model
+    # into runsWorker.fastModel / reasoningModel).
+    fast_model: str | None = None
+    reasoning_model: str | None = None
     has_api_key: bool
     # ``customer_safe`` mode for tenant-side rendering: shows the
     # last 4 chars of the configured key so the tenant can sanity-
@@ -83,6 +88,20 @@ def _mask_key(api_key: str | None) -> str:
 
 
 class LlmConfigUpdate(BaseModel):
+    """Changed-fields-only PATCH payload.
+
+    ``fast_model`` / ``reasoning_model`` are tri-state:
+
+    - ``None`` / omitted → leave the stored override unchanged;
+    - empty or whitespace-only string → CLEAR the override to NULL
+      (revert to the ``llm_model`` fallback at render time);
+    - any other value → set verbatim.
+
+    The empty-string-clears convention exists because the UI panel
+    must let an operator revert to "use the primary model" — ``None``
+    can't express that in a changed-fields-only PATCH.
+    """
+
     # ``openai`` and ``anthropic`` are the values the runs-worker's
     # ``load_config()`` actually accepts (see soctalk/config.py). The
     # chart maps the install-side ``openai-compatible`` enum to
@@ -96,6 +115,10 @@ class LlmConfigUpdate(BaseModel):
     )
     base_url: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=255)
+    # No min_length — the empty string is a meaningful value (CLEAR),
+    # see the class docstring for the tri-state contract.
+    fast_model: str | None = Field(default=None, max_length=255)
+    reasoning_model: str | None = Field(default=None, max_length=255)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
 
     @field_validator("provider")
@@ -149,6 +172,8 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
     )
@@ -205,16 +230,30 @@ async def update_tenant_llm(
         prior_provider = cfg.llm_provider
         prior_base_url = cfg.llm_base_url
         prior_model = cfg.llm_model
+        prior_fast_model = cfg.llm_fast_model
+        prior_reasoning_model = cfg.llm_reasoning_model
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
         if payload.base_url is not None:
             cfg.llm_base_url = payload.base_url
         if payload.model is not None:
             cfg.llm_model = payload.model
+        # Tri-state override semantics (see LlmConfigUpdate docstring):
+        # None = unchanged; ''/whitespace = clear to NULL (revert to the
+        # llm_model fallback); anything else = set verbatim.
+        if payload.fast_model is not None:
+            cfg.llm_fast_model = payload.fast_model.strip() or None
+        if payload.reasoning_model is not None:
+            cfg.llm_reasoning_model = payload.reasoning_model.strip() or None
+        # Overrides are chart-affecting: render.py resolves them into
+        # runsWorker.fastModel / reasoningModel, so a change (including
+        # a clear) needs a helm re-render exactly like provider/model.
         chart_affecting_changed = (
             cfg.llm_provider != prior_provider
             or cfg.llm_base_url != prior_base_url
             or cfg.llm_model != prior_model
+            or cfg.llm_fast_model != prior_fast_model
+            or cfg.llm_reasoning_model != prior_reasoning_model
         )
         if chart_affecting_changed:
             # Enqueue a provisioning job so the worker helm-upgrades the
@@ -295,6 +334,8 @@ async def update_tenant_llm(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
     )
@@ -652,6 +693,8 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
     )
@@ -712,6 +755,8 @@ async def tenant_put_llm_key(
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
         has_api_key=True,
         api_key_preview=_mask_key(payload.api_key),
     )
@@ -778,6 +823,8 @@ async def tenant_clear_llm_key(request: Request) -> LlmConfigRead:
         provider=cfg.llm_provider,
         base_url=cfg.llm_base_url,
         model=cfg.llm_model,
+        fast_model=cfg.llm_fast_model,
+        reasoning_model=cfg.llm_reasoning_model,
         has_api_key=False,
         api_key_preview="",
     )
