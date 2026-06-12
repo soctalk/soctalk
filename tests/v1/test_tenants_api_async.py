@@ -1511,3 +1511,230 @@ async def test_patch_llm_key_only_enqueues_no_job(
 
     kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
     assert kinds == {}, f"key-only PATCH must not enqueue jobs, got {kinds}"
+
+
+# ---------------------------------------------------------------------------
+# Onboard-time per-tenant model overrides (tenant.llm.models.onboard-api)
+# ---------------------------------------------------------------------------
+#
+# TenantOnboard optionally carries llm_fast_model / llm_reasoning_model.
+# Non-null values persist onto IntegrationConfig in the SAME transaction as
+# the Tenant row; blank/whitespace values normalize to None so the columns
+# stay NULL and render falls back to llm_model. Provider reconciliation
+# (explicit or sk-ant- key-inferred) applies to the overrides exactly as it
+# does to llm_model — only-flip-when-clearly-mismatched.
+
+
+async def test_onboard_persists_model_overrides_verbatim(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Onboard with both overrides set → 202 route contract and both columns
+    persisted verbatim onto IntegrationConfig alongside llm_model.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"mo{uuid4().hex[:8]}",
+        display_name="Model Overrides",
+        profile="poc",
+        llm_fast_model="gpt-4o-mini",
+        llm_reasoning_model="o3",
+    )
+
+    assert _onboard_route_status() == 202
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_fast_model == "gpt-4o-mini"
+    assert integration.llm_reasoning_model == "o3"
+    # llm_model itself is untouched by the overrides.
+    assert integration.llm_model == "gpt-4o"
+
+
+async def test_onboard_omitted_model_overrides_stay_null(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Onboard without the overrides → both columns stay NULL (never
+    defaulted to a concrete model) so render falls back to llm_model.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"mn{uuid4().hex[:8]}",
+        display_name="No Model Overrides",
+        profile="poc",
+        # llm_fast_model / llm_reasoning_model intentionally omitted.
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_fast_model is None
+    assert integration.llm_reasoning_model is None
+
+
+async def test_onboard_blank_model_overrides_normalized_to_null(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Blank / whitespace-only overrides normalize to None so the columns
+    stay NULL — render's ``or llm_model`` fallback then applies uniformly.
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"mb{uuid4().hex[:8]}",
+        display_name="Blank Model Overrides",
+        profile="poc",
+        llm_fast_model="",
+        llm_reasoning_model="   ",
+    )
+    # Normalized at the schema boundary, not just at persist time.
+    assert payload.llm_fast_model is None
+    assert payload.llm_reasoning_model is None
+
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_fast_model is None
+    assert integration.llm_reasoning_model is None
+
+
+async def test_onboard_sk_ant_key_reconciles_model_overrides(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """An sk-ant- key infers anthropic; a clearly-OpenAI llm_fast_model is
+    flipped to the Anthropic default while an already-matching 'claude-*'
+    reasoning override is preserved (only-flip-when-clearly-mismatched, same
+    rule as llm_model).
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+    from soctalk.core.llm_provider import ANTHROPIC_DEFAULT_MODEL
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"ma{uuid4().hex[:8]}",
+        display_name="Anthropic Override Reconcile",
+        profile="provided",
+        llm_api_key="sk-ant-" + uuid4().hex,
+        # llm_provider intentionally omitted → inferred from the key prefix.
+        llm_fast_model="gpt-4o-mini",
+        llm_reasoning_model="claude-3-5-haiku-latest",
+        external_siem=_complete_external_siem(),
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    assert integration.llm_provider == "anthropic"
+    # Clearly-OpenAI override flipped to the Anthropic default.
+    assert integration.llm_fast_model == ANTHROPIC_DEFAULT_MODEL
+    # Already-matching override preserved verbatim.
+    assert integration.llm_reasoning_model == "claude-3-5-haiku-latest"
+
+
+async def test_onboard_model_overrides_render_into_runs_worker(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """End-to-end: a tenant onboarded with overrides renders
+    ``runsWorker.fastModel`` / ``reasoningModel`` from the persisted
+    overrides via the render seam (tenant.llm.models.render).
+    """
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+    from soctalk.core.provisioning.render import render_tenant_values
+    from soctalk.core.tenancy.models import BrandingConfig
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    slug = f"mr{uuid4().hex[:8]}"
+    payload = TenantOnboard(
+        slug=slug,
+        display_name="Render Override Tenant",
+        profile="poc",
+        llm_fast_model="gpt-4o-mini",
+        llm_reasoning_model="o3",
+    )
+
+    result = await onboard_tenant(payload, FakeRequest())
+
+    tenant_row = (
+        await mssp_session.execute(select(Tenant).where(Tenant.slug == slug))
+    ).scalar_one()
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+    branding = (
+        await mssp_session.execute(
+            select(BrandingConfig).where(
+                BrandingConfig.tenant_id == result.id
+            )
+        )
+    ).scalar_one()
+
+    values = render_tenant_values(
+        tenant=tenant_row,
+        integration=integration,
+        branding=branding,
+        mssp_id=str(seeded_org.mssp_id),
+        install_id=str(seeded_org.install_id),
+        llm_secret_name=f"tenant-{slug}-llm",
+        profile="poc",
+    )
+    assert values["runsWorker"]["fastModel"] == "gpt-4o-mini"
+    assert values["runsWorker"]["reasoningModel"] == "o3"
+    # llm.model fallback untouched.
+    assert values["llm"]["model"] == "gpt-4o"

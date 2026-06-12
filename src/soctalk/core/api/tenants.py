@@ -112,6 +112,12 @@ class TenantOnboard(BaseModel):
     # LLM endpoint (optional; tenant can set API key later via detail page)
     llm_base_url: str = Field(default="https://api.openai.com/v1")
     llm_model: str = Field(default="gpt-4o")
+    # Optional per-tenant model overrides (runs-worker SOCTALK_FAST_MODEL /
+    # SOCTALK_REASONING_MODEL). Blank/whitespace-only values normalize to
+    # None so the IntegrationConfig columns stay NULL and render falls back
+    # to ``llm_model``. Never defaulted to a concrete model server-side.
+    llm_fast_model: str | None = Field(default=None, max_length=255)
+    llm_reasoning_model: str | None = Field(default=None, max_length=255)
     # Per-tenant LLM credentials. REQUIRED for ``provided`` (enforced
     # server-side with a field-level 422 in :func:`_llm_key_errors` before
     # any DB read/write); optional for poc/persistent, where the
@@ -137,6 +143,16 @@ class TenantOnboard(BaseModel):
         # storage must only ever see ``openai-compatible`` / ``anthropic``
         # so chart values.schema.json validation never fails on render.
         return normalize_provider(v)
+
+    @field_validator("llm_fast_model", "llm_reasoning_model")
+    @classmethod
+    def _blank_model_override_is_none(cls, v: str | None) -> str | None:
+        # Blank/whitespace-only overrides mean "no override": keep the
+        # column NULL so render's ``or llm_model`` fallback applies and the
+        # provider reconciliation below never runs on an empty string.
+        if v is not None and not v.strip():
+            return None
+        return v
 
 
 class ProvisioningJobRead(BaseModel):
@@ -312,10 +328,26 @@ async def onboard_tenant(
     # runs-worker. The raw key is NEVER logged or echoed in any response.
     llm_provider = payload.llm_provider  # already normalized by the validator
     llm_model: str = payload.llm_model
+    # Optional per-tenant overrides (blank already normalized to None by the
+    # schema validator). Omitted overrides stay None — never defaulted to a
+    # concrete model — so the columns stay NULL and render falls back to
+    # llm_model.
+    llm_fast_model = payload.llm_fast_model
+    llm_reasoning_model = payload.llm_reasoning_model
     if payload.llm_api_key and llm_provider is None:
         llm_provider = infer_provider_from_key(payload.llm_api_key)
     if llm_provider is not None:
         llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
+        # Same only-flip-when-clearly-mismatched rule for the overrides: an
+        # sk-ant- onboard carrying llm_fast_model=gpt-4o-mini must not render
+        # an OpenAI model on the runs-worker, while a matching 'claude-*'
+        # override is preserved verbatim.
+        if llm_fast_model is not None:
+            llm_fast_model = reconcile_provider_model(llm_provider, llm_fast_model)
+        if llm_reasoning_model is not None:
+            llm_reasoning_model = reconcile_provider_model(
+                llm_provider, llm_reasoning_model
+            )
     # Only pass llm_provider when set so the column default
     # ('openai-compatible') applies for a provider-less, key-less onboard.
     llm_kwargs: dict[str, str] = {"llm_model": llm_model}
@@ -323,6 +355,10 @@ async def onboard_tenant(
         llm_kwargs["llm_provider"] = llm_provider
     if payload.llm_api_key is not None:
         llm_kwargs["llm_api_key_plain"] = payload.llm_api_key
+    if llm_fast_model is not None:
+        llm_kwargs["llm_fast_model"] = llm_fast_model
+    if llm_reasoning_model is not None:
+        llm_kwargs["llm_reasoning_model"] = llm_reasoning_model
 
     async with tenant_context(session, tenant.id):
         # External SIEM connection material is only captured for the
