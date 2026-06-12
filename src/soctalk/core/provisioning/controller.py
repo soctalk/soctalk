@@ -48,6 +48,7 @@ from soctalk.core.provisioning.render import (
     render_wazuh_values,
 )
 from soctalk.core.provisioning.secrets_gen import (
+    TenantBootstrapSecrets,
     bootstrap_as_k8s_secret_data,
     generate_bootstrap_secrets,
 )
@@ -652,8 +653,10 @@ class TenantController:
         ``bootstrap`` for in-cluster profiles (poc/persistent) and
         ``external-siem-creds`` for ``provided`` (which never mints a bootstrap
         Secret because there is no in-namespace Wazuh). If already present we
-        skip minting — the raw material is already in k8s and re-minting would
-        orphan creds.
+        skip re-minting the DB rows, but for poc/persistent we still READ BACK
+        the raw material from ``Secret/tenant-bootstrap`` (regenerating if it
+        vanished) — the wazuh chart renders its creds Secret FROM helm values,
+        so every later helm apply needs the true material in the bag.
         """
         # 'provided' tenants never mint a bootstrap Secret (no in-namespace
         # Wazuh), so idempotency keys off the external-siem-creds row instead.
@@ -670,11 +673,18 @@ class TenantController:
         ).scalar_one_or_none()
 
         if marker_row is not None:
-            # Already-minted case: we don't have the raw material any more,
-            # and we don't need it for helm since Wazuh reads creds from
-            # the k8s Secret we wrote last time. For the renderer we pass
-            # placeholders — helm upgrade will no-op the Secret if unchanged.
-            ctx.bag["bootstrap"] = None
+            # Already-minted case. The wazuh chart renders its credentials
+            # Secret (``<release_wazuh>-wazuh-creds``) FROM helm values — it
+            # is NOT pre-written by this controller — so every install or
+            # upgrade of the wazuh release must carry the TRUE material in
+            # values. Read it back from ``Secret/tenant-bootstrap`` (written
+            # by a prior run's apply_secrets) so later steps see the SAME
+            # credentials as the first run. 'provided' tenants have no
+            # in-namespace Wazuh and therefore no bootstrap material.
+            if ctx.profile == "provided":
+                ctx.bag["bootstrap"] = None
+            else:
+                ctx.bag["bootstrap"] = await self._read_back_bootstrap(ctx)
             return
 
         # Common reference rows minted for every profile.
@@ -756,6 +766,62 @@ class TenantController:
         await self.session.flush()
         await self._emit_event(ctx, "secrets_minted")
 
+    async def _read_back_bootstrap(self, ctx: _StepContext) -> TenantBootstrapSecrets:
+        """Reconstruct the bootstrap material on the already-minted path.
+
+        Reads ``Secret/tenant-bootstrap`` from the tenant namespace and
+        rebuilds :class:`TenantBootstrapSecrets` from the 7 keys written by
+        :func:`bootstrap_as_k8s_secret_data`, so a retried provision hands
+        helm the SAME credentials the first run minted.
+
+        If the Secret is missing (404) or incomplete, fresh material is
+        regenerated instead — the later ``apply_secrets`` step rewrites the
+        Secret from the bag, so namespace and helm values converge on the
+        regenerated credentials. Either way a retry can NEVER proceed with
+        placeholder credentials.
+        """
+        from kubernetes.client.exceptions import ApiException
+
+        data: dict[str, Any] | None = None
+        try:
+            sec = await self.k8s.get_secret(ctx.namespace, "tenant-bootstrap")
+            data = sec["data"]
+        except ApiException as e:
+            if e.status != 404:
+                raise ProvisionError(
+                    f"could not read back Secret/tenant-bootstrap from "
+                    f"{ctx.namespace}: {e}",
+                    step="mint_secrets",
+                ) from e
+
+        if data is not None:
+            try:
+                return TenantBootstrapSecrets(
+                    wazuh_admin_pw=data["wazuh_admin_pw"],
+                    wazuh_authd_secret=data["wazuh_authd_secret"],
+                    thehive_admin_pw=data["thehive_admin_pw"],
+                    thehive_api_token=data["thehive_api_token"],
+                    cortex_admin_pw=data["cortex_admin_pw"],
+                    cortex_api_key=data["cortex_api_key"],
+                    cassandra_pw=data["cassandra_pw"],
+                )
+            except KeyError as e:
+                logger.warning(
+                    "tenant_bootstrap_secret_incomplete",
+                    tenant=str(ctx.tenant.id),
+                    namespace=ctx.namespace,
+                    missing_key=str(e),
+                )
+
+        # Missing or incomplete: mint fresh material; apply_secrets will
+        # rewrite Secret/tenant-bootstrap from the bag on this same run.
+        logger.warning(
+            "tenant_bootstrap_secret_regenerated",
+            tenant=str(ctx.tenant.id),
+            namespace=ctx.namespace,
+        )
+        return generate_bootstrap_secrets()
+
     async def _step_ensure_namespace(self, ctx: _StepContext) -> None:
         await self.k8s.ensure_namespace(
             ctx.namespace,
@@ -774,10 +840,13 @@ class TenantController:
     async def _step_apply_secrets(self, ctx: _StepContext) -> None:
         """Write K8s Secrets into the tenant + system namespaces.
 
-        Idempotent via ``put_secret`` (create-or-patch). If bootstrap was
-        already minted in a prior run, ``ctx.bag['bootstrap']`` is None
-        and we only touch the adapter token + empty LLM placeholder —
-        bootstrap's k8s Secret is untouched.
+        Idempotent via ``put_secret`` (create-or-patch).
+        ``ctx.bag['bootstrap']`` is None only for the 'provided' profile
+        (no in-namespace Wazuh, nothing to write). For poc/persistent the
+        bag always carries real material — freshly minted, read back from
+        ``Secret/tenant-bootstrap`` on a retry, or regenerated if that
+        Secret vanished — and re-writing identical data is a harmless
+        no-op patch.
         """
         # LLM placeholder in system namespace.
         await self.k8s.put_secret(
@@ -929,9 +998,23 @@ class TenantController:
         Layered values: base ``values.yaml`` + profile-specific file +
         per-tenant overrides (minted creds, tenant-id).
         """
+        # Contract: the wazuh chart renders its credentials Secret
+        # (``<release_wazuh>-wazuh-creds``) FROM these values, so they must
+        # ALWAYS carry the true minted/read-back material. ``mint_secrets``
+        # guarantees the bag holds it for poc/persistent (fresh mint,
+        # read-back from Secret/tenant-bootstrap, or regeneration); shipping
+        # any placeholder would become the live admin/authd password and
+        # crash-loop the manager (Wazuh API error 5007).
         bootstrap = ctx.bag.get("bootstrap")
-        admin_pw = (bootstrap.wazuh_admin_pw if bootstrap else "rotated-prior-run")
-        authd_pw = (bootstrap.wazuh_authd_secret if bootstrap else "rotated-prior-run")
+        if bootstrap is None:
+            raise ProvisionError(
+                "no bootstrap credentials available for wazuh helm values "
+                "(mint_secrets must mint or read them back before "
+                "helm_apply_wazuh)",
+                step="helm_apply_wazuh",
+            )
+        admin_pw = bootstrap.wazuh_admin_pw
+        authd_pw = bootstrap.wazuh_authd_secret
 
         storage_override = (
             self.settings.persistent_storage_class

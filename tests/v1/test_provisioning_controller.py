@@ -1132,3 +1132,130 @@ async def test_reconcile_provided_rewrites_siem_secret_never_touches_wazuh(
     # Exactly one more tenant-chart upgrade; STILL zero wazuh installs.
     assert len(tenant_calls) == 2
     assert wazuh_calls == [], "reconcile must never touch a wazuh-<slug> release"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap read-back on retry (tenant.provisioning.bootstrap-readback)
+# ---------------------------------------------------------------------------
+#
+# Root-caused live on k3d: attempts 1..N failed at apply_secrets (LLM-key
+# guard) AFTER ``_step_mint_secrets`` wrote Secret/tenant-bootstrap but BEFORE
+# the wazuh release was ever installed. The retry's already-minted branch used
+# to park ``bag['bootstrap'] = None`` and ``_step_helm_apply_wazuh`` then did
+# the FIRST helm install with the literal placeholder 'rotated-prior-run' as
+# admin/authd password — Wazuh rejects it (Error 5007) and the manager
+# crash-loops forever. The chart renders ``<release>-wazuh-creds`` FROM helm
+# values, so the values must always carry the true material.
+
+
+async def _fail_then_capture_wazuh_values(
+    session: AsyncSession,
+    seeded_tenant: Tenant,
+    monkeypatch,
+) -> tuple[FakeK8s, TenantController, dict[str, str], dict]:
+    """Shared first phase for the read-back tests.
+
+    Runs provision once with no resolvable LLM key so the run fails at
+    ``apply_secrets`` — strictly after mint_secrets wrote
+    ``Secret/tenant-bootstrap`` and strictly before any wazuh helm install.
+    Returns the fake k8s, the controller, a snapshot of the
+    originally-minted bootstrap Secret data, and a mutable dict that the
+    patched ``helm_install_wazuh`` fills with the values of every install.
+    """
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    await _set_llm_key(session, seeded_tenant.id, None)
+
+    fake_k8s = FakeK8s()
+    controller = _llm_guard_controller(session, fake_k8s)
+
+    captured: dict = {"wazuh_values": []}
+
+    async def rec_install_wazuh(*_a, per_tenant_values=None, **_kw):
+        captured["wazuh_values"].append(per_tenant_values)
+        return await _fake_helm_install_wazuh()
+
+    monkeypatch.setattr(controller_mod, "helm_install_wazuh", rec_install_wazuh)
+
+    # Attempt 1: mint_secrets mints + apply_secrets writes the bootstrap
+    # Secret, then the LLM-key guard fails the run before any helm install.
+    with pytest.raises(ProvisionError) as exc_info:
+        await controller.provision(seeded_tenant.id, actor_id="test")
+    assert exc_info.value.step == "apply_secrets"
+    assert captured["wazuh_values"] == [], "wazuh must not be installed yet"
+
+    ns = f"tenant-{seeded_tenant.slug}"
+    minted = dict(fake_k8s.secrets[(ns, "tenant-bootstrap")])
+    # The mint really happened: all 7 keys present, with real material.
+    assert minted["wazuh_admin_pw"]
+    assert minted["wazuh_authd_secret"]
+    return fake_k8s, controller, minted, captured
+
+
+async def test_retry_uses_originally_minted_wazuh_creds_not_placeholder(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Retry after a post-mint / pre-helm failure must hand helm the SAME
+    wazuh credentials the first run minted — never 'rotated-prior-run'."""
+    import json
+
+    fake_k8s, controller, minted, captured = (
+        await _fail_then_capture_wazuh_values(session, seeded_tenant, monkeypatch)
+    )
+
+    # Operator provides the LLM key; retry must now go all the way.
+    await _set_llm_key(session, seeded_tenant.id, "sk-now-present")
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    assert len(captured["wazuh_values"]) == 1
+    values = captured["wazuh_values"][0]
+    creds = values["credentials"]
+    assert creds["apiPassword"] == minted["wazuh_admin_pw"], (
+        "wazuh helm values must carry the ORIGINALLY-minted admin password "
+        "(read back from Secret/tenant-bootstrap), not a placeholder"
+    )
+    assert creds["authdPassword"] == minted["wazuh_authd_secret"]
+    assert "rotated-prior-run" not in json.dumps(values), (
+        f"placeholder credential leaked into wazuh helm values: {values}"
+    )
+
+    # The bootstrap Secret still holds the same (re-written, idempotent) data.
+    ns = f"tenant-{seeded_tenant.slug}"
+    assert fake_k8s.secrets[(ns, "tenant-bootstrap")] == minted
+
+
+async def test_retry_with_bootstrap_secret_deleted_regenerates_creds(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Already-minted path with Secret/tenant-bootstrap gone: fresh
+    credentials are regenerated, written back, and used in the wazuh helm
+    values — a retry can never proceed with placeholder credentials."""
+    import json
+
+    fake_k8s, controller, minted, captured = (
+        await _fail_then_capture_wazuh_values(session, seeded_tenant, monkeypatch)
+    )
+
+    # Simulate the Secret vanishing between attempts (manual cleanup, etc.).
+    ns = f"tenant-{seeded_tenant.slug}"
+    del fake_k8s.secrets[(ns, "tenant-bootstrap")]
+
+    await _set_llm_key(session, seeded_tenant.id, "sk-now-present")
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # Fresh material was regenerated AND written back to the namespace.
+    assert (ns, "tenant-bootstrap") in fake_k8s.secrets
+    rewritten = fake_k8s.secrets[(ns, "tenant-bootstrap")]
+    assert rewritten["wazuh_admin_pw"]
+    assert rewritten["wazuh_admin_pw"] != minted["wazuh_admin_pw"]
+
+    # And the SAME fresh material went into the wazuh helm values.
+    assert len(captured["wazuh_values"]) == 1
+    values = captured["wazuh_values"][0]
+    creds = values["credentials"]
+    assert creds["apiPassword"] == rewritten["wazuh_admin_pw"]
+    assert creds["authdPassword"] == rewritten["wazuh_authd_secret"]
+    assert "rotated-prior-run" not in json.dumps(values)
