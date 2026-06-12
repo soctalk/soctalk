@@ -15,6 +15,8 @@ on cases/investigation_runs does the filtering — same pattern as
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -80,32 +82,53 @@ class HourlyMetricsResponse(BaseModel):
 _MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
 
 
-@router.get("/overview", response_model=MetricsOverview)
-async def overview(request: Request) -> MetricsOverview:
-    _require_authed(request)
+@asynccontextmanager
+async def _metrics_db(request: Request) -> AsyncIterator[AsyncSession]:
+    """Select the DB session for a dashboard rollup query.
 
-    # Dashboard rollup picks one of two sessions based on role.
-    # The shared request session uses the RLS-subject ``soctalk_app``
-    # role, and the tenant policies on ``pending_reviews`` / ``alerts``
-    # are *fail-closed*: when ``app.current_tenant_id`` is unset (the
-    # cross-tenant MSSP scope) zero rows are visible. The prior code
-    # assumed the policies opened the gate in that case, which is why
-    # the dashboard widget read "0 pending reviews" for an MSSP login
-    # while 13 rows existed in the table. Route MSSP-level callers
-    # through the BYPASSRLS session so cross-tenant aggregates work;
-    # tenant-bound callers keep the request session that's already
-    # RLS-scoped to their home tenant by the middleware.
+    The shared request session uses the RLS-subject ``soctalk_app``
+    role, and the tenant policies on ``pending_reviews`` / ``alerts``
+    are *fail-closed*: when ``app.current_tenant_id`` is unset (the
+    cross-tenant MSSP scope) zero rows are visible. So:
+
+    - MSSP-level role WITHOUT a tenant pin (``identity.current_tenant``
+      is None — cross-tenant fleet scope): a fresh BYPASSRLS session,
+      so fleet-wide aggregates actually span every tenant. Opened and
+      closed here.
+    - Everyone else — tenant-bound roles AND mssp/platform admins whose
+      session is pinned via POST /api/auth/assume-tenant — keeps the
+      request-bound session: the identity middleware already stamped
+      ``app.current_tenant_id`` from the pin (or home tenant), so RLS
+      scopes the rollup correctly. That session belongs to the request
+      middleware; it must NOT be closed here.
+
+    Live-incident note (tenant.metrics.assume-tenant-scope): branching
+    on role ALONE sent pinned MSSP sessions through BYPASSRLS, so the
+    overview card showed the fleet-wide investigation count while the
+    RLS-scoped investigations list showed the pinned tenant's zero.
+    Both /overview and /hourly route through this single helper so the
+    two endpoints cannot drift apart again.
+    """
     identity = current_identity(request)
     role = getattr(identity, "role", None) if identity else None
+    current_tenant = getattr(identity, "current_tenant", None) if identity else None
 
-    if role in _MSSP_LEVEL_ROLES:
+    if role in _MSSP_LEVEL_ROLES and current_tenant is None:
         from soctalk.core.tenancy.db import get_mssp_sessionmaker
 
         sm = get_mssp_sessionmaker()
         async with sm() as db:
-            return await _overview_with(db)
+            yield db
     else:
-        return await _overview_with(_db(request))
+        yield _db(request)
+
+
+@router.get("/overview", response_model=MetricsOverview)
+async def overview(request: Request) -> MetricsOverview:
+    _require_authed(request)
+
+    async with _metrics_db(request) as db:
+        return await _overview_with(db)
 
 
 async def _overview_with(db: AsyncSession) -> MetricsOverview:
@@ -242,8 +265,23 @@ async def hourly(
     request: Request, hours: int = Query(24, ge=1, le=168)
 ) -> HourlyMetricsResponse:
     _require_authed(request)
-    db = _db(request)
 
+    # Same session-selection contract as ``overview`` (one shared
+    # helper): the prior code always used the request-bound RLS
+    # session, so an UNPINNED mssp_admin got fail-closed all-zero
+    # buckets while the overview card on the same dashboard showed
+    # fleet-wide counts.
+    async with _metrics_db(request) as db:
+        return await _hourly_with(db, hours)
+
+
+async def _hourly_with(db: AsyncSession, hours: int) -> HourlyMetricsResponse:
+    """The actual hourly rollup, parametrised on the session.
+
+    Split out from ``hourly`` the same way ``_overview_with`` is, so
+    the session-selection branch can pass either the request-bound
+    (RLS) session or a BYPASSRLS session without duplicating the SQL.
+    """
     end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     start = end - timedelta(hours=hours - 1)
 

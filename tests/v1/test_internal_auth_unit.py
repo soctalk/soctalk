@@ -87,7 +87,41 @@ class _StubDBMiddleware:
         await self.app(scope, receive, send)
 
 
+# Capture the real middleware class BEFORE stubbing so the module-scoped
+# cleanup fixture below can restore it. The stub assignment happens at
+# import (collection) time; the damage only becomes visible to OTHER test
+# modules once ``_reload_app`` re-imports ``app_v1`` (which then binds the
+# stub). Without restoration, every later ``create_app()`` — e.g. the
+# metrics-bridge integration tests' fixture-time client — silently runs
+# with a no-op DB session and logins 401 on "unknown email".
+_REAL_DB_MIDDLEWARE = db_mod.DBSessionMiddleware
+_PRIOR_AUTH_MODE = os.environ.get("SOCTALK_AUTH_MODE")
+
 db_mod.DBSessionMiddleware = _StubDBMiddleware
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_global_modules():
+    """Undo this module's process-global mutations at teardown.
+
+    1. Restore the real ``DBSessionMiddleware`` on ``tenancy.db``.
+    2. Restore ``SOCTALK_AUTH_MODE`` to its pre-module value.
+    3. Reload ``auth.config`` and ``app_v1`` so their module globals
+       re-bind against the restored state — later tests that call
+       ``create_app()`` get the REAL middleware stack again.
+    """
+    yield
+    db_mod.DBSessionMiddleware = _REAL_DB_MIDDLEWARE
+    if _PRIOR_AUTH_MODE is None:
+        os.environ.pop("SOCTALK_AUTH_MODE", None)
+    else:
+        os.environ["SOCTALK_AUTH_MODE"] = _PRIOR_AUTH_MODE
+    import soctalk.core.auth.config as cfg
+
+    importlib.reload(cfg)
+    import soctalk.core.api.app_v1 as app_mod
+
+    importlib.reload(app_mod)
 
 
 # --- Helpers --------------------------------------------------------------
