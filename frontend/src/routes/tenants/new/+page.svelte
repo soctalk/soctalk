@@ -44,6 +44,10 @@
 		contact_email: string;
 		llm_base_url: string;
 		llm_model: string;
+		// Optional per-role model overrides. Blank → the primary llm_model is
+		// used for everything; only included in the payload when non-blank.
+		llm_fast_model: string;
+		llm_reasoning_model: string;
 		// Per-tenant LLM credentials. Optional for poc/persistent (blank →
 		// MSSP shared install key); REQUIRED for 'provided' where the key
 		// gates the External SIEM step. Both inputs (Profile disclosure and
@@ -87,6 +91,8 @@
 		contact_email: '',
 		llm_base_url: 'https://api.openai.com/v1',
 		llm_model: 'gpt-4o',
+		llm_fast_model: '',
+		llm_reasoning_model: '',
 		llm_provider: 'openai-compatible',
 		llm_api_key: '',
 		external_siem: undefined
@@ -183,6 +189,11 @@
 		// for poc/persistent tenants that leave them empty.
 		if (form.llm_provider.trim()) payload.llm_provider = form.llm_provider;
 		if (form.llm_api_key.trim()) payload.llm_api_key = form.llm_api_key;
+		// Per-role model overrides: same omission pattern — blank means
+		// "use the primary model" and the key is left out entirely.
+		if (form.llm_fast_model.trim()) payload.llm_fast_model = form.llm_fast_model.trim();
+		if (form.llm_reasoning_model.trim())
+			payload.llm_reasoning_model = form.llm_reasoning_model.trim();
 		if (form.profile === 'provided' && form.external_siem) {
 			const s = form.external_siem;
 			const external_siem: ExternalSiemOnboard = {
@@ -308,6 +319,20 @@
 					<label class="label">
 						<span class="text-sm">Model</span>
 						<input class="input" bind:value={form.llm_model} />
+					</label>
+					<label class="label">
+						<span class="text-sm">Fast model</span>
+						<input name="llm_fast_model" class="input" bind:value={form.llm_fast_model} />
+						<small class="opacity-60">leave blank to use the primary model</small>
+					</label>
+					<label class="label">
+						<span class="text-sm">Thinking model</span>
+						<input
+							name="llm_reasoning_model"
+							class="input"
+							bind:value={form.llm_reasoning_model}
+						/>
+						<small class="opacity-60">leave blank to use the primary model</small>
 					</label>
 					<label class="label">
 						<span class="text-sm">Provider</span>
@@ -497,7 +522,9 @@
 					<span class="inline-block w-4 h-4 rounded align-middle mr-2" style="background:{form.branding_primary_color}"></span>
 					<code class="text-xs">{form.branding_primary_color}</code>
 				</dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider} · {form.llm_model}</dd></div>
+				<!-- Per-role override fragments only render when non-blank — a
+				     blank override never shows up as an empty literal. -->
+				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider} · {form.llm_model}{form.llm_fast_model.trim() ? ` · fast: ${form.llm_fast_model.trim()}` : ''}{form.llm_reasoning_model.trim() ? ` · thinking: ${form.llm_reasoning_model.trim()}` : ''}</dd></div>
 				<!-- Key is NEVER rendered in full — set/not-set plus a last-4 mask only. -->
 				<div class="flex justify-between"><dt class="opacity-60">LLM API key</dt><dd data-testid="review-llm-key">{form.llm_api_key.trim() ? `set (…${form.llm_api_key.trim().slice(-4)})` : 'not set'}</dd></div>
 			</dl>

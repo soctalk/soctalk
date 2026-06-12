@@ -17,6 +17,13 @@ import { test, expect, type Page } from '@playwright/test';
  *  - the poc flow submits without a key and the payload OMITS llm_api_key,
  *  - the plaintext key never appears in the Review step content.
  *
+ * And tenant.llm.models.wizard:
+ *  - the 'LLM (advanced)' disclosure offers optional Fast/Thinking model
+ *    inputs ('leave blank to use the primary model'),
+ *  - filling them puts llm_fast_model + llm_reasoning_model in the payload
+ *    and surfaces them on the Review LLM row,
+ *  - flows that leave them blank OMIT both keys from the payload.
+ *
  * The whole /api surface is mocked at the browser so neither the FastAPI
  * backend nor Postgres need to be up.
  */
@@ -192,6 +199,9 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		expect(body.profile).toBe('provided');
 		expect(body.llm_provider).toBe('anthropic');
 		expect(body.llm_api_key).toBe(LLM_KEY);
+		// Fast/Thinking overrides were left blank → both keys ABSENT.
+		expect(body).not.toHaveProperty('llm_fast_model');
+		expect(body).not.toHaveProperty('llm_reasoning_model');
 		// Nested object — supersedes the old flat wazuh_* payload.
 		expect(body.external_siem).toMatchObject({
 			indexer_url: 'https://indexer.example.com:9200',
@@ -235,6 +245,61 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 
 		expect(body.profile).toBe('poc');
 		expect(body.llm_api_key).toBeUndefined();
+		// Blank Fast/Thinking model overrides are likewise OMITTED.
+		expect(body).not.toHaveProperty('llm_fast_model');
+		expect(body).not.toHaveProperty('llm_reasoning_model');
+	});
+
+	test('filling Fast + Thinking models includes llm_fast_model/llm_reasoning_model in the payload and on Review', async ({
+		page
+	}) => {
+		await gotoWizard(page);
+		await fillIdentityAndContinue(page);
+
+		// The overrides live in the same 'LLM (advanced)' disclosure as the
+		// Model input, each with the use-the-primary-model helper text.
+		await page.getByText('LLM (advanced)').click();
+		await expect(page.locator('input[name="llm_fast_model"]')).toBeVisible();
+		await expect(page.locator('input[name="llm_reasoning_model"]')).toBeVisible();
+		await expect(
+			page.getByText('leave blank to use the primary model')
+		).toHaveCount(2);
+		await page.fill('input[name="llm_fast_model"]', 'gpt-4o-mini');
+		await page.fill('input[name="llm_reasoning_model"]', 'o3');
+
+		// Both fields are optional — Next stays enabled throughout.
+		await expect(page.getByRole('button', { name: 'Next' })).toBeEnabled();
+
+		// Profile → Branding → Review.
+		await page.getByRole('button', { name: 'Next' }).click();
+		await page.getByRole('button', { name: 'Next' }).click();
+		await expect(page.getByTestId('review-llm')).toHaveText(
+			'openai-compatible · gpt-4o · fast: gpt-4o-mini · thinking: o3'
+		);
+
+		const onboardReq = page.waitForRequest(
+			(r) => r.url().includes('/tenants/onboard') && r.method() === 'POST'
+		);
+		await page.getByTestId('create-tenant').click();
+		const body = (await onboardReq).postDataJSON();
+
+		expect(body.profile).toBe('poc');
+		expect(body.llm_fast_model).toBe('gpt-4o-mini');
+		expect(body.llm_reasoning_model).toBe('o3');
+	});
+
+	test('blank overrides never render an empty literal on the Review LLM row', async ({
+		page
+	}) => {
+		await gotoWizard(page);
+		await fillIdentityAndContinue(page);
+
+		// Straight through with the overrides untouched.
+		await page.getByRole('button', { name: 'Next' }).click();
+		await page.getByRole('button', { name: 'Next' }).click();
+		await expect(page.getByTestId('review-llm')).toHaveText(
+			'openai-compatible · gpt-4o'
+		);
 	});
 
 	test('switching provided → poc clears external_siem and drops back to 4 steps', async ({
