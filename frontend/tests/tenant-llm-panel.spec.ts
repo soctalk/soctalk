@@ -42,20 +42,44 @@ const TENANT = {
 	runtime: null
 };
 
-const LLM_READ_WITH_KEY = {
+// Mirrors the backend LlmConfigRead shape, including the per-tier model
+// overrides (null = no override, the tier falls back to ``model``).
+interface LlmRead {
+	provider: string;
+	base_url: string;
+	model: string;
+	fast_model: string | null;
+	reasoning_model: string | null;
+	has_api_key: boolean;
+	api_key_preview: string;
+}
+
+const LLM_READ_WITH_KEY: LlmRead = {
 	provider: 'openai-compatible',
 	base_url: 'https://llm.acme.example/v1',
 	model: 'gpt-4o-mini',
+	fast_model: null,
+	reasoning_model: null,
 	has_api_key: true,
 	api_key_preview: 'sk-…7890'
 };
 
-const LLM_READ_NO_KEY = {
+const LLM_READ_NO_KEY: LlmRead = {
 	provider: 'openai-compatible',
 	base_url: 'https://llm.acme.example/v1',
 	model: 'gpt-4o-mini',
+	fast_model: null,
+	reasoning_model: null,
 	has_api_key: false,
 	api_key_preview: ''
+};
+
+// Both per-tier overrides set — exercises the override read view and the
+// clear-to-default ('' sent) edit path.
+const LLM_READ_WITH_OVERRIDES: LlmRead = {
+	...LLM_READ_WITH_KEY,
+	fast_model: 'gpt-4o-mini-fast',
+	reasoning_model: 'o3-deep-thought'
 };
 
 const SIEM_READ = {
@@ -76,10 +100,7 @@ interface MockHandles {
 }
 
 /** Mock every /api call; returns handles to inspect PATCH / DELETE traffic. */
-async function mockApi(
-	page: Page,
-	initialRead: typeof LLM_READ_WITH_KEY = LLM_READ_WITH_KEY
-): Promise<MockHandles> {
+async function mockApi(page: Page, initialRead: LlmRead = LLM_READ_WITH_KEY): Promise<MockHandles> {
 	let lastPatchBody: Record<string, unknown> | null = null;
 	let patchCount = 0;
 	let clearCount = 0;
@@ -122,6 +143,13 @@ async function mockApi(
 					...(body.provider !== undefined ? { provider: body.provider as string } : {}),
 					...(body.base_url !== undefined ? { base_url: body.base_url as string } : {}),
 					...(body.model !== undefined ? { model: body.model as string } : {}),
+					// ''-clears semantics: an empty string NULLs the override server-side.
+					...(body.fast_model !== undefined
+						? { fast_model: (body.fast_model as string) || null }
+						: {}),
+					...(body.reasoning_model !== undefined
+						? { reasoning_model: (body.reasoning_model as string) || null }
+						: {}),
 					// A sent key is masked server-side: presence flag + tail preview only.
 					...(body.api_key !== undefined
 						? {
@@ -162,13 +190,18 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		await expect(page.getByTestId('llm-provider')).toContainText('openai-compatible');
 		await expect(page.getByTestId('llm-base-url')).toContainText('https://llm.acme.example/v1');
 		await expect(page.getByTestId('llm-model')).toContainText('gpt-4o-mini');
+		// No per-tier overrides → the effective primary model is shown as the
+		// "default (<model>)" fallback so the operator sees what will be used.
+		await expect(page.getByTestId('llm-fast-model')).toContainText('default (gpt-4o-mini)');
+		await expect(page.getByTestId('llm-reasoning-model')).toContainText('default (gpt-4o-mini)');
 		// has_api_key=true → masked preview, NOT the shared-key messaging.
 		await expect(page.getByTestId('llm-api-key-preview')).toContainText('sk-…7890');
 		await expect(page.getByTestId('llm-shared-key-note')).toHaveCount(0);
 		// Clear-key affordance exists only when a key is present.
 		await expect(page.getByTestId('llm-clear-key')).toBeVisible();
-		// Rollout semantics note.
+		// Rollout semantics note — covers the per-tier override rollout too.
 		await expect(page.getByTestId('llm-rollout-note')).toContainText('re-render of the tenant release');
+		await expect(page.getByTestId('llm-rollout-note')).toContainText('fast/thinking model');
 		await expect(page.getByTestId('llm-rollout-note')).toContainText('within seconds');
 	});
 
@@ -182,6 +215,89 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		);
 		await expect(page.getByTestId('llm-api-key-preview')).toHaveCount(0);
 		await expect(page.getByTestId('llm-clear-key')).toHaveCount(0);
+	});
+
+	test('renders set fast/thinking model overrides instead of the default fallback', async ({
+		page
+	}) => {
+		await mockApi(page, LLM_READ_WITH_OVERRIDES);
+		await page.goto(`/tenants/${TENANT_ID}`);
+
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+		await expect(page.getByTestId('llm-fast-model')).toContainText('gpt-4o-mini-fast');
+		await expect(page.getByTestId('llm-reasoning-model')).toContainText('o3-deep-thought');
+		await expect(page.getByTestId('llm-fast-model')).not.toContainText('default (');
+		await expect(page.getByTestId('llm-reasoning-model')).not.toContainText('default (');
+	});
+
+	test('setting a fast model PATCHes exactly { fast_model } and re-renders the read', async ({
+		page
+	}) => {
+		const handles = await mockApi(page); // overrides start null
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await expect(page.getByTestId('llm-edit-form')).toBeVisible();
+		// Inputs are seeded from the read — null overrides seed as empty.
+		await expect(page.locator('input[name="fast_model"]')).toHaveValue('');
+		await expect(page.locator('input[name="reasoning_model"]')).toHaveValue('');
+
+		// Set ONLY the fast model (with whitespace — the panel trims it).
+		await page.fill('input[name="fast_model"]', '  gpt-4o-mini-fast  ');
+
+		const patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		// Exactly { fast_model } — reasoning_model stayed empty over a null read
+		// so it is OMITTED (unchanged), never sent as a spurious clear.
+		expect(handles.lastPatchBody()).toEqual({ fast_model: 'gpt-4o-mini-fast' });
+
+		// The read view re-renders from the PATCH response.
+		await expect(page.getByTestId('llm-fast-model')).toContainText('gpt-4o-mini-fast');
+		await expect(page.getByTestId('llm-reasoning-model')).toContainText('default (gpt-4o-mini)');
+	});
+
+	test('clearing the thinking model sends reasoning_model: "" and no other model fields', async ({
+		page
+	}) => {
+		const handles = await mockApi(page, LLM_READ_WITH_OVERRIDES);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await expect(page.getByTestId('llm-edit-form')).toBeVisible();
+		// Seeded from the read — set overrides appear in the inputs.
+		await expect(page.locator('input[name="fast_model"]')).toHaveValue('gpt-4o-mini-fast');
+		await expect(page.locator('input[name="reasoning_model"]')).toHaveValue('o3-deep-thought');
+
+		// Empty the thinking model input — clears the override to default.
+		await page.fill('input[name="reasoning_model"]', '');
+
+		const patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		const body = handles.lastPatchBody() as Record<string, unknown>;
+		// '' clears the override server-side; nothing else changed so no other
+		// model fields ride along.
+		expect(body.reasoning_model).toBe('');
+		expect(body).not.toHaveProperty('fast_model');
+		expect(body).not.toHaveProperty('model');
+		expect(body).not.toHaveProperty('provider');
+		expect(body).not.toHaveProperty('base_url');
+		expect(body).not.toHaveProperty('api_key');
+
+		// Read view shows the cleared tier falling back to the primary model.
+		await expect(page.getByTestId('llm-reasoning-model')).toContainText('default (gpt-4o-mini)');
+		await expect(page.getByTestId('llm-fast-model')).toContainText('gpt-4o-mini-fast');
 	});
 
 	test('PATCH carries ONLY the changed fields; a blank key is omitted', async ({ page }) => {

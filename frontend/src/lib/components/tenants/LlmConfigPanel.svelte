@@ -31,10 +31,21 @@
 		provider: string;
 		base_url: string;
 		model: string;
+		// Per-tier overrides — '' in the form means "no override" (the tier
+		// falls back to the primary model).
+		fast_model: string;
+		reasoning_model: string;
 		api_key: string;
 	}
 
-	let formData: LlmForm = { provider: 'openai-compatible', base_url: '', model: '', api_key: '' };
+	let formData: LlmForm = {
+		provider: 'openai-compatible',
+		base_url: '',
+		model: '',
+		fast_model: '',
+		reasoning_model: '',
+		api_key: ''
+	};
 	let formError: string | null = null;
 
 	async function loadRead(): Promise<void> {
@@ -60,6 +71,10 @@
 			provider: read?.provider ?? 'openai-compatible',
 			base_url: read?.base_url ?? '',
 			model: read?.model ?? '',
+			// null (no override) seeds as '' — emptying a previously-set input
+			// later diffs as a clear ('' sent), while staying empty is unchanged.
+			fast_model: read?.fast_model ?? '',
+			reasoning_model: read?.reasoning_model ?? '',
 			api_key: ''
 		};
 		formError = null;
@@ -90,6 +105,17 @@
 			}
 			if (read && baseUrl !== read.base_url) payload.base_url = baseUrl;
 			if (read && formData.model !== read.model) payload.model = formData.model;
+			// Tri-state per-tier overrides: compare against ``read.x ?? ''`` so an
+			// empty input over a null read is "unchanged" (omitted), not a
+			// spurious clear. A real clear (input emptied over a set override)
+			// sends '' so the backend NULLs the column; a set sends the trimmed
+			// value.
+			const fastModel = formData.fast_model.trim();
+			if (read && fastModel !== (read.fast_model ?? '')) payload.fast_model = fastModel;
+			const reasoningModel = formData.reasoning_model.trim();
+			if (read && reasoningModel !== (read.reasoning_model ?? '')) {
+				payload.reasoning_model = reasoningModel;
+			}
 			if (formData.api_key) payload.api_key = formData.api_key;
 
 			if (Object.keys(payload).length === 0) {
@@ -197,6 +223,26 @@
 					<input name="model" class="input" bind:value={formData.model} placeholder="gpt-4o" />
 				</label>
 				<label class="label">
+					<span class="text-sm">Fast model</span>
+					<input
+						name="fast_model"
+						class="input"
+						bind:value={formData.fast_model}
+						placeholder="leave blank to use the primary model"
+					/>
+					<span class="text-xs opacity-60">leave blank to use the primary model</span>
+				</label>
+				<label class="label">
+					<span class="text-sm">Thinking model</span>
+					<input
+						name="reasoning_model"
+						class="input"
+						bind:value={formData.reasoning_model}
+						placeholder="leave blank to use the primary model"
+					/>
+					<span class="text-xs opacity-60">leave blank to use the primary model</span>
+				</label>
+				<label class="label">
 					<span class="text-sm">Replace API key</span>
 					<input
 						name="api_key"
@@ -246,6 +292,21 @@
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">Model</dt>
 					<dd class="font-mono text-xs" data-testid="llm-model">{read.model || '—'}</dd>
+				</div>
+				<!-- Per-tier overrides — when unset (null) the effective model is the
+				     primary one, rendered as "default (<model>)" so the operator
+				     always sees what will actually be used. -->
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">Fast model</dt>
+					<dd class="font-mono text-xs" data-testid="llm-fast-model">
+						{read.fast_model ?? `default (${read.model})`}
+					</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">Thinking model</dt>
+					<dd class="font-mono text-xs" data-testid="llm-reasoning-model">
+						{read.reasoning_model ?? `default (${read.model})`}
+					</dd>
 				</div>
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">API key</dt>
@@ -304,8 +365,8 @@
 
 			<!-- Rollout semantics so operators know what to expect after Save. -->
 			<p class="mt-4 pt-3 border-t border-surface-500/20 text-xs opacity-70" data-testid="llm-rollout-note">
-				Provider, endpoint or model changes roll out via a re-render of the tenant release;
-				key-only changes apply within seconds.
+				Provider, endpoint or model changes (including fast/thinking model overrides) roll out
+				via a re-render of the tenant release; key-only changes apply within seconds.
 			</p>
 		{/if}
 	{/if}
