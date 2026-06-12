@@ -76,16 +76,24 @@ inspect the `adapter-egress` NetworkPolicy.
    `tenant-<id>-llm` in `soctalk-system` (legacy/audit copy) — and
    rolling-restarts the runs-worker. `secretKeyRef` env vars don't refresh
    on a Secret update; without the restart the worker keeps the old key.
-3. Changing provider / base URL / model in the same PATCH also enqueues a
+3. Changing provider / base URL / model — or the per-tenant fast/thinking
+   model overrides (`fast_model` / `reasoning_model`, `""` clears to the
+   primary-model fallback) — in the same PATCH also enqueues a
    `tenant.reconcile` job for an active tenant (see below) so the new
-   values reach the rendered release.
+   values reach the rendered release. The overrides are baked into the
+   runs-worker env (`SOCTALK_FAST_MODEL` / `SOCTALK_REASONING_MODEL`) at
+   render time, so the Secret-rewrite fast path above can't carry them —
+   see [provided-profile.md](../provided-profile.md) §4.
 
 ## `tenant.reconcile` job failed
 
 `tenant.reconcile` re-renders + helm-upgrades an **active** tenant's release
-in place. Enqueued by chart-affecting LLM edits (provider / base URL / model)
-via `PATCH /api/mssp/tenants/{id}/llm`; the provisioning worker dispatches it
-like any other job kind.
+in place. Enqueued by chart-affecting LLM edits (provider / base URL / model /
+fast_model / reasoning_model) via `PATCH /api/mssp/tenants/{id}/llm`; for a
+tenant in any **other** state the same edits enqueue `tenant.provision`
+instead (active → provisioning is an illegal transition, and `provision()`
+early-returns on active). The provisioning worker dispatches it like any
+other job kind.
 
 What it re-runs:
 

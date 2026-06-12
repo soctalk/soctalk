@@ -17,7 +17,7 @@ This release transforms SocTalk from a single-tenant SOC automation appliance in
 | [sizing](sizing.md) | **Sizing profiles** | small-dev (4/16) and pilot-prod (8/32) references; per-tenant footprint estimates; max-tenants formula |
 | [two-chart-contract](two-chart-contract.md) | **Two-chart contract** | `soctalk-system` vs `soctalk-tenant` values schemas, compatibility matrix, render→apply flow |
 | [wazuh-profiles](wazuh-profiles.md) | **Wazuh deployment profiles** | `poc` / `persistent` / `provided` comparison: Wazuh deploy, indexer + API URL source, agent ingress, resource quota, decommission steps |
-| [provided-profile](provided-profile.md) | **`provided` (BYO Wazuh) tenant profile** | When to choose it, what SocTalk deploys vs not, the dual credential model, credential lifecycle, connectivity prerequisites, failure modes |
+| [provided-profile](provided-profile.md) | **`provided` (BYO Wazuh) tenant profile** | When to choose it, what SocTalk deploys vs not, the dual credential model, credential lifecycle, per-tenant LLM key + fast/thinking model overrides (all profiles), connectivity prerequisites, failure modes |
 
 ## Out of scope
 

@@ -163,9 +163,89 @@ system in the same one-way direction as the SIEM credentials:
    the runs-worker (`secretKeyRef` env vars do **not** refresh on a Secret
    update). The K8s side effects are best-effort and never roll back the
    committed Postgres update. Chart-affecting edits in the same PATCH
-   (provider / base_url / model) additionally enqueue a `tenant.reconcile`
-   job for an active tenant so the new values reach the rendered release —
-   see the [runbook](runbook/README.md).
+   (provider / base_url / model / fast_model / reasoning_model) additionally
+   enqueue a `tenant.reconcile` job for an active tenant so the new values
+   reach the rendered release — see the [runbook](runbook/README.md).
+
+### Per-tenant fast / thinking model overrides
+
+Beyond the single primary `llm_model`, a tenant may pin **per-role** models
+for the runs-worker's two LLM tiers. Terminology mapping, stated once and
+used consistently across the stack: UI **"Thinking model"** == API
+`reasoning_model` == column `llm_reasoning_model` == env
+`SOCTALK_REASONING_MODEL` (and likewise UI "Fast model" == API `fast_model`
+== column `llm_fast_model` == env `SOCTALK_FAST_MODEL`). The two roles at
+runtime:
+
+- **Fast model** (`SOCTALK_FAST_MODEL`) drives routing and worker-step
+  calls — the supervisor's routing decision and HIL inquiry generation.
+- **Thinking model** (`SOCTALK_REASONING_MODEL`) drives **verdict
+  synthesis** — the supervisor's final verdict call.
+
+**Onboard fields.** `POST /api/mssp/tenants/onboard` accepts optional
+`llm_fast_model` / `llm_reasoning_model` for **every profile** (`poc` /
+`persistent` / `provided` alike — unlike `external_siem` they are not
+profile-gated). Blank/whitespace-only values normalize to "no override" so
+the `IntegrationConfig` columns stay NULL; non-blank values persist in the
+**same transaction** as the Tenant row. The server never defaults an
+omitted override to a concrete model. When the onboard also resolves a
+provider (explicit `llm_provider`, or inferred from the key's `sk-ant-`
+prefix), a **clearly-mismatched** override is flipped to that provider's
+default exactly like `llm_model` — a `gpt-*`/`o1*`/`o3*` override under
+`anthropic`, or a `claude*` override under `openai-compatible` — while a
+matching custom override is preserved verbatim.
+
+**Fallback chain (render → chart → runtime).** Each model the runs-worker
+uses resolves through three layers:
+
+1. **Override column** — `render.py` sets `runsWorker.fastModel` /
+   `runsWorker.reasoningModel` to the override **or** `llm_model`. NULL
+   *and* empty string both fall back (a cleared override may be stored
+   either way), so every pre-override tenant row renders exactly as before.
+2. **Primary `llm_model`** — the value just resolved lands in the rendered
+   values; the tenant chart additionally guards with
+   `| default .Values.llm.model` when emitting the env vars.
+3. **runs-worker env** — the chart's runs-worker template emits
+   `SOCTALK_FAST_MODEL` (routing/workers) and `SOCTALK_REASONING_MODEL`
+   (verdict synthesis); the worker's `load_config()` reads them at startup.
+
+**PATCH tri-state contract.** `GET /api/mssp/tenants/{id}/llm` returns
+nullable `fast_model` / `reasoning_model` (`null` = no override — falls
+back to `model`). `PATCH /api/mssp/tenants/{id}/llm` treats both fields as
+tri-state:
+
+| Payload field value | Effect |
+|---|---|
+| omitted / `null` | stored override **unchanged** |
+| `""` (or whitespace-only) | **clear** the override to NULL — revert to the primary `model` fallback |
+| any other string | **set** verbatim |
+
+The empty-string-clears convention exists because a changed-fields-only
+PATCH cannot express "revert to the primary model" with `null`.
+
+**Override changes are chart-affecting.** The resolved models are baked
+into the rendered release's env values at helm-render time, so the
+Secret-rewrite + pod-restart fast path that handles `api_key` rotation
+**cannot** propagate them. Any change to either override — including a
+clear — counts as chart-affecting exactly like a provider / base-URL /
+model edit and enqueues a provisioning job: `tenant.reconcile` for an
+**active** tenant, `tenant.provision` for every other state (e.g. the
+degraded → provisioning retry route). If a pending/in-flight job of the
+same kind already exists, no duplicate is enqueued — the existing job reads
+the latest `IntegrationConfig` row when it runs. See the
+[runbook](runbook/README.md) for the `tenant.reconcile` failure path.
+
+**Provider-flip interaction.** Wherever the system itself flips a tenant's
+provider — onboard key-prefix inference (`sk-ant-…` → `anthropic`), an
+explicit onboard `llm_provider`, or the provisioning controller's auto-flip
+when the install-shared key mirror picks the other vendor's key — the same
+`reconcile_provider_model` helper is applied to non-NULL overrides exactly
+as it is to `llm_model`: a clearly-mismatched override flips to the new
+provider's default, matching custom models are preserved, and NULL
+overrides **stay NULL** (the flip never materializes a concrete model into
+an unset override, so the render-time `llm_model` fallback keeps working).
+A direct `PATCH /llm` provider change is taken verbatim — the operator is
+explicit there and is expected to adjust the models in the same PATCH.
 
 ## 5 Connectivity prerequisites
 
