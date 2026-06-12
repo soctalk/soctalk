@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,7 @@ from soctalk.core.tenancy.models import (
     Organization,
     ProvisioningJob,
     Tenant,
+    TenantLifecycleEvent,
     TenantState,
 )
 
@@ -2000,3 +2002,257 @@ async def test_tenant_get_llm_carries_model_override_fields(
     result = await tenant_get_llm(FakeRequest())
     assert result.fast_model == "gpt-4o-mini"
     assert result.reasoning_model is None
+
+
+# ---------------------------------------------------------------------------
+# :retry on a degraded tenant (tenant.provisioning.retry-active-job)
+# ---------------------------------------------------------------------------
+#
+# The worker flips the tenant to 'degraded' on the FIRST ProvisionError but
+# the job only reaches status='failed' after max_attempts. During the whole
+# backoff window the tenant.provision job is still ACTIVE (pending with a
+# future next_attempt_at, or in_flight). retry_provisioning must pre-check
+# for that active job instead of blind-inserting a duplicate row that the
+# partial unique index uq_provisioning_jobs_active rejects (500).
+
+
+async def _seed_retry_tenant(
+    mssp_session: AsyncSession,
+    seeded_org: Organization,
+    state: str = TenantState.DEGRADED.value,
+) -> Tenant:
+    tenant = Tenant(
+        slug=f"rt{uuid4().hex[:8]}",
+        display_name="Retry Target",
+        state=state,
+        profile="poc",
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.commit()
+    await mssp_session.refresh(tenant)
+    return tenant
+
+
+async def _provision_jobs(
+    mssp_session: AsyncSession, tenant_id
+) -> list[ProvisioningJob]:
+    return list(
+        (
+            await mssp_session.execute(
+                select(ProvisioningJob)
+                .where(ProvisioningJob.tenant_id == tenant_id)
+                .where(ProvisioningJob.kind == "tenant.provision")
+            )
+        ).scalars().all()
+    )
+
+
+async def _retry_events(
+    mssp_session: AsyncSession, tenant_id
+) -> list[TenantLifecycleEvent]:
+    return list(
+        (
+            await mssp_session.execute(
+                select(TenantLifecycleEvent)
+                .where(TenantLifecycleEvent.tenant_id == tenant_id)
+                .where(TenantLifecycleEvent.event_type == "retry_requested")
+            )
+        ).scalars().all()
+    )
+
+
+async def test_retry_pending_job_short_circuits_backoff(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Degraded tenant + still-ACTIVE pending job (mid-backoff): :retry must
+    NOT insert a duplicate row (the live 500). It resets next_attempt_at to
+    now so the worker picks it up immediately, and returns the same job."""
+    from soctalk.core.api.tenants import retry_provisioning
+
+    tenant = await _seed_retry_tenant(mssp_session, seeded_org)
+    job = ProvisioningJob(
+        tenant_id=tenant.id,
+        kind="tenant.provision",
+        status="pending",
+        attempts=2,
+        last_error="ProvisionError: helm timed out",
+        next_attempt_at=datetime.utcnow() + timedelta(minutes=30),
+    )
+    mssp_session.add(job)
+    await mssp_session.commit()
+    await mssp_session.refresh(job)
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await retry_provisioning(tenant.id, FakeRequest())
+
+    # Same job returned, no new row inserted.
+    assert result.id == job.id
+    assert result.status == "pending"
+    jobs = await _provision_jobs(mssp_session, tenant.id)
+    assert len(jobs) == 1
+
+    # Backoff short-circuited: retry-now means next_attempt_at <= now.
+    # (Read-back is tz-aware UTC; strip tzinfo to compare, same convention
+    # as test_provisioning_worker.py.)
+    await mssp_session.refresh(job)
+    assert job.next_attempt_at.replace(tzinfo=None) <= datetime.utcnow()
+
+    events = await _retry_events(mssp_session, tenant.id)
+    assert len(events) == 1
+    assert events[0].details == {"job_action": "backoff_short_circuited"}
+
+
+async def test_retry_in_flight_job_returns_untouched(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Degraded tenant + in_flight job: it is executing right now — :retry
+    returns it untouched (claim fields preserved), inserts nothing."""
+    from soctalk.core.api.tenants import retry_provisioning
+
+    tenant = await _seed_retry_tenant(mssp_session, seeded_org)
+    claimed_at = datetime.utcnow() - timedelta(seconds=5)
+    job = ProvisioningJob(
+        tenant_id=tenant.id,
+        kind="tenant.provision",
+        status="in_flight",
+        attempts=3,
+        claimed_at=claimed_at,
+        claimed_by="worker-1",
+        next_attempt_at=datetime.utcnow() - timedelta(minutes=1),
+    )
+    mssp_session.add(job)
+    await mssp_session.commit()
+    await mssp_session.refresh(job)
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await retry_provisioning(tenant.id, FakeRequest())
+
+    assert result.id == job.id
+    assert result.status == "in_flight"
+    jobs = await _provision_jobs(mssp_session, tenant.id)
+    assert len(jobs) == 1
+
+    # Claim fields and attempts untouched — the run in progress owns them.
+    await mssp_session.refresh(job)
+    assert job.claimed_at.replace(tzinfo=None) == claimed_at
+    assert job.claimed_by == "worker-1"
+    assert job.attempts == 3
+
+    events = await _retry_events(mssp_session, tenant.id)
+    assert len(events) == 1
+    assert events[0].details == {"job_action": "already_in_flight"}
+
+
+async def test_retry_failed_job_is_reopened(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Existing behavior preserved: a failed job is reopened in place —
+    status→pending, attempts=0, last_error cleared, claim released."""
+    from soctalk.core.api.tenants import retry_provisioning
+
+    tenant = await _seed_retry_tenant(mssp_session, seeded_org)
+    job = ProvisioningJob(
+        tenant_id=tenant.id,
+        kind="tenant.provision",
+        status="failed",
+        attempts=5,
+        last_error="ProvisionError: out of retries",
+        claimed_at=datetime.utcnow() - timedelta(hours=1),
+        claimed_by="worker-1",
+    )
+    mssp_session.add(job)
+    await mssp_session.commit()
+    await mssp_session.refresh(job)
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await retry_provisioning(tenant.id, FakeRequest())
+
+    assert result.id == job.id
+    assert result.status == "pending"
+    assert result.attempts == 0
+    assert result.last_error is None
+    jobs = await _provision_jobs(mssp_session, tenant.id)
+    assert len(jobs) == 1
+
+    await mssp_session.refresh(job)
+    assert job.status == "pending"
+    assert job.attempts == 0
+    assert job.last_error is None
+    assert job.claimed_at is None
+    assert job.claimed_by is None
+    assert job.next_attempt_at.replace(tzinfo=None) <= datetime.utcnow()
+
+    events = await _retry_events(mssp_session, tenant.id)
+    assert len(events) == 1
+    assert events[0].details == {"job_action": "reopened_failed"}
+
+
+async def test_retry_without_job_inserts_fresh(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """Degraded tenant with no tenant.provision job at all: :retry inserts a
+    fresh pending row (existing behavior)."""
+    from soctalk.core.api.tenants import retry_provisioning
+
+    tenant = await _seed_retry_tenant(mssp_session, seeded_org)
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await retry_provisioning(tenant.id, FakeRequest())
+
+    assert result.status == "pending"
+    assert result.kind == "tenant.provision"
+    jobs = await _provision_jobs(mssp_session, tenant.id)
+    assert len(jobs) == 1
+    assert jobs[0].id == result.id
+
+    events = await _retry_events(mssp_session, tenant.id)
+    assert len(events) == 1
+    assert events[0].details == {"job_action": "enqueued_new"}
+
+
+async def test_retry_non_degraded_tenant_409(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """The state gate is unchanged: :retry on a non-degraded tenant is 409
+    and writes nothing."""
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import retry_provisioning
+
+    tenant = await _seed_retry_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await retry_provisioning(tenant.id, FakeRequest())
+    assert exc_info.value.status_code == 409
+
+    assert await _provision_jobs(mssp_session, tenant.id) == []
+    assert await _retry_events(mssp_session, tenant.id) == []

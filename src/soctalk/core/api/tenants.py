@@ -426,7 +426,17 @@ async def onboard_tenant(
     ],
 )
 async def retry_provisioning(tenant_id: UUID, request: Request) -> ProvisioningJobRead:
-    """Re-enqueue a failed provisioning job for a degraded tenant."""
+    """Retry provisioning for a degraded tenant.
+
+    Reopens a failed ``tenant.provision`` job (or inserts a fresh one),
+    but first handles the still-ACTIVE-job window: the worker flips the
+    tenant to degraded on the FIRST ProvisionError while the job only
+    reaches status='failed' after max_attempts. During that backoff
+    window a pending/in_flight row still exists, and blind-inserting a
+    duplicate would violate the partial unique index
+    ``uq_provisioning_jobs_active`` (500). Same pre-check pattern as
+    ``llm_config.update_tenant_llm``.
+    """
     session = _db(request)
     tenant = (
         await session.execute(select(Tenant).where(Tenant.id == tenant_id))
@@ -438,28 +448,61 @@ async def retry_provisioning(tenant_id: UUID, request: Request) -> ProvisioningJ
             409, f"retry is only valid from state=degraded (current: {tenant.state})"
         )
 
-    # Look for a previous failed job we can reopen, else insert a fresh one.
-    existing_job = (
+    # Pre-check for an ACTIVE job BEFORE the failed-job lookup — this is
+    # the path that used to blow up on uq_provisioning_jobs_active.
+    # (type: ignore — SQLModel column-expression false positives, same
+    # class as every other .where() in this module.)
+    active_job = (
         await session.execute(
             select(ProvisioningJob)
-            .where(ProvisioningJob.tenant_id == tenant_id)
-            .where(ProvisioningJob.kind == "tenant.provision")
-            .where(ProvisioningJob.status == "failed")
-            .order_by(ProvisioningJob.created_at.desc())
+            .where(ProvisioningJob.tenant_id == tenant_id)  # type: ignore[arg-type]
+            .where(ProvisioningJob.kind == "tenant.provision")  # type: ignore[arg-type]
+            .where(ProvisioningJob.status.in_(["pending", "in_flight"]))  # type: ignore[attr-defined]
+            .order_by(ProvisioningJob.created_at.desc())  # type: ignore[attr-defined]
             .limit(1)
         )
     ).scalar_one_or_none()
 
+    # Only when no active job exists: look for a previous failed job we
+    # can reopen, else insert a fresh one.
+    failed_job = None
+    if active_job is None:
+        failed_job = (
+            await session.execute(
+                select(ProvisioningJob)
+                .where(ProvisioningJob.tenant_id == tenant_id)
+                .where(ProvisioningJob.kind == "tenant.provision")
+                .where(ProvisioningJob.status == "failed")
+                .order_by(ProvisioningJob.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
     async with tenant_context(session, tenant_id):
-        if existing_job is not None:
-            existing_job.status = "pending"
-            existing_job.attempts = 0
-            existing_job.last_error = None
-            existing_job.claimed_at = None
-            existing_job.claimed_by = None
-            existing_job.next_attempt_at = datetime.utcnow()
-            existing_job.updated_at = datetime.utcnow()
-            job = existing_job
+        if active_job is not None:
+            if active_job.status == "pending":
+                # Mid-backoff: "retry now" just short-circuits the
+                # remaining wait so the worker picks the job up on its
+                # next poll. Attempts/last_error are preserved — this is
+                # the same run, only sooner.
+                active_job.next_attempt_at = datetime.utcnow()
+                active_job.updated_at = datetime.utcnow()
+                job_action = "backoff_short_circuited"
+            else:
+                # in_flight: a worker is executing it right now. Leave
+                # the claim fields untouched and report it back as-is.
+                job_action = "already_in_flight"
+            job = active_job
+        elif failed_job is not None:
+            failed_job.status = "pending"
+            failed_job.attempts = 0
+            failed_job.last_error = None
+            failed_job.claimed_at = None
+            failed_job.claimed_by = None
+            failed_job.next_attempt_at = datetime.utcnow()
+            failed_job.updated_at = datetime.utcnow()
+            job = failed_job
+            job_action = "reopened_failed"
         else:
             job = ProvisioningJob(
                 tenant_id=tenant_id,
@@ -467,6 +510,7 @@ async def retry_provisioning(tenant_id: UUID, request: Request) -> ProvisioningJ
                 status="pending",
             )
             session.add(job)
+            job_action = "enqueued_new"
         session.add(
             TenantLifecycleEvent(
                 tenant_id=tenant_id,
@@ -474,7 +518,7 @@ async def retry_provisioning(tenant_id: UUID, request: Request) -> ProvisioningJ
                 from_state=tenant.state,
                 to_state=tenant.state,
                 actor_id=str(request.state.user_identity.get("user_id")),
-                details={},
+                details={"job_action": job_action},
             )
         )
         await session.commit()
