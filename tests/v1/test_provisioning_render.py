@@ -488,6 +488,76 @@ def test_llm_api_key_suppressed_on_controller_path():
 
 
 # ---------------------------------------------------------------------------
+# runsWorker model overrides (tenant.llm.models.render)
+# ---------------------------------------------------------------------------
+
+
+def test_runs_worker_model_overrides_rendered_when_set():
+    """Per-tenant ``llm_fast_model`` / ``llm_reasoning_model`` overrides flow
+    into ``runsWorker.fastModel`` / ``runsWorker.reasoningModel`` — the chart
+    maps those to SOCTALK_FAST_MODEL / SOCTALK_REASONING_MODEL on the
+    runs-worker (35-runs-worker.yaml), so no chart edit is needed."""
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.llm_fast_model = "gpt-4o-mini"
+    integration.llm_reasoning_model = "o3"
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    assert v["runsWorker"]["fastModel"] == "gpt-4o-mini"
+    assert v["runsWorker"]["reasoningModel"] == "o3"
+    # llm.model itself is untouched by the overrides.
+    assert v["llm"]["model"] == "gpt-4o"
+    _assert_validates_against_tenant_schema(v)
+
+
+def test_runs_worker_models_fall_back_to_llm_model_when_null():
+    """NULL overrides preserve today's behavior: both runsWorker models
+    render as ``integration.llm_model`` for every existing tenant row."""
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)  # llm_fast/reasoning_model both NULL
+    assert integration.llm_fast_model is None
+    assert integration.llm_reasoning_model is None
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    assert v["runsWorker"]["fastModel"] == "gpt-4o"
+    assert v["runsWorker"]["reasoningModel"] == "gpt-4o"
+
+
+def test_runs_worker_models_treat_empty_string_as_unset():
+    """A cleared override may be stored as '' instead of NULL; render time
+    must treat both identically and fall back to llm_model."""
+    t = _make_tenant("poc")
+    integration = _make_integration(t.id)
+    integration.llm_fast_model = ""
+    integration.llm_reasoning_model = ""
+    v = render_tenant_values(
+        tenant=t,
+        integration=integration,
+        branding=_make_branding(t.id),
+        mssp_id=str(uuid4()),
+        install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm",
+        profile="poc",
+    )
+    assert v["runsWorker"]["fastModel"] == "gpt-4o"
+    assert v["runsWorker"]["reasoningModel"] == "gpt-4o"
+
+
+# ---------------------------------------------------------------------------
 # render_wazuh_values: per-tenant layer
 # ---------------------------------------------------------------------------
 

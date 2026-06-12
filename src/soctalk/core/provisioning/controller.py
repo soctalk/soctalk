@@ -1309,14 +1309,34 @@ class TenantController:
             # when the existing one clearly belongs to the *other*
             # provider — preserves operator-set custom models that
             # already match.
+            # The per-tenant fast/reasoning overrides must flip alongside
+            # llm_model: an anthropic auto-switch that left
+            # ``llm_fast_model=gpt-4o-mini`` in place would still render
+            # ``SOCTALK_FAST_MODEL=gpt-4o-mini`` on the runs-worker (the
+            # renderer prefers the override). NULL overrides stay NULL —
+            # the flip never materializes a concrete model into an unset
+            # override; render-time fallback to llm_model keeps working.
             from soctalk.core.llm_provider import reconcile_provider_model
+
+            def _flip_models(provider: str) -> None:
+                ctx.integration.llm_model = reconcile_provider_model(
+                    provider, ctx.integration.llm_model
+                )
+                if ctx.integration.llm_fast_model:
+                    ctx.integration.llm_fast_model = reconcile_provider_model(
+                        provider, ctx.integration.llm_fast_model
+                    )
+                if ctx.integration.llm_reasoning_model:
+                    ctx.integration.llm_reasoning_model = (
+                        reconcile_provider_model(
+                            provider, ctx.integration.llm_reasoning_model
+                        )
+                    )
 
             if chosen_key_name == "anthropic-api-key":
                 if ctx.integration.llm_provider != "anthropic":
                     ctx.integration.llm_provider = "anthropic"
-                    ctx.integration.llm_model = reconcile_provider_model(
-                        "anthropic", ctx.integration.llm_model
-                    )
+                    _flip_models("anthropic")
                     await self.session.flush()
             elif chosen_key_name == "openai-api-key":
                 if ctx.integration.llm_provider not in ("openai", "openai-compatible"):
@@ -1328,9 +1348,7 @@ class TenantController:
                     # Helm validation on the next retry and leave
                     # the tenant degraded.
                     ctx.integration.llm_provider = "openai-compatible"
-                    ctx.integration.llm_model = reconcile_provider_model(
-                        "openai-compatible", ctx.integration.llm_model
-                    )
+                    _flip_models("openai-compatible")
                     await self.session.flush()
         await self.k8s.put_secret(
             ctx.namespace,

@@ -11,10 +11,20 @@ Two provisioning test files (``test_provisioning_controller.py``,
 their local helpers; setting the env vars here overrides those stale
 defaults so ``patagon_check`` and other bare-``pytest`` invocations talk
 to the same Postgres the rest of the suite uses.
+
+Local override: a gitignored ``.env.test`` at the repo root lets a dev
+box whose port 5432 is occupied by an unrelated Postgres repoint
+``DATABASE_URL[_ADMIN/_APP/_MSSP]`` at wherever its integration Postgres
+actually listens, without exporting vars into every pytest invocation.
+Loaded with ``override=True``: the file is purpose-built for the test
+process, so it beats stale URLs inherited from the dev shell (e.g. a
+flake/direnv-exported ``DATABASE_URL``). CI is unaffected — it never
+ships a ``.env.test``.
 """
 
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
@@ -22,6 +32,14 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+try:
+    from dotenv import load_dotenv
+
+    # override=True: .env.test (when present) beats inherited shell vars —
+    # see the module docstring for why.
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env.test", override=True)
+except ImportError:  # pragma: no cover - python-dotenv is a core dependency
+    pass
 
 os.environ.setdefault(
     "DATABASE_URL_ADMIN",

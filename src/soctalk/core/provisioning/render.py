@@ -335,8 +335,14 @@ def render_tenant_values(
                 "name": "runs-worker-token",
                 "key": "token",
             },
-            "fastModel": integration.llm_model,
-            "reasoningModel": integration.llm_model,
+            # Per-tenant model overrides (integration_configs.llm_fast_model /
+            # llm_reasoning_model). NULL *or* empty string falls back to
+            # llm_model — a cleared override may be stored either way — so
+            # every pre-override tenant row renders exactly as before.
+            "fastModel": integration.llm_fast_model or integration.llm_model,
+            "reasoningModel": (
+                integration.llm_reasoning_model or integration.llm_model
+            ),
         },
         "namespaceLabels": {
             "tenant": "true",

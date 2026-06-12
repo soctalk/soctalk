@@ -689,6 +689,131 @@ async def test_llm_key_install_wide_unchanged(
     assert any(_INSTALL_LLM_SECRET in c for c in fake_k8s.calls)
 
 
+async def test_llm_anthropic_autoflip_reconciles_model_overrides(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """tenant.llm.models.render, criterion 3+5: provisioning via the
+    install-shared ``anthropic-api-key`` auto-flips the provider AND
+    reconciles the clearly-OpenAI ``llm_fast_model`` / ``llm_reasoning_model``
+    overrides to the anthropic default alongside ``llm_model`` — the rendered
+    runsWorker values must never carry an OpenAI model after the flip.
+    """
+    from soctalk.core.llm_provider import ANTHROPIC_DEFAULT_MODEL
+
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    # No per-tenant key ⇒ install-wide Secret path; clearly-OpenAI overrides.
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.llm_api_key_plain = None
+    integ.llm_provider = "openai-compatible"
+    integ.llm_model = "gpt-4o"
+    integ.llm_fast_model = "gpt-4o-mini"
+    integ.llm_reasoning_model = "o3"
+    await session.commit()
+
+    fake_k8s = FakeK8s()
+    # Anthropic-only install Secret ⇒ chosen_key_name == "anthropic-api-key".
+    fake_k8s.secrets[(_INSTALL_LLM_NS, _INSTALL_LLM_SECRET)] = {
+        "anthropic-api-key": "sk-ant-install-SHARED-KEY",
+    }
+
+    helm_values: list[dict] = []
+
+    async def rec_install_tenant(*_, values=None, **__):
+        helm_values.append(values or {})
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+
+    controller = _llm_guard_controller(session, fake_k8s)
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # DB row: provider flipped, ALL three model columns reconciled.
+    await session.refresh(integ)
+    assert integ.llm_provider == "anthropic"
+    assert integ.llm_model == ANTHROPIC_DEFAULT_MODEL
+    assert integ.llm_fast_model == ANTHROPIC_DEFAULT_MODEL
+    assert integ.llm_reasoning_model == ANTHROPIC_DEFAULT_MODEL
+
+    # Rendered values: the runs-worker never sees an OpenAI model.
+    assert helm_values, "helm_install_tenant was not invoked"
+    rw = helm_values[0]["runsWorker"]
+    assert rw["fastModel"] == ANTHROPIC_DEFAULT_MODEL, (
+        "anthropic auto-switch must never leave SOCTALK_FAST_MODEL=gpt-4o-mini"
+    )
+    assert rw["reasoningModel"] == ANTHROPIC_DEFAULT_MODEL
+
+
+async def test_llm_anthropic_autoflip_leaves_null_overrides_null(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """tenant.llm.models.render, criterion 3+5 (NULL branch): the provider
+    auto-flip never materializes a concrete model into an unset override —
+    NULL ``llm_fast_model`` / ``llm_reasoning_model`` stay NULL and the
+    renderer's fallback to ``llm_model`` keeps working.
+    """
+    from soctalk.core.llm_provider import ANTHROPIC_DEFAULT_MODEL
+
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.llm_api_key_plain = None
+    integ.llm_provider = "openai-compatible"
+    integ.llm_model = "gpt-4o"
+    integ.llm_fast_model = None
+    integ.llm_reasoning_model = None
+    await session.commit()
+
+    fake_k8s = FakeK8s()
+    fake_k8s.secrets[(_INSTALL_LLM_NS, _INSTALL_LLM_SECRET)] = {
+        "anthropic-api-key": "sk-ant-install-SHARED-KEY",
+    }
+
+    helm_values: list[dict] = []
+
+    async def rec_install_tenant(*_, values=None, **__):
+        helm_values.append(values or {})
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+
+    controller = _llm_guard_controller(session, fake_k8s)
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    await session.refresh(integ)
+    assert integ.llm_provider == "anthropic"
+    assert integ.llm_model == ANTHROPIC_DEFAULT_MODEL
+    # NULL overrides stay NULL — never materialized by the flip.
+    assert integ.llm_fast_model is None
+    assert integ.llm_reasoning_model is None
+
+    # Render-time fallback: both runsWorker models come from llm_model.
+    assert helm_values, "helm_install_tenant was not invoked"
+    rw = helm_values[0]["runsWorker"]
+    assert rw["fastModel"] == ANTHROPIC_DEFAULT_MODEL
+    assert rw["reasoningModel"] == ANTHROPIC_DEFAULT_MODEL
+
+
 async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
     session: AsyncSession, admin_session: AsyncSession, patched_helm, monkeypatch
 ):
