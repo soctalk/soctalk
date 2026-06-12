@@ -88,6 +88,11 @@ export interface TenantOnboard {
 	// install key). Both are omitted entirely when blank.
 	llm_provider?: string;
 	llm_api_key?: string;
+	// Optional per-tenant model overrides for the fast (cheap/summarize) and
+	// reasoning ("Thinking model" in UI copy) tiers. Omitted entirely when
+	// blank, mirroring the llm_provider/llm_api_key convention above.
+	llm_fast_model?: string;
+	llm_reasoning_model?: string;
 	// Nested external-SIEM block — only sent for the ``provided`` profile.
 	// Supersedes the earlier flat ``wazuh_*`` fields. Omitted entirely for
 	// poc/persistent so the controller fills wazuh_url/indexer_url in-cluster.
@@ -143,6 +148,10 @@ export interface TenantLlmRead {
 	provider: string;
 	base_url: string;
 	model: string;
+	// Per-tier model overrides — ``null`` means no override is set and the
+	// tier falls back to ``model``.
+	fast_model: string | null;
+	reasoning_model: string | null;
 	has_api_key: boolean;
 	api_key_preview: string;
 }
@@ -156,6 +165,11 @@ export interface TenantLlmUpdate {
 	base_url?: string;
 	model?: string;
 	api_key?: string;
+	// Tri-state per-tier overrides: omitted = leave unchanged, '' = clear
+	// the override (revert the tier to the primary ``model``), non-empty =
+	// set the override.
+	fast_model?: string;
+	reasoning_model?: string;
 }
 
 // Live adapter ingest status — the control plane server-side proxies the
