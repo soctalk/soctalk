@@ -43,9 +43,13 @@ target_metadata = SQLModel.metadata
 
 def get_url() -> str:
     """Get database URL from environment, converting async to sync driver."""
-    url = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://soctalk:soctalk@localhost:5432/soctalk",
+    url = os.getenv("DATABASE_URL") or os.getenv(
+        # Fall back to the DDL role used by the integration suite / CI so
+        # in-process reversibility tests work when only the role-specific
+        # vars are set. Final default is a runnable admin URL (never the
+        # non-existent bare ``soctalk`` role).
+        "DATABASE_URL_ADMIN",
+        "postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk",
     )
     # Convert async driver to sync driver for Alembic
     # asyncpg -> psycopg2 (or just postgresql for default driver)

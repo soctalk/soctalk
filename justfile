@@ -167,7 +167,13 @@ integration-test *EXTRA="tests/v1":
         export DATABASE_URL_ADMIN=postgresql+asyncpg://soctalk_admin:soctalk_admin@localhost:5432/soctalk; \
         export DATABASE_URL_APP=postgresql+asyncpg://soctalk_app:soctalk_app@localhost:5432/soctalk; \
         export DATABASE_URL_MSSP=postgresql+asyncpg://soctalk_mssp:soctalk_mssp@localhost:5432/soctalk; \
-        .venv/bin/pytest -m integration {{EXTRA}}'
+        M=tests/v1/test_metrics_bridge_tenant_scope.py; \
+        if [ "{{EXTRA}}" = "tests/v1" ]; then \
+            .venv/bin/pytest -m integration tests/v1 --ignore="$M" && \
+            .venv/bin/pytest -m integration "$M"; \
+        else \
+            .venv/bin/pytest -m integration {{EXTRA}}; \
+        fi'
 
 # ---------------------------------------------------------------------------
 # Layer C — deploy SocTalk into the local k3d cluster.
