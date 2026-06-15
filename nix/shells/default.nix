@@ -71,6 +71,7 @@ in pkgs.mkShell {
     pkgs.jq
     pkgs.git
     pkgs.just
+    pkgs.gh
 
     # Kubernetes tooling (Layer C — multi-tenant local stack on k3d).
     # See scripts/dev-up.sh for the cluster-bring-up procedure these
