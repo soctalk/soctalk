@@ -4,18 +4,20 @@ name: Build Packer Demo Images
 # (QCOW2) source is built in CI — the AWS AMI source needs AWS creds
 # wired up separately.
 #
-# Manual only. Image builds are expensive (~10-15 min + nontrivial CI
-# minutes + multi-GB artifacts), and most code changes don't warrant
-# a fresh image. Fire intentionally when you have a new release to
-# distribute:
+# Triggers:
+#   * Push of a ``v*`` tag — automatic release builds. The compressed
+#     qcow2/vmdk/vhdx/vhd/raw + SHA256SUMS get attached to the matching
+#     GitHub Release alongside the container-image + chart manifest from
+#     ``publish-images.yml``.
+#   * workflow_dispatch — manual ad-hoc builds (e.g. testing a Packer
+#     change against ``main`` without cutting a tag).
 #
-#   gh workflow run build-packer-images.yml -f version=0.1.0
-#
-# Output: a compressed QCOW2 image uploaded as a workflow artifact.
-# Attached to the GitHub Release if the workflow is fired from a v*
-# tag context (workflow_dispatch from a tag ref).
+# Image builds are expensive (~10-15 min + nontrivial CI minutes +
+# multi-GB artifacts), so this workflow stays OFF for ``main`` pushes.
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -114,15 +116,32 @@ jobs:
       - name: packer init
         run: packer init .
 
+      - name: Compute artifact version
+        id: ver
+        run: |
+          set -euo pipefail
+          # On v* tag push, strip the leading 'v' so artifact filenames
+          # match the container-image tagging convention (0.1.2 not
+          # v0.1.2). Otherwise honor the workflow_dispatch input or
+          # fall back to 'dev'.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          else
+            v="${{ inputs.version }}"
+            [[ -z "$v" ]] && v="dev"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Using version: $v"
+
       - name: packer validate
         env:
-          PKR_VAR_version: ${{ inputs.version || 'dev' }}
+          PKR_VAR_version: ${{ steps.ver.outputs.version }}
           PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
         run: packer validate .
 
       - name: packer build (qemu source)
         env:
-          PKR_VAR_version: ${{ inputs.version || github.ref_name }}
+          PKR_VAR_version: ${{ steps.ver.outputs.version }}
           PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
           # Packer's QEMU builder honors PACKER_LOG=1 for verbose output.
           PACKER_LOG: '1'
@@ -152,7 +171,7 @@ jobs:
           # The post-processor emits qcow2, vmdk, vhdx, vhd, raw.
           # Fail fast if any one is missing so we don't ship a partial release.
           for ext in qcow2 vmdk vhdx vhd raw; do
-            test -f "build/dist/soctalk-demo-${{ inputs.version || 'dev' }}.${ext}" \
+            test -f "build/dist/soctalk-demo-${{ steps.ver.outputs.version }}.${ext}" \
               || { echo "::error::missing build/dist/*.${ext}"; exit 1; }
           done
 
