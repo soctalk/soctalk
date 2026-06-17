@@ -16,7 +16,15 @@ Wazuh-powered, bring your own LLM, self-host anywhere.
 
 ## Try it in 5 minutes
 
-Download a ready-to-run demo VM, boot it, and click through the setup wizard:
+The demo VM is **batteries-included** — Ubuntu, K3s, the SocTalk charts, and a
+first-boot setup wizard baked into one image. Download it, boot it, click through
+the wizard.
+
+**GUI (VirtualBox)** — the easiest cross-platform desktop path (Windows, Linux,
+Intel Mac): create a VM from the image and boot. Full walkthrough with
+screenshots: **[Run on VirtualBox](https://soctalk.github.io/soctalk-docs/virtualbox)**.
+
+**CLI (KVM / QEMU):**
 
 ```bash
 # qcow2 shown — pick the format for your hypervisor on the Downloads page
@@ -29,8 +37,8 @@ qemu-system-x86_64 -m 8G -smp 4 -enable-kvm \
   -netdev user,id=n,hostfwd=tcp::8443-:8443 -device virtio-net,netdev=n -nographic
 ```
 
-Then open `https://localhost:8443` and finish in the wizard. Other formats
-(VMware, Hyper-V, Azure, AWS, Proxmox) and the full walkthrough:
+Then open `https://localhost:8443` and finish in the wizard. Other platforms
+(VMware, Hyper-V, Proxmox, AWS, Azure) and the full walkthrough:
 **[Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm)** ·
 **[Downloads](https://soctalk.github.io/soctalk-docs/downloads)**.
 
