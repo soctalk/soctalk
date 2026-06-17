@@ -1,282 +1,79 @@
 # SocTalk
 
-LLM-powered SOC agent that autonomously triages, investigates, and escalates security alerts.
+> Open-source, LLM-driven SOC automation. Continuously triages, investigates,
+> and escalates Wazuh alerts — single-host for one team, or multi-tenant for
+> MSPs and MSSPs.
 
 ![SocTalk Dashboard](docs/images/soctalk-dashboard.png)
 
-Integrates with Wazuh SIEM, Cortex, TheHive, and MISP via MCP servers, plus a real-time dashboard.
+SocTalk turns raw Wazuh alerts into investigated, prioritized, and (when you
+allow it) auto-resolved cases. A two-tier LLM pipeline routes and reasons over
+each alert, a human-in-the-loop step keeps an analyst in control, and a built-in
+incident-response workflow records everything for audit and replay. And you can
+just ask — a scope-aware chat answers questions about your SOC in plain English,
+across the whole MSSP fleet or scoped to a single tenant. Apache-2.0,
+Wazuh-powered, bring your own LLM, self-host anywhere.
 
-SocTalk runs as a single-host SOC tool or as a multi-tenant platform for MSPs and MSSPs.
+## Try it in 5 minutes
 
-The single-host path uses Docker Compose. One SocTalk instance, one Wazuh, one dashboard. Setup is under "Quick Start: Single-tenant Compose" below.
-
-The multi-tenant platform is the MSSP-facing shape of SocTalk. A shared control plane holds tenant-scoped state in Postgres and provisions per-tenant SOC stacks in their own Kubernetes namespaces. Design and install guides live in [`docs/multi-tenant/`](docs/multi-tenant/); "Multi-tenant deployment" below summarizes the shape.
-
-## Multi-tenant deployment
-
-![MSSP Dashboard](docs/images/soctalk-mssp-dashboard.png)
-
-Multi-tenant SocTalk is an MSSP-deployed control plane. It provisions and operates dedicated OSS SOC stacks per customer tenant on k3s or k8s. Tenant state lives in Postgres under Row-Level Security. Each tenant's SOC stack runs in its own Kubernetes namespace, with its own LLM credentials and branding.
-
-Two charts ship. `soctalk-system` is the control plane. `soctalk-tenant` is the per-customer SOC stack the controller renders and applies.
-
-Full design and operations material lives in [`docs/multi-tenant/`](docs/multi-tenant/), including the security model, chart audit, RLS hygiene, ingress, sizing, and the install, runbook, and upgrade guides.
-
-## Quick Start: Single-tenant Compose
-
-The single-host path. Use it for evaluation, lab work, or running SocTalk as the SOC tool for a single team.
-
-### Docker Compose
+Download a ready-to-run demo VM, boot it, and click through the setup wizard:
 
 ```bash
-cp .env.example .env
-docker compose up -d --build postgres api frontend
+# qcow2 shown — pick the format for your hypervisor on the Downloads page
+curl -L -O https://github.com/soctalk/soctalk/releases/download/v0.1.2/soctalk-demo-0.1.2.qcow2.xz
+xz -d soctalk-demo-0.1.2.qcow2.xz
+
+# Boot with KVM and forward the setup wizard to localhost:8443
+qemu-system-x86_64 -m 8G -smp 4 -enable-kvm \
+  -drive file=soctalk-demo-0.1.2.qcow2,if=virtio \
+  -netdev user,id=n,hostfwd=tcp::8443-:8443 -device virtio-net,netdev=n -nographic
 ```
 
-Open:
-- Dashboard: http://localhost:5173
-- API (OpenAPI): http://localhost:8000/docs
-- Health: http://localhost:8000/health
-
-Start the orchestrator (for end-to-end flow):
-
-```bash
-docker compose up -d --build orchestrator
-docker compose logs -f orchestrator
-```
-
-The orchestrator image bundles MCP server binaries at `/opt/mcp-servers/*`.
-
-### Local development
-
-Backend:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-cp .env.example .env
-docker compose up -d postgres
-alembic upgrade head
-
-uvicorn soctalk.api.app:app --host 0.0.0.0 --port 8000 --env-file .env --reload
-```
-
-Frontend:
-
-```bash
-cd frontend
-pnpm install
-pnpm dev
-```
-
-Dev helper to run everything locally:
-
-```bash
-./scripts/run-dev.sh start
-```
+Then open `https://localhost:8443` and finish in the wizard. Other formats
+(VMware, Hyper-V, Azure, AWS, Proxmox) and the full walkthrough:
+**[Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm)** ·
+**[Downloads](https://soctalk.github.io/soctalk-docs/downloads)**.
 
 ## Features
 
-- **Supervisor + specialized workers** for routing/enrichment across Wazuh, Cortex, MISP, TheHive
-- **Two-tier LLM** (fast router + reasoning verdict) with Anthropic or OpenAI-compatible providers
-- **Continuous Wazuh polling** with correlation and prioritization
-- **Human-in-the-loop** approvals (dashboard/Slack/CLI)
-- **Event sourcing + CQRS** for auditability and replay
-- **Real-time dashboard** (SvelteKit + SSE)
-- **Configurable integrations** via Settings UI (secrets remain env-only)
+- **Two-tier LLM triage** — fast router + reasoning verdict, with Anthropic or any OpenAI-compatible provider
+- **Conversational chat** — ask the SocTalk agent in plain language; scope-aware across every tenant (MSSP-wide) or bound to one customer (tenant scope)
+- **Flexible Wazuh** — provision a dedicated Wazuh SIEM per tenant, or connect SocTalk to a customer's existing Wazuh
+- **Continuous Wazuh polling** with correlation and prioritization into investigations
+- **Human-in-the-loop** approvals via dashboard, Slack, or CLI
+- **Built-in incident response** and case workflow; TheHive, Cortex, and MISP are optional integrations
+- **Service KPIs** — alert volume, time-to-verdict, time-to-review, and escalation rate, at both the MSSP (cross-tenant) and per-tenant level
+- **Event-sourced** for full auditability and replay, with a real-time dashboard
+- **Multi-tenant** — isolated per-customer SOC stacks on k3s/k8s, Postgres row-level security, per-tenant LLM credentials and branding
 
-## Architecture
+## Multi-tenant (MSP / MSSP)
 
-SocTalk is split into three pieces: an **orchestrator** (LangGraph workflow), an **API** that streams events and exposes REST, and a **dashboard** for investigations and human review.
+![MSSP Dashboard](docs/images/soctalk-mssp-dashboard.png)
 
-**High-level flow**
-1. **Ingest:** Poll Wazuh alerts and correlate into an investigation.
-2. **Investigate:** Supervisor routes work to MCP-backed workers (Wazuh/Cortex/MISP/TheHive).
-3. **Decide:** Reasoning LLM produces a verdict; thresholds pick auto-close vs escalate.
-4. **Approve:** Human review via dashboard interrupt/resume, Slack HIL, or CLI fallback.
-5. **Act:** Create cases/incidents in TheHive and notify via Slack webhook.
-6. **Persist + stream:** Events go to Postgres (when enabled); API streams updates to the UI over SSE.
+Run SocTalk as an MSSP control plane that provisions and operates a dedicated
+SOC stack per customer — each in its own Kubernetes namespace with isolated
+credentials, branding, and tenant-scoped state under Postgres RLS. For each
+tenant, deploy a dedicated Wazuh SIEM or connect to one the customer already
+runs; service KPIs roll up across the whole fleet and drill down per tenant.
+Two Helm charts ship: `soctalk-system` (control plane) and `soctalk-tenant`
+(the per-customer stack the controller renders and applies). See the
+**[MSSP UI tour](https://soctalk.github.io/soctalk-docs/mssp-ui)** and
+**[Tenant lifecycle](https://soctalk.github.io/soctalk-docs/tenant-lifecycle)**.
 
-**Building blocks**
-- **LangGraph workflow:** encodes triage → enrichment → verdict → human review → response.
-- **MCP servers (integrations):** `mcp-server-wazuh`, `mcp-server-cortex`, `mcp-server-misp`, `mcp-server-thehive`.
-- **Integrated solutions:** Wazuh (SIEM), Cortex (analysis), MISP (threat intel), TheHive (case/IR).
-- **Mock agents:** containerized Wazuh agents that execute MITRE ATT&CK-style techniques to generate realistic alerts.
-- **Orchestrator (`soctalk` CLI):** runs polling/correlation and the LangGraph.
-- **Persistence (Postgres):** event store + projections for timelines, metrics, and dashboards.
-- **API (FastAPI) + Dashboard (SvelteKit):** REST, SSE event stream, metrics, review queue, settings.
-- **Settings + secrets:** non-secret prefs editable in UI and stored in DB; secrets stay in env.
+## Documentation
 
-**Workflow diagram**
+Full docs live at **[soctalk.github.io/soctalk-docs](https://soctalk.github.io/soctalk-docs/)**:
 
-![SocTalk Workflow](docs/images/soctalk-workflow.png)
+- **Get started** — [Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm) · [Downloads](https://soctalk.github.io/soctalk-docs/downloads) · [Setup wizard](https://soctalk.github.io/soctalk-docs/setup-wizard) · [Production install](https://soctalk.github.io/soctalk-docs/install)
+- **Run on** — [Proxmox](https://soctalk.github.io/soctalk-docs/proxmox) · [AWS](https://soctalk.github.io/soctalk-docs/aws) · [Azure](https://soctalk.github.io/soctalk-docs/azure)
+- **Concepts** — [AI pipeline](https://soctalk.github.io/soctalk-docs/ai-pipeline) · [Tenant lifecycle](https://soctalk.github.io/soctalk-docs/tenant-lifecycle) · [Human review](https://soctalk.github.io/soctalk-docs/human-review)
+- **Reference** — [Architecture](https://soctalk.github.io/soctalk-docs/reference/architecture) · [Security model](https://soctalk.github.io/soctalk-docs/reference/security-model) · [REST API](https://soctalk.github.io/soctalk-docs/reference/api)
 
+## Contributing
 
-## Configuration
-
-Copy `.env.example` to `.env` and set what you need.
-
-**LLM provider (mutually exclusive)**
-- `SOCTALK_LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`
-- `SOCTALK_LLM_PROVIDER=openai` + `OPENAI_API_KEY` (OpenAI-compatible)
-- Optional: `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`/`OPENAI_API_BASE`, `OPENAI_ORGANIZATION`
-- Models/params: `SOCTALK_FAST_MODEL`, `SOCTALK_REASONING_MODEL`, `SOCTALK_LLM_TEMPERATURE`, `SOCTALK_LLM_MAX_TOKENS`
-
-**Integrations (MCP)**
-- Toggles: `WAZUH_ENABLED`, `CORTEX_ENABLED`, `THEHIVE_ENABLED`, `MISP_ENABLED`
-- URLs/non-secrets (UI-editable): `WAZUH_URL`, `CORTEX_URL`/`CORTEX_ENDPOINT`, `THEHIVE_URL`, `THEHIVE_ORGANISATION`, `MISP_URL`, `*_VERIFY_SSL`
-- Secrets (env-only): `WAZUH_API_USER`/`WAZUH_API_PASSWORD`, `CORTEX_API_KEY`, `THEHIVE_API_KEY`/`THEHIVE_API_TOKEN`, `MISP_API_KEY`
-
-**Notifications**
-- `SLACK_ENABLED`, `SLACK_CHANNEL`, `SLACK_NOTIFY_ON_ESCALATION`, `SLACK_NOTIFY_ON_VERDICT`
-- Secret (env-only): `SLACK_WEBHOOK_URL`
-
-**MCP server binaries**
-
-The orchestrator requires MCP server binaries to communicate with external tools.
-
-**Docker (automatic)**
-
-The orchestrator image downloads pre-built binaries from GitHub releases at build time and installs them to `/opt/mcp-servers/*`.
-
-**Local development**
-
-Build from source or download binaries manually, then set paths in `.env`.
-
-*Build from source (requires Rust):*
-```bash
-git clone https://github.com/gbrigandi/mcp-server-wazuh && cd mcp-server-wazuh && cargo build --release
-```
-
-*Set paths to your builds:*
-```bash
-WAZUH_MCP_SERVER_PATH=../mcp-server-wazuh/target/release/mcp-server-wazuh
-CORTEX_MCP_SERVER_PATH=../mcp-server-cortex/target/release/mcp-server-cortex
-THEHIVE_MCP_SERVER_PATH=../mcp-server-thehive/target/release/mcp-server-thehive
-MISP_MCP_SERVER_PATH=../mcp-server-misp/target/release/mcp-server-misp
-```
-
-Alternatively, set `MCP_SERVERS_BASE_PATH` to a directory containing all four binaries.
-
-**Polling + thresholds**
-- `SOCTALK_POLLING_INTERVAL`, `SOCTALK_MAX_ALERTS_PER_POLL`, `SOCTALK_BATCH_SIZE`, `SOCTALK_CORRELATION_WINDOW`
-- `SOCTALK_AUTO_CLOSE_THRESHOLD`, `SOCTALK_ESCALATION_THRESHOLD`, `SOCTALK_CRITICAL_SEVERITY`
-
-**Database / persistence**
-- Enable: `SOCTALK_DB_ENABLED=true`
-- URL: `SOCTALK_DATABASE_URL`
-- Run migrations: `alembic upgrade head`
-
-**Settings UI**
-- Non-secret prefs stored in DB and override env defaults (see Preferences below).
-- `SETTINGS_READONLY=true` disables edits/resets (recommended for production).
-
-**Auth (optional)**
-- `AUTH_MODE=none|static|proxy`
-- Static users: `AUTH_USERS` (pbkdf2_sha256 recommended)
-- Session: `AUTH_SESSION_SECRET`, `AUTH_SESSION_TTL_SECONDS`, `AUTH_COOKIE_SECURE`
-
-**Logging**
-- `SOCTALK_LOG_LEVEL`, `SOCTALK_LOG_FORMAT`, `RUST_LOG` (for MCP servers)
-
-## Preferences (Settings UI)
-
-The dashboard Settings page shows where a value comes from (Env vs Override) and lets you edit non-secret preferences. Secrets stay in the environment. Changes apply when the orchestrator restarts and reloads settings.
-
-**LLM**
-- `llm_provider`: `anthropic` or `openai` (requires matching env API key; keys are mutually exclusive).
-- `llm_fast_model`, `llm_reasoning_model`, `llm_temperature` (0–2), `llm_max_tokens`.
-- `llm_anthropic_base_url` (optional), `llm_openai_base_url` (optional), `llm_openai_organization` (optional).
-
-**Wazuh**
-- `wazuh_enabled`, `wazuh_url`, `wazuh_verify_ssl` (env-only secrets for credentials).
-
-**Cortex**
-- `cortex_enabled`, `cortex_url`, `cortex_verify_ssl` (env-only `CORTEX_API_KEY`).
-
-**TheHive**
-- `thehive_enabled`, `thehive_url`, `thehive_organisation`, `thehive_verify_ssl` (env-only API key/token).
-
-**MISP**
-- `misp_enabled`, `misp_url`, `misp_verify_ssl` (env-only API key).
-
-**Slack**
-- `slack_enabled`, `slack_channel`, `slack_notify_on_escalation`, `slack_notify_on_verdict` (env-only webhook URL).
-
-## Mock Agents (attack simulator)
-
-The `linux-ep` service runs a real Wazuh agent that executes MITRE ATT&CK-style techniques to produce high-signal alerts for testing.
-
-Prerequisites:
-- Reachable Wazuh manager (agent registration + TCP) on ports `1515` and `1514`.
-- SocTalk configured to poll the Wazuh API (`WAZUH_ENABLED=true` and credentials in env).
-
-Deploy and generate alerts:
-```bash
-# start mock agent (testing profile)
-docker compose --profile testing up -d --build linux-ep
-docker compose logs -f linux-ep
-
-# list available techniques
-docker compose exec linux-ep /opt/scripts/run-attack.sh list
-# run specific techniques (examples)
-docker compose exec linux-ep /opt/scripts/run-attack.sh T1110.001    # brute-force auth log spam
-docker compose exec linux-ep /opt/scripts/run-attack.sh T1059.SHELL # reverse-shell command traces
-docker compose exec linux-ep /opt/scripts/run-attack.sh MALWARE     # ransomware-like artifacts
-```
-
-How it triggers suspicious actions:
-- Writes attack traces to syslog/auth logs (e.g., failed SSH logins, reverse-shell commands).
-- Creates or modifies temporary artifacts under `/tmp/attack-artifacts` to trip FIM rules.
-- Periodic/random technique execution keeps alert volume flowing (configurable via env/cron in the container).
-
-Use only in a lab: the container runs privileged and intentionally generates noisy behavior.
-
-## Usage Examples
-
-```bash
-# Print the LangGraph (mermaid)
-soctalk --graph
-
-# Run with a specific env file
-soctalk --config .env
-```
-
-API quick checks:
-
-```bash
-curl http://localhost:8000/health
-curl -N http://localhost:8000/api/events/stream
-```
-
-## Testing
-
-Backend:
-```bash
-pytest -m "not integration"
-```
-
-Integration (Postgres):
-```bash
-docker compose -f docker-compose.test.yml up -d
-pytest -m integration
-```
-
-Frontend:
-```bash
-cd frontend
-pnpm check
-pnpm test   # Playwright
-```
-
-## Further docs
-
-[`docs/multi-tenant/`](docs/multi-tenant/) covers the multi-tenant architecture and operations, including the security model, chart audit, RLS hygiene, ingress, sizing, install, runbook, and upgrade material.
-
-[`docs/multi-tenant/TROUBLESHOOTING.md`](docs/multi-tenant/TROUBLESHOOTING.md) is the symptom-to-fix index for multi-tenant deployments.
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [contributor guide](https://soctalk.github.io/soctalk-docs/contribute).
 
 ## License
 
-Apache 2.0. See `LICENSE` and `NOTICE`.
+Apache 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
