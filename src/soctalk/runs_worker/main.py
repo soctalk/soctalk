@@ -9,6 +9,7 @@ or chart values. Token is mounted as a K8s Secret at
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -476,21 +477,31 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         (final.get("supervisor_decision") or {}).get("tp_confidence"),
     )
 
+    complete_payload = {
+        "lease_id": lease_id,
+        "status": status,
+        "tokens_used": used,
+        "dollars_used": dollars_used,
+        "last_error": last_error,
+        "disposition": disposition,
+        "verdict_summary": verdict_summary,
+        "verdict_confidence": _verdict_confidence(final),
+        "findings": _verdict_findings(final),
+        "enrichments": _verdict_enrichments(final),
+    }
+    # ``findings``/``enrichments`` are built from the graph's final state,
+    # which carries datetime objects (Pydantic ``model_dump(mode="python")``
+    # keeps them as datetimes). httpx's ``json=`` encoder can't serialize
+    # those and the whole run crash-loops on "Object of type datetime is
+    # not JSON serializable" — most visible on the OpenAI-compatible path.
+    # Serialize here with ``default=str`` so any datetime is stringified.
     resp = await client.post(
         f"{_api_url()}/api/internal/worker/runs/{run_id}/complete",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "lease_id": lease_id,
-            "status": status,
-            "tokens_used": used,
-            "dollars_used": dollars_used,
-            "last_error": last_error,
-            "disposition": disposition,
-            "verdict_summary": verdict_summary,
-            "verdict_confidence": _verdict_confidence(final),
-            "findings": _verdict_findings(final),
-            "enrichments": _verdict_enrichments(final),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         },
+        content=json.dumps(complete_payload, default=str),
         timeout=15.0,
     )
     if resp.status_code >= 400:
