@@ -136,6 +136,7 @@
       "properties": {
         "enabled":         { "type": "boolean" },
         "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
+        "llmEgressPort":   { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port the runs-worker egress policy opens for outbound LLM calls. Controller-derived from the LLM base URL (443 https / 80 http / explicit port) so self-hosted endpoints on non-standard ports aren't blocked." },
         "externalSiemHosts": {
           "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list (matchName entries). Items are bare hostnames — no scheme, no port.",
           "type": "array",

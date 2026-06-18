@@ -156,9 +156,19 @@ def render_tenant_values(
     """
     from urllib.parse import urlparse
 
+    _llm_url = urlparse(integration.llm_base_url)
     if allowed_llm_hosts is None:
-        host = urlparse(integration.llm_base_url).hostname
+        host = _llm_url.hostname
         allowed_llm_hosts = [host] if host else []
+
+    # Egress port for the LLM endpoint. The runs-worker NetworkPolicy opens
+    # exactly this TCP port for outbound LLM calls. Default by scheme when
+    # the URL omits an explicit port (443 for https, 80 for http) — but a
+    # self-hosted OpenAI-compatible endpoint (Ollama :11434, vLLM :8000,
+    # LiteLLM, …) on a non-standard port would otherwise be blocked.
+    llm_egress_port = _llm_url.port or (
+        80 if _llm_url.scheme == "http" else 443
+    )
 
     # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
     # SocTalk deploys only the adapter + runs-worker here and points the
@@ -247,6 +257,11 @@ def render_tenant_values(
         "networkPolicies": {
             "enabled": network_policies_enabled,
             "allowedLlmHosts": allowed_llm_hosts,
+            # TCP port the runs-worker egress NetworkPolicy opens for LLM
+            # calls. Derived from the LLM base URL so self-hosted endpoints
+            # on non-standard ports (Ollama :11434, vLLM :8000, …) aren't
+            # blocked. Defaults to 443 for https / 80 for http.
+            "llmEgressPort": llm_egress_port,
             # Cilium FQDN egress allow-list for the external SIEM. Empty list
             # for in-cluster profiles; populated for 'provided'.
             "externalSiemHosts": external_siem_hosts,

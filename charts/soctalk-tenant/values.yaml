@@ -97,6 +97,11 @@ components:
 networkPolicies:
   enabled: true
   allowedLlmHosts: []   # REQUIRED: controller populates with tenant's LLM hostname
+  # TCP port opened on the runs-worker egress policy for outbound LLM calls.
+  # The controller derives this from the LLM base URL (443 for https, 80 for
+  # http, or the explicit port) so self-hosted endpoints on non-standard
+  # ports (Ollama :11434, vLLM :8000, …) aren't blocked.
+  llmEgressPort: 443
   fqdnEgress:
     # Emit a CiliumNetworkPolicy permitting adapter egress to
     # soctalkSystem.url's FQDN. Required when L2 runs in a separate
