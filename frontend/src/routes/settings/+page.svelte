@@ -316,7 +316,7 @@
 						<input
 							type="text"
 							class="input"
-							placeholder="claude-sonnet-4-20250514"
+							placeholder="claude-sonnet-4-6"
 							bind:value={llm_fast_model}
 							disabled={readonly || !$canEditSettings}
 						/>
@@ -328,7 +328,7 @@
 						<input
 							type="text"
 							class="input"
-							placeholder="claude-sonnet-4-20250514"
+							placeholder="claude-sonnet-4-6"
 							bind:value={llm_reasoning_model}
 							disabled={readonly || !$canEditSettings}
 						/>

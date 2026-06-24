@@ -102,7 +102,11 @@ async def _chat_db(
 
 def _default_chat_model() -> str:
     """Per-tenant override later; for Phase 1 this is the env knob."""
-    return os.getenv("SOCTALK_CHAT_MODEL", "claude-sonnet-4-20250514")
+    # Default kept current — ``claude-sonnet-4-20250514`` was an early
+    # alpha identifier that Anthropic retired, and shipping it as the
+    # built-in default 404'd every chat turn on fresh installs. The
+    # canonical Sonnet 4 series alias is ``claude-sonnet-4-6``.
+    return os.getenv("SOCTALK_CHAT_MODEL", "claude-sonnet-4-6")
 
 
 def _default_budget_dollars() -> float:

@@ -14,7 +14,7 @@ circular imports between ``core.api`` and ``core.provisioning``.
 
 from __future__ import annotations
 
-ANTHROPIC_DEFAULT_MODEL = "claude-3-5-sonnet-latest"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
 OPENAI_DEFAULT_MODEL = "gpt-4o"
 
 # The canonical fallback provider. The tenant chart's values.schema.json

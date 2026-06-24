@@ -23,8 +23,8 @@ class LLMConfig(BaseModel):
     """Configuration for LLM models."""
 
     provider: Literal["anthropic", "openai"] = "anthropic"
-    fast_model: str = "claude-sonnet-4-20250514"
-    reasoning_model: str = "claude-sonnet-4-20250514"
+    fast_model: str = "claude-sonnet-4-6"
+    reasoning_model: str = "claude-sonnet-4-6"
     anthropic_api_key: str = ""
     anthropic_base_url: Optional[str] = None
     openai_api_key: str = ""
@@ -249,8 +249,8 @@ def load_config(env_file: Optional[Path] = None) -> Config:
     # LLM config
     llm_config = LLMConfig(
         provider=provider,  # type: ignore[arg-type]
-        fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-20250514"),
-        reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-20250514"),
+        fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
+        reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
         anthropic_api_key=anthropic_api_key,
         anthropic_base_url=_optional_env("ANTHROPIC_BASE_URL"),
         openai_api_key=openai_api_key,

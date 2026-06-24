@@ -73,8 +73,8 @@ class LLMSettings:
     """Non-secret LLM settings (DB-backed, env-seeded)."""
 
     llm_provider: Literal["anthropic", "openai"] = "anthropic"
-    llm_fast_model: str = "claude-sonnet-4-20250514"
-    llm_reasoning_model: str = "claude-sonnet-4-20250514"
+    llm_fast_model: str = "claude-sonnet-4-6"
+    llm_reasoning_model: str = "claude-sonnet-4-6"
     llm_temperature: float = 0.0
     llm_max_tokens: int = 4096
     llm_anthropic_base_url: Optional[str] = None
@@ -164,8 +164,8 @@ def load_llm_settings_from_env() -> LLMSettings:
 
     return LLMSettings(
         llm_provider=provider,  # type: ignore[arg-type]
-        llm_fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-20250514"),
-        llm_reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-20250514"),
+        llm_fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
+        llm_reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
         llm_temperature=float(os.getenv("SOCTALK_LLM_TEMPERATURE", "0.0")),
         llm_max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),
         llm_anthropic_base_url=(os.getenv("ANTHROPIC_BASE_URL") or "").strip() or None,
