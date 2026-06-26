@@ -25,9 +25,9 @@ on:
         required: false
         default: "dev"
       soctalk_chart_version:
-        description: "soctalk-system chart version to pre-pull into the image."
+        description: "soctalk-system chart version to pre-pull into the image. Leave blank on a v* tag build to track the tag."
         required: false
-        default: "0.1.0"
+        default: ""
 
 permissions:
   contents: write   # for attaching artifacts to releases on v* tags
@@ -116,14 +116,15 @@ jobs:
       - name: packer init
         run: packer init .
 
-      - name: Compute artifact version
+      - name: Compute artifact + chart versions
         id: ver
         run: |
           set -euo pipefail
-          # On v* tag push, strip the leading 'v' so artifact filenames
-          # match the container-image tagging convention (0.1.2 not
-          # v0.1.2). Otherwise honor the workflow_dispatch input or
-          # fall back to 'dev'.
+          # Artifact version: on v* tag push, strip the leading 'v' so
+          # filenames match the container-image tagging convention
+          # (0.1.2 not v0.1.2). Otherwise honor the workflow_dispatch
+          # input or fall back to 'dev' (so ad-hoc manual builds get a
+          # clearly-non-release filename).
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             v="${GITHUB_REF#refs/tags/v}"
           else
@@ -131,18 +132,37 @@ jobs:
             [[ -z "$v" ]] && v="dev"
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Using version: $v"
+
+          # Chart version: on tag push, track the tag; on workflow_dispatch
+          # honor an explicit input; otherwise fall back to whatever is
+          # currently in soctalk-system/Chart.yaml (the actually-published
+          # version) so the manual build can ``helm pull`` something real
+          # instead of asking for ``--version dev`` and failing.
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            cv="$v"
+          else
+            cv="${{ inputs.soctalk_chart_version }}"
+            if [[ -z "$cv" ]]; then
+              cv="$(awk '/^version:/ {print $2; exit}' \
+                /home/runner/work/soctalk/soctalk/charts/soctalk-system/Chart.yaml)"
+              # Fallback to repo-relative path when CHECKOUT_PATH differs.
+              [[ -z "$cv" ]] && cv="$(awk '/^version:/ {print $2; exit}' \
+                "${GITHUB_WORKSPACE}/charts/soctalk-system/Chart.yaml")"
+            fi
+          fi
+          echo "chart_version=$cv" >> "$GITHUB_OUTPUT"
+          echo "Using artifact version=$v chart_version=$cv"
 
       - name: packer validate
         env:
           PKR_VAR_version: ${{ steps.ver.outputs.version }}
-          PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
+          PKR_VAR_soctalk_chart_version: ${{ steps.ver.outputs.chart_version }}
         run: packer validate .
 
       - name: packer build (qemu source)
         env:
           PKR_VAR_version: ${{ steps.ver.outputs.version }}
-          PKR_VAR_soctalk_chart_version: ${{ inputs.soctalk_chart_version || '0.1.0' }}
+          PKR_VAR_soctalk_chart_version: ${{ steps.ver.outputs.chart_version }}
           # Packer's QEMU builder honors PACKER_LOG=1 for verbose output.
           PACKER_LOG: '1'
         run: |
