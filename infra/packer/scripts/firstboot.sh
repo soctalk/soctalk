@@ -53,108 +53,34 @@ done
 
 echo "==> values + llm key ready, proceeding to install"
 
-# Start k3s now (it was installed but not started by Packer install.sh,
-# so the wizard could collect config first without competing for ports).
-systemctl start k3s
-until [[ -f /etc/rancher/k3s/k3s.yaml ]]; do sleep 1; done
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-chmod 600 "$KUBECONFIG"
+# Shared install core. The same script that powers the Linux
+# `curl … | bash` installer; sourcing it (rather than re-running) gives
+# us its functions without executing its main(). Only the chart source
+# differs: the appliance installs from the pre-pulled chart directory,
+# the curl path from the OCI chart. See install.sh.
+# shellcheck source=/dev/null
+source /usr/local/bin/soctalk-install
 
-for _ in $(seq 1 60); do
-  kubectl get nodes >/dev/null 2>&1 && break
-  sleep 2
-done
+# Appliance inputs for the shared functions:
+#   - k3s is installed-but-not-started (ensure_k3s starts it)
+#   - config comes from the wizard / cloud-init files, not prompts
+#   - chart is the directory Packer pre-pulled at build time
+CHART_DIR=/opt/soctalk/charts/soctalk-system
+VALUES_FILE="$VALUES"
+LLM_KEY_FILE="$LLM_KEY"
+ONBOARD_ENV=/etc/soctalk/onboard.env
 
-# Create the LLM key Secret that the chart consumes.
-kubectl create namespace soctalk-system --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n soctalk-system create secret generic soctalk-system-llm-api-key \
-  --from-file=anthropic-api-key="$LLM_KEY" \
-  --from-file=openai-api-key="$LLM_KEY" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-helm upgrade --install soctalk-system /opt/soctalk/charts/soctalk-system \
-  --namespace soctalk-system \
-  --create-namespace \
-  --values "$VALUES" \
-  --wait \
-  --timeout 15m
-
-# Patch the kube-system NetworkPolicy to allow k3s's bundled Traefik
-# (which lives in kube-system, not ingress-system) to reach the
-# soctalk-system services. Same patch poc-funnel applies.
-for np in soctalk-system-ui-ingress-allow soctalk-system-api-ingress-allow; do
-  kubectl -n soctalk-system patch networkpolicy "$np" --type=json \
-    -p='[{"op":"add","path":"/spec/ingress/0/from/-","value":{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}}]' \
-    2>/dev/null || true
-done
-
+ensure_k3s
+ensure_helm
+create_llm_secret
+install_chart
+patch_networkpolicy
 echo "==> helm install + NetworkPolicy patches complete"
 
-# ---------------------------------------------------------------------
-# Demo tenant onboarding. Mirrors poc-funnel's cloud-init pattern:
-#   1. wait for the API to answer through Traefik (Host header trick)
-#   2. log in as the bootstrap admin from /etc/soctalk/onboard.env
-#   3. POST /api/mssp/tenants/onboard with profile=poc
+# Demo tenant onboarding (no-op if /etc/soctalk/onboard.env is absent).
 # The provisioning worker brings up Wazuh + soctalk-tenant + adapter +
-# runs-worker in the new tenant- namespace asynchronously. We don't
-# wait for ACTIVE here — the install sentinel marks soctalk-system
-# done; the tenant rolls out in the background.
-# ---------------------------------------------------------------------
-ONBOARD_ENV=/etc/soctalk/onboard.env
-if [[ -f "$ONBOARD_ENV" ]]; then
-  # shellcheck disable=SC1090
-  . "$ONBOARD_ENV"
-  if [[ -n "${TENANT_SLUG:-}" && -n "${ADMIN_EMAIL:-}" && -n "${ADMIN_PW:-}" ]]; then
-    HOST="${INGRESS_HOST:-soctalk.local}"
-    echo "==> waiting for API to answer through Traefik (Host: $HOST)"
-    api_ok=0
-    # 120 × 5s = 10 min cap. Traefik registers the Ingress fairly fast
-    # but the api Service endpoint can take 30-60s to be picked up.
-    # Probe without -f so we accept 401 ("API is up, just not authed yet")
-    # as success. -f would reject the 401 and we'd loop until timeout even
-    # though Traefik is fully wired up.
-    for _ in $(seq 1 120); do
-      code=$(curl -sk -m 5 -o /dev/null -w "%{http_code}" \
-               -H "Host: $HOST" "https://127.0.0.1/api/auth/me" || echo 000)
-      case "$code" in
-        200|401)
-          api_ok=1
-          break
-          ;;
-      esac
-      sleep 5
-    done
-    if [[ "$api_ok" = "1" ]]; then
-      echo "==> logging in as bootstrap admin"
-      JAR=/tmp/soctalk-onboard.cookies
-      rm -f "$JAR"
-      LOGIN_BODY=$(printf '{"email":"%s","password":"%s"}' \
-        "$ADMIN_EMAIL" "$ADMIN_PW")
-      if curl -sfk -m 10 -c "$JAR" \
-           -H "Content-Type: application/json" \
-           -H "Host: $HOST" -H "Origin: https://$HOST" \
-           -d "$LOGIN_BODY" "https://127.0.0.1/api/auth/login" >/dev/null; then
-        echo "==> onboarding demo tenant ${TENANT_SLUG}"
-        ONBOARD_BODY=$(printf '{"slug":"%s","display_name":"%s","profile":"poc"}' \
-          "$TENANT_SLUG" "$TENANT_NAME")
-        if curl -sfk -m 30 -b "$JAR" \
-             -H "Content-Type: application/json" \
-             -H "Host: $HOST" -H "Origin: https://$HOST" \
-             -X POST -d "$ONBOARD_BODY" \
-             "https://127.0.0.1/api/mssp/tenants/onboard" >/dev/null; then
-          echo "==> tenant onboard accepted; provisioning runs async"
-        else
-          echo "WARNING: tenant onboard POST failed (continuing)"
-        fi
-      else
-        echo "WARNING: bootstrap admin login failed (continuing without tenant)"
-      fi
-      rm -f "$JAR"
-    else
-      echo "WARNING: API never answered through Traefik (continuing without tenant)"
-    fi
-  fi
-fi
+# runs-worker asynchronously; we don't wait for ACTIVE here.
+maybe_onboard
 
 echo "==> soctalk-firstboot complete at $(date -u +%FT%TZ)"
 

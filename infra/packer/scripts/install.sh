@@ -49,6 +49,9 @@ helm pull oci://ghcr.io/soctalk/charts/soctalk-system \
 install -m 755 /tmp/firstboot.sh /usr/local/bin/soctalk-firstboot
 install -m 644 /tmp/soctalk-firstboot.service /etc/systemd/system/soctalk-firstboot.service
 
+# Shared install core, sourced by soctalk-firstboot (and usable directly).
+install -m 755 /tmp/install.sh /usr/local/bin/soctalk-install
+
 install -d -m 755 /etc/soctalk
 install -m 644 /tmp/values.example.yaml /etc/soctalk/values.example.yaml
 

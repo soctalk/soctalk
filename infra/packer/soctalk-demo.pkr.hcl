@@ -19,7 +19,7 @@ variable "version" {
 
 variable "soctalk_chart_version" {
   type        = string
-  default     = "0.1.0"
+  default     = "0.1.2"
   description = "soctalk-system chart version to pre-pull into the image."
 }
 
@@ -158,6 +158,14 @@ build {
   provisioner "file" {
     source      = "scripts/firstboot.sh"
     destination = "/tmp/firstboot.sh"
+  }
+
+  # Shared install core (the repo-root one-command installer). firstboot
+  # sources it at install time; the same file is the Linux curl|bash
+  # installer. Kept as the single source of truth for the install path.
+  provisioner "file" {
+    source      = "../../install.sh"
+    destination = "/tmp/install.sh"
   }
 
   provisioner "file" {
