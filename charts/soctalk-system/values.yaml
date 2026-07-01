@@ -83,12 +83,32 @@ llm:
   existingSecret: ''
   provider: openai
   apiKey: ''
-# Per-tenant provisioning. The api pod ships with both charts bundled
-# under /app/charts/ — change these to OCI refs once the charts are
-# published.
+# Per-tenant provisioning. The api pod ships both charts bundled under
+# /app/charts/ as a fallback for single-cluster / air-gapped installs,
+# but the default points at the published OCI chart so the cross-cluster
+# (MSSP L1 → tenant L2) flow works — the remote agent can't resolve a
+# container-local path. Override to /app/charts/soctalk-tenant for an
+# air-gapped install where the api + agent share a cluster.
 tenantProvisioning:
-  tenantChartRef: /app/charts/soctalk-tenant
-  tenantChartVersion: 0.1.0
+  tenantChartRef: oci://ghcr.io/soctalk/charts/soctalk-tenant
+  tenantChartVersion: 0.1.9
+  # Cloud-agent chart the L2 tenant operator helm-installs after
+  # :issue-agent returns the bootstrap token. Same override pattern as
+  # tenantChartRef — point at a lab OCI registry while validating a
+  # pilot, then flip back to the public ghcr.io path.
+  agentChartRef: oci://ghcr.io/soctalk/charts/soctalk-cloud-agent
+  agentChartVersion: "0.1.3"
+  # Force ``helm --plain-http`` on the api pod's sync helm SDK. Off by
+  # default (production OCI is HTTPS). Set true when tenantChartRef points
+  # at a lab OCI registry served over HTTP.
+  helmPlainHttp: false
+  # Install-wide operator hint: pod-level /etc/hosts entries baked into
+  # every new tenant install so the adapter + runs-worker can reach the
+  # MSSP hostname when the tenant cluster's DNS can't resolve it. Format
+  # is a semicolon-list of ``ip=host[,host]`` pairs, e.g.
+  # ``100.76.82.51=soctalk-mssp-1.tail6397c.ts.net``. Empty when the MSSP
+  # is reachable via cluster / cloud DNS (production default).
+  l1HostAliases: ""
   wazuhChartPath: /app/charts/wazuh
   adapterImageRepo: ''
   adapterImageTag: ''

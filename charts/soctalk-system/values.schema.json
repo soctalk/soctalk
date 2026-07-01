@@ -224,8 +224,13 @@
           "properties": {
             "provider": {
               "enum": [
-                "openai-compatible"
-              ]
+                "openai-compatible",
+                "openai",
+                "anthropic",
+                "azure",
+                "ollama"
+              ],
+              "description": "Install-wide default LLM provider. Fed into SOCTALK_LLM_PROVIDER_DEFAULT on the api; the onboard endpoint uses it as fallback when the wizard doesn't specify a per-tenant provider."
             },
             "baseUrl": {
               "type": "string",
@@ -350,6 +355,21 @@
         },
         "tenantChartVersion": {
           "type": "string"
+        },
+        "agentChartRef": {
+          "type": "string",
+          "description": "OCI ref for the soctalk-cloud-agent chart the tenant admin helm-installs after :issue-agent. Mirrors tenantChartRef — override to point at a lab / staging OCI mirror when validating a pilot."
+        },
+        "agentChartVersion": {
+          "type": "string"
+        },
+        "helmPlainHttp": {
+          "type": "boolean",
+          "description": "Force --plain-http on the api's sync helm SDK for lab OCI registries served over HTTP. Off by default."
+        },
+        "l1HostAliases": {
+          "type": "string",
+          "description": "Install-wide pod-level /etc/hosts entries baked into every new tenant install. Semicolon-list of ``ip=host[,host]`` pairs. Empty when the MSSP is reachable via cluster / cloud DNS."
         },
         "wazuhChartPath": {
           "type": "string"

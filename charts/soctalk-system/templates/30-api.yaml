@@ -300,6 +300,22 @@ spec:
             - name: SOCTALK_PUBLIC_ORIGIN
               value: {{ join "," $origins | quote }}
             {{- /*
+                L1 control plane URL the cross-cluster tenant agent uses
+                for /register + /heartbeat. Derived from the MSSP ingress
+                hostname so the helm_install_hint returned by :issue-agent
+                points at a real reachable endpoint instead of the api's
+                hardcoded ``http://host.docker.internal:8000`` default.
+                ``auth.publicOriginOverride`` wins for parity with how
+                SOCTALK_PUBLIC_ORIGIN is sourced; otherwise canonical MSSP
+                host + scheme.
+            */}}
+            - name: SOCTALK_L1_PUBLIC_URL
+            {{- if .Values.auth.publicOriginOverride }}
+              value: {{ splitList "," .Values.auth.publicOriginOverride | first | quote }}
+            {{- else }}
+              value: {{ printf "%s://%s" $scheme .Values.ingress.hostnames.mssp | quote }}
+            {{- end }}
+            {{- /*
                 Install LLM Secret name. Operators who pre-provision the Secret
                 set ``llm.existingSecret``; otherwise the chart's 60-secrets.yaml
                 renders ``<release>-llm-api-key``. The provisioning controller
@@ -308,6 +324,32 @@ spec:
             */}}
             - name: SOCTALK_INSTALL_LLM_SECRET_NAME
               value: {{ .Values.llm.existingSecret | default (printf "%s-llm-api-key" .Release.Name) | quote }}
+            {{- /*
+              Chat agent (src/soctalk/chat/agent.py + api/chat.py) reads the
+              LLM key directly from ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``
+              env vars — it does NOT go through SOCTALK_INSTALL_LLM_SECRET_NAME.
+              Mount the matching key from the install-shared Secret so
+              ``+ New`` conversations don't fail with "No LLM API key
+              configured". Wired provider-conditional to match ``defaults.llm.provider``.
+              Chart-side note: install.sh's ``create_llm_secret`` populates
+              BOTH ``anthropic-api-key`` and ``openai-api-key`` sub-keys with
+              the same value, so this valueFrom works regardless of which
+              provider was declared at install time.
+            */}}
+            {{- $llmSecretName := .Values.llm.existingSecret | default (printf "%s-llm-api-key" .Release.Name) }}
+            {{- if eq (.Values.defaults.llm.provider | lower) "anthropic" }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $llmSecretName | quote }}
+                  key: anthropic-api-key
+            {{- else }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $llmSecretName | quote }}
+                  key: openai-api-key
+            {{- end }}
             {{- if .Values.ingress.tenantWildcard }}
             {{- /*
                 tenantWildcard is the wildcard host pattern (e.g. ``*.soctalk.ai``).
@@ -347,6 +389,26 @@ spec:
               value: {{ .Values.tenantProvisioning.tenantChartRef | quote }}
             - name: SOCTALK_TENANT_CHART_VERSION
               value: {{ .Values.tenantProvisioning.tenantChartVersion | quote }}
+            - name: SOCTALK_AGENT_CHART_REF
+              value: {{ .Values.tenantProvisioning.agentChartRef | quote }}
+            - name: SOCTALK_AGENT_CHART_VERSION
+              value: {{ .Values.tenantProvisioning.agentChartVersion | quote }}
+            {{- if .Values.tenantProvisioning.helmPlainHttp }}
+            - name: SOCTALK_HELM_PLAIN_HTTP
+              value: "1"
+            {{- end }}
+            {{- if .Values.tenantProvisioning.l1HostAliases }}
+            {{- /*
+              Semicolon-list of ``ip=host[,host]`` pairs. Fed into each
+              tenant install's ``values.soctalkSystem.hostAliases`` when
+              the tenant cluster can't resolve the MSSP hostname via its
+              own DNS (Tailscale MagicDNS disabled, on-prem split-horizon
+              DNS). Empty by default; production installs with proper DNS
+              leave this off.
+            */}}
+            - name: SOCTALK_L1_HOST_ALIASES
+              value: {{ .Values.tenantProvisioning.l1HostAliases | quote }}
+            {{- end }}
             - name: SOCTALK_WAZUH_CHART_PATH
               value: {{ .Values.tenantProvisioning.wazuhChartPath | quote }}
           resources:
@@ -375,6 +437,19 @@ spec:
             - name: adapter-signing-key
               mountPath: /run/secrets/adapter
               readOnly: true
+            # Writable scratch mounts. Helm SDK (used by the sync onboarding
+            # path in TenantController + by :retry-install spec rebuild) reaches
+            # for $HOME/.cache/helm, $XDG_CACHE_HOME and .config. The api
+            # container runs as non-root without a writable HOME by default,
+            # so hitting any of those paths blows the request with
+            # "mkdir /.cache: permission denied". Mount ephemeral emptyDirs at
+            # the paths helm actually uses.
+            - name: cache-root
+              mountPath: /.cache
+            - name: config-root
+              mountPath: /.config
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: jwt-key
           secret:
@@ -384,3 +459,9 @@ spec:
           secret:
             secretName: {{ .Release.Name }}-adapter-signing-key
             defaultMode: 0440
+        - name: cache-root
+          emptyDir: {}
+        - name: config-root
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

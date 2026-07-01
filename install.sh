@@ -25,7 +25,7 @@ set -euo pipefail
 # it from a release tag (…/soctalk/<version>/install.sh).
 # --------------------------------------------------------------------- #
 CHART_REF="${SOCTALK_CHART_REF:-oci://ghcr.io/soctalk/charts/soctalk-system}"
-CHART_VERSION="${SOCTALK_CHART_VERSION:-0.1.2}"
+CHART_VERSION="${SOCTALK_CHART_VERSION:-0.1.3}"
 # Pin images to the chart version by default so a release-tagged installer
 # deploys a matching image set, not whatever 'latest' has moved to. The
 # publish workflow tags images with the release version (e.g. 0.1.2).
@@ -95,7 +95,9 @@ Flags:
 
 Env: SOCTALK_MSSP_NAME, SOCTALK_ADMIN_EMAIL, SOCTALK_ADMIN_PASSWORD,
      SOCTALK_HOSTNAME, SOCTALK_LLM_PROVIDER, SOCTALK_LLM_API_KEY,
-     SOCTALK_CHART_REF, SOCTALK_CHART_VERSION, SOCTALK_HELM_TIMEOUT
+     SOCTALK_CHART_REF, SOCTALK_CHART_VERSION, SOCTALK_HELM_TIMEOUT,
+     SOCTALK_ASSUME_YES (auto-set when all three required vars above
+     are present, so curl|bash unattended flows don't need -y)
 EOF
 }
 
@@ -210,6 +212,24 @@ EOF
 # Runtime: k3s + Helm + kubeconfig
 # --------------------------------------------------------------------- #
 ensure_k3s() {
+  # Provision registries.yaml BEFORE k3s installs so containerd is born
+  # knowing about the lab OCI mirror. Off unless SOCTALK_LAB_REGISTRY is
+  # set (e.g. 100.102.223.8:5000). Public/production installs pull from
+  # ghcr.io over HTTPS and don't need this.
+  if [[ -n "${SOCTALK_LAB_REGISTRY:-}" ]]; then
+    mkdir -p /etc/rancher/k3s
+    cat > /etc/rancher/k3s/registries.yaml <<REG
+mirrors:
+  "${SOCTALK_LAB_REGISTRY}":
+    endpoint:
+      - "http://${SOCTALK_LAB_REGISTRY}"
+configs:
+  "${SOCTALK_LAB_REGISTRY}":
+    tls:
+      insecure_skip_verify: true
+REG
+    log "wrote /etc/rancher/k3s/registries.yaml for ${SOCTALK_LAB_REGISTRY}"
+  fi
   if command -v k3s >/dev/null 2>&1; then
     log "k3s already present — starting it"
     systemctl start k3s 2>/dev/null || true
@@ -254,6 +274,18 @@ prompt_config() {
   [[ -n "$MSSP_NAME" ]]      || die "MSSP name required (set SOCTALK_MSSP_NAME or use --demo)"
   [[ -n "$ADMIN_EMAIL" ]]    || die "admin email required (set SOCTALK_ADMIN_EMAIL)"
   [[ -n "$ADMIN_PASSWORD" ]] || die "admin password required (set SOCTALK_ADMIN_PASSWORD)"
+
+  # Env-driven unattended path: when the caller has supplied every
+  # required SOCTALK_* var, they're plainly running unattended (CI,
+  # cloud-init, ansible). Auto-assume yes so the install doesn't block
+  # on the /dev/tty prompt that no terminal exists to answer. Explicit
+  # --yes / SOCTALK_ASSUME_YES still wins for the partial cases.
+  if [[ "$ASSUME_YES" != "true" \
+        && -n "$SOCTALK_MSSP_NAME" \
+        && -n "$SOCTALK_ADMIN_EMAIL" \
+        && -n "$SOCTALK_ADMIN_PASSWORD" ]]; then
+    ASSUME_YES="true"
+  fi
 }
 
 render_values() {
@@ -275,17 +307,60 @@ install:
     email: $email_q
     password: $pw_q
 image:
-  registry: ghcr.io/soctalk
+  registry: ${SOCTALK_IMAGE_REGISTRY:-ghcr.io/soctalk}
   tag: "$IMAGE_TAG"
 ingress:
   enabled: true
   className: traefik
+  # k3s ships Traefik in kube-system; the chart's default 'ingress-system'
+  # matches a dedicated-controller install. Setting this here means the
+  # NetworkPolicy that gates the api + app-ui services allows kube-system
+  # to reach them from the start — no post-install kubectl patch needed
+  # (and helm upgrade doesn't clobber the manual patch either).
+  controllerNamespace: kube-system
   tls:
     issuerRef: ""
     secretName: soctalk-tls
   hostnames:
     mssp: $host_q
     customer: $host_q
+defaults:
+  llm:
+    provider: $(yaml_sq "$LLM_PROVIDER")
+tenantProvisioning:
+EOF
+  # Optional tenant chart pin — useful for lab registries / staged
+  # publishing where SOCTALK_TENANT_CHART_REF points at a private OCI
+  # mirror (oci://lab.example:5000/charts/soctalk-tenant) and a specific
+  # version is being validated. Falls through to the chart's defaults
+  # otherwise (public ghcr.io/soctalk).
+  if [[ -n "${SOCTALK_TENANT_CHART_REF:-}" ]]; then
+    printf '  tenantChartRef: %s\n' "$(yaml_sq "$SOCTALK_TENANT_CHART_REF")" >> "$VALUES_FILE"
+  fi
+  if [[ -n "${SOCTALK_TENANT_CHART_VERSION:-}" ]]; then
+    printf '  tenantChartVersion: %s\n' "$(yaml_sq "$SOCTALK_TENANT_CHART_VERSION")" >> "$VALUES_FILE"
+  fi
+  if [[ -n "${SOCTALK_AGENT_CHART_REF:-}" ]]; then
+    printf '  agentChartRef: %s\n' "$(yaml_sq "$SOCTALK_AGENT_CHART_REF")" >> "$VALUES_FILE"
+  fi
+  if [[ -n "${SOCTALK_AGENT_CHART_VERSION:-}" ]]; then
+    printf '  agentChartVersion: %s\n' "$(yaml_sq "$SOCTALK_AGENT_CHART_VERSION")" >> "$VALUES_FILE"
+  fi
+  # SOCTALK_HELM_PLAIN_HTTP already toggles --plain-http on THIS installer's
+  # helm invocation; propagate the same intent to the api pod so its sync
+  # helm SDK (used for tenant provisioning) speaks plain HTTP to the same
+  # lab OCI registry.
+  if [[ "${SOCTALK_HELM_PLAIN_HTTP:-}" == "1" || "${SOCTALK_HELM_PLAIN_HTTP:-}" == "true" ]]; then
+    printf '  helmPlainHttp: true\n' >> "$VALUES_FILE"
+  fi
+  # Pod-level /etc/hosts entries baked into every new tenant install so
+  # cross-cluster tenants can reach the MSSP hostname when their DNS
+  # can't (Tailscale MagicDNS off, on-prem split-horizon). Semicolon-list
+  # of ``ip=host`` pairs.
+  if [[ -n "${SOCTALK_L1_HOST_ALIASES:-}" ]]; then
+    printf '  l1HostAliases: %s\n' "$(yaml_sq "$SOCTALK_L1_HOST_ALIASES")" >> "$VALUES_FILE"
+  fi
+  cat >> "$VALUES_FILE" <<EOF
 postgres:
   enabled: true
   storage:
@@ -315,12 +390,19 @@ create_llm_secret() {
 
 install_chart() {
   log "Installing soctalk-system (this pulls images; first run takes a few minutes)"
+  # Lab / staging OCI registries often serve HTTP (zot, docker registry:2).
+  # Pass --plain-http through so operators pointing SOCTALK_CHART_REF at a
+  # private mirror don't have to hand-edit the helm invocation.
+  local plain_http=()
+  [[ "${SOCTALK_HELM_PLAIN_HTTP:-}" == "1" || "${SOCTALK_HELM_PLAIN_HTTP:-}" == "true" ]] \
+    && plain_http=(--plain-http)
   if [[ -n "$CHART_DIR" ]]; then
     helm upgrade --install soctalk-system "$CHART_DIR" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$VALUES_FILE" --wait --timeout "$HELM_TIMEOUT"
   else
     helm upgrade --install soctalk-system "$CHART_REF" --version "$CHART_VERSION" \
+      "${plain_http[@]}" \
       --namespace "$NAMESPACE" --create-namespace \
       --values "$VALUES_FILE" --wait --timeout "$HELM_TIMEOUT"
   fi
