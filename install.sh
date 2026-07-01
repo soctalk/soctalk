@@ -269,7 +269,7 @@ prompt_config() {
     [[ -n "$ADMIN_EMAIL" ]]   || { printf 'Admin email: '; read -r ADMIN_EMAIL < /dev/tty; }
     [[ -n "$ADMIN_PASSWORD" ]]|| { printf 'Admin password (min 12 chars): '; read -rs ADMIN_PASSWORD < /dev/tty; echo; }
     [[ -n "$HOSTNAME_IN" ]]   || { printf 'Hostname (blank = soctalk.local): '; read -r HOSTNAME_IN < /dev/tty; }
-    [[ -n "$LLM_API_KEY" ]]   || { printf 'LLM API key (%s): ' "$LLM_PROVIDER"; read -rs LLM_API_KEY < /dev/tty; echo; }
+    [[ -n "$LLM_API_KEY" || -n "$LLM_KEY_FILE" ]] || { printf 'LLM API key (%s): ' "$LLM_PROVIDER"; read -rs LLM_API_KEY < /dev/tty; echo; }
   fi
   [[ -n "$MSSP_NAME" ]]      || die "MSSP name required (set SOCTALK_MSSP_NAME or use --demo)"
   [[ -n "$ADMIN_EMAIL" ]]    || die "admin email required (set SOCTALK_ADMIN_EMAIL)"
