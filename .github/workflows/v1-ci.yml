@@ -56,6 +56,18 @@ jobs:
           pip install -e ".[dev]" || pip install -e .
           pip install pytest pytest-asyncio pip-audit import-linter ruff mypy
 
+      - name: Install Helm (for chart-template tests)
+        # test_provisioning_render tests shell out to ``helm template`` — the
+        # binary must exist AND subchart deps must be resolved (soctalk-tenant
+        # has file:// wazuh + linux-ep siblings), otherwise `helm template`
+        # exits 1 with "found in Chart.yaml, but missing in charts/ directory".
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: helm dependency build (tenant chart)
+        run: helm dependency build charts/soctalk-tenant
+
       - name: import-linter (open-core boundary)
         run: |
           lint-imports --config .importlinter
