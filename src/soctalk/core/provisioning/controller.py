@@ -314,6 +314,36 @@ class TenantController:
             llm_secret_name=f"tenant-{tenant.id}-llm",
         )
 
+        # Agent-managed skip guard: when :issue-agent has already minted a
+        # TenantInstallation row, the L2 cloud-agent is going to install
+        # the tenant chart on its own cluster. Running the sync helm-apply
+        # locally here would race (or fail with "namespace not found" on
+        # single-cluster MSSPs that aren't hosting the tenant) and leave
+        # tenants.state 'degraded' even after the L2 install succeeds.
+        # Emit a marker event and short-circuit — the L2 completion hook
+        # in agents/api.py will project the L2 install state onto
+        # tenants.state when the agent reports success.
+        from soctalk.core.agents.models import TenantInstallation
+        installation_row = (
+            await self.session.execute(
+                select(TenantInstallation)
+                .where(TenantInstallation.tenant_id == tenant.id)
+                .where(TenantInstallation.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if installation_row is not None:
+            db_event = TenantLifecycleEvent(
+                tenant_id=tenant.id,
+                event_type="agent_managed_provisioning_skipped",
+                from_state=tenant.state,
+                to_state=tenant.state,
+                actor_id=f"user:{actor_id}",
+                details={"installation_id": str(installation_row.id)},
+            )
+            self.session.add(db_event)
+            await self.session.commit()
+            return
+
         # Profile-aware step list. A 'provided' tenant brings its own external
         # Wazuh, so SocTalk:
         #   - writes the external-SIEM creds Secret (extra step, between
@@ -981,6 +1011,7 @@ class TenantController:
                 release_name=ctx.release_tenant,
                 namespace=ctx.namespace,
                 chart_ref=self.settings.tenant_chart_ref,
+                chart_version=self.settings.tenant_chart_version,
                 values=values,
                 wait=False,
                 timeout=self.settings.wait_timeout,

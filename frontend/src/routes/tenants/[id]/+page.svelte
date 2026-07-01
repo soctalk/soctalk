@@ -152,10 +152,15 @@
 			</div>
 		</div>
 
-		<!-- External SIEM connection + live adapter status. Shown for ANY profile;
-		     keyed by id so switching tenant remounts (fresh fetch + poll cycle). -->
+		<!-- External SIEM connection + live adapter status. Only relevant for
+		     the 'provided' profile (BYO Wazuh) — for 'poc' / 'persistent' the
+		     chart installs Wazuh in-cluster and the panel would surface an
+		     in-namespace svc URL plus a confusing 'unreachable' ingest status.
+		     Keyed by id so switching tenant remounts (fresh fetch + poll cycle). -->
 		{#key id}
-			<ExternalSiemPanel tenantId={id} />
+			{#if tenant.profile === 'provided'}
+				<ExternalSiemPanel tenantId={id} />
+			{/if}
 			<!-- Per-tenant LLM config (masked key). Shown for ANY profile; same
 			     keyed block so switching tenant remounts (fresh fetch). -->
 			<LlmConfigPanel tenantId={id} />

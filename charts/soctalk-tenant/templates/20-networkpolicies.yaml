@@ -46,11 +46,25 @@ metadata:
   labels:
     {{- include "soctalk-tenant.labels" . | nindent 4 }}
 spec:
+  {{- /*
+    The wazuh subchart labels its pods with ``app.kubernetes.io/name: wazuh``
+    (chart name) + ``app.kubernetes.io/component: manager|indexer|dashboard``
+    — NOT ``app.kubernetes.io/name: wazuh-manager``. Historical audit-log:
+    the previous rule selected zero pods, so ``default-deny`` silently
+    swallowed every cross-namespace call to wazuh and both the orchestrator
+    and the L2 wait_for_ready probes broke. Match on the labels the
+    subchart actually emits.
+  */}}
   podSelector:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: ["wazuh-manager", "wazuh-indexer", "thehive", "cortex"]
+        # ``wazuh`` covers the wazuh subchart's manager + indexer + dashboard;
+        # thehive / cortex are here for the future subchart deps.
+        values: ["wazuh", "thehive", "cortex"]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["manager", "indexer", "dashboard", "thehive", "cortex"]
   policyTypes: [Ingress]
   ingress:
     # Permit ingress from BOTH the orchestrator (verdict / runs-worker
@@ -71,6 +85,20 @@ spec:
         - { port: 9200, protocol: TCP }   # Wazuh indexer
         - { port: 9000, protocol: TCP }   # TheHive
         - { port: 9001, protocol: TCP }   # Cortex
+    # L2 cloud-agent readiness probes. The agent lives in the
+    # ``soctalk-agent`` namespace on the tenant cluster and needs to
+    # reach the wazuh manager API (55000) during ``wait_for_ready`` after
+    # ``install_helm_release``. Without this rule wait_for_ready never
+    # completes because default-deny drops the probe silently and the
+    # tenant lifecycle stays stuck in ``provisioning`` even though
+    # every pod is 1/1 Ready.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: soctalk-agent
+      ports:
+        - { port: 55000, protocol: TCP }  # Wazuh manager API
+        - { port: 9200, protocol: TCP }   # Wazuh indexer
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -103,6 +131,23 @@ spec:
               k8s-app: kube-dns
       ports:
         - { port: 53, protocol: UDP }
+    {{- /*
+      Non-Cilium fallback for cross-cluster egress. When the operator
+      set ``soctalkSystem.hostAliases`` (because the tenant cluster's
+      DNS can't resolve the MSSP hostname), permit egress to those IPs
+      on the standard MSSP ports. Flannel etc don't understand FQDN
+      egress; this ipBlock rule is what actually keeps the connection
+      open for heartbeat + ingest. Skipped when the list is empty
+      (Cilium + toFQDNs handles it, or collapsed-tier mode).
+    */}}
+    {{- range $ha := .Values.soctalkSystem.hostAliases }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" $ha.ip | quote }}
+      ports:
+        - { port: 443, protocol: TCP }
+        - { port: 80,  protocol: TCP }
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -135,6 +180,16 @@ spec:
               k8s-app: kube-dns
       ports:
         - { port: 53, protocol: UDP }
+    {{- /* Same non-Cilium cross-cluster egress as the adapter — the
+      runs-worker also POSTs run.complete back to L1. */}}
+    {{- range $ha := .Values.soctalkSystem.hostAliases }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" $ha.ip | quote }}
+      ports:
+        - { port: 443, protocol: TCP }
+        - { port: 80,  protocol: TCP }
+    {{- end }}
     # Outbound LLM calls. Port derived from the configured LLM base URL so
     # self-hosted OpenAI-compatible endpoints on non-standard ports
     # (Ollama :11434, vLLM :8000, LiteLLM, …) work; defaults to 443 (https).

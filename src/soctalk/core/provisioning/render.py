@@ -40,18 +40,27 @@ def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:
             "resourceQuota": {
                 "enabled": True,
                 # Sized for adapter + wazuh-manager + wazuh-indexer +
-                # wazuh-dashboard at PoC limits, with headroom for one
-                # restart and the indexer's init containers.
-                "requests": {"cpu": "2", "memory": "4Gi"},
-                "limits": {"cpu": "4", "memory": "8Gi"},
-                "persistentVolumeClaims": "4",
+                # wazuh-dashboard + linux-ep simulator at PoC limits, with
+                # headroom for one restart and the indexer's init
+                # containers. Empirical live-run: wazuh-indexer alone burns
+                # 1500m/2560Mi limits, dashboard + adapter + runs-worker
+                # together tack on ~2200m more — the previous cpu limit
+                # of 4 was hit before wazuh-manager could schedule.
+                "requests": {"cpu": "3", "memory": "6Gi"},
+                "limits": {"cpu": "8", "memory": "12Gi"},
+                "persistentVolumeClaims": "5",
                 "pods": "20",
             },
             "limitRange": {
                 "enabled": True,
                 "defaults": {"memory": "512Mi", "cpu": "250m"},
                 "defaultRequests": {"memory": "128Mi", "cpu": "50m"},
-                "max": {"memory": "2Gi", "cpu": "1"},
+                # Wazuh indexer's per-container limits are 1500m cpu /
+                # 2560Mi memory at PoC settings — the previous cap of 1cpu
+                # / 2Gi rejected the indexer pod with "maximum X per
+                # container is Y, but limit is Z". Room for one restart
+                # spike on top of that.
+                "max": {"memory": "3Gi", "cpu": "2"},
             },
         }
 
@@ -246,6 +255,11 @@ def render_tenant_values(
             # of the integration flags so a stale ``wazuh_enabled=true`` row
             # can't accidentally re-deploy the in-cluster bundle.
             "wazuh": {"enabled": False if is_provided else integration.wazuh_enabled},
+            # linux-ep simulator subchart — only the 'poc' profile installs it.
+            # ``persistent`` runs real customer endpoints, so a simulator would
+            # contaminate the alert pipeline. ``provided`` has no in-cluster
+            # SOC at all.
+            "linuxep": {"enabled": profile == "poc"},
             "thehive": {
                 "enabled": False if is_provided else integration.thehive_enabled
             },
@@ -318,8 +332,15 @@ def render_tenant_values(
                 "passwordKey": "INDEXER_PASSWORD",
                 # Rendered for ALL profiles so the adapter honours the tenant's
                 # TLS-verification preference whether the indexer is in-cluster
-                # (self-signed chart cert) or external.
-                "verifySsl": integration.wazuh_verify_ssl,
+                # (self-signed chart cert) or external. In-cluster wazuh
+                # (poc / persistent) ALWAYS uses the wazuh chart's inline
+                # self-signed cert, so verify_ssl=true crashes the adapter
+                # with ``CERTIFICATE_VERIFY_FAILED``; force false regardless
+                # of the DB row for these profiles. Only 'provided' honours
+                # the operator's setting since they own the external cert.
+                "verifySsl": (
+                    integration.wazuh_verify_ssl if is_provided else False
+                ),
                 "minSeverity": int(
                     os.getenv("SOCTALK_ADAPTER_MIN_SEVERITY", "10")
                 ),
@@ -432,3 +453,41 @@ def render_wazuh_values(
         values["storage"] = {"storageClass": storage_class_override}
 
     return values
+
+
+def render_linux_ep_values(
+    tenant: Tenant,
+    *,
+    wazuh_manager_host: str,
+    authd_secret_name: str,
+    authd_secret_key: str = "wazuh_authd_secret",
+    replicas: int = 1,
+) -> dict[str, Any]:
+    """Produce per-tenant values for the ``linux-ep`` subchart.
+
+    Used by ``_build_install_helm_release_spec`` (L2 cross-cluster) to feed
+    the bundled linux-ep simulator with the wazuh manager service it should
+    register against and the authd password it should enrol with. When linux-
+    ep is installed as a subchart of soctalk-tenant, the wazuh subchart's
+    Service resolves to ``<release>-wazuh-manager`` in the same namespace —
+    same DNS the in-namespace adapter uses for its API calls.
+
+    Field names mirror ``charts/linux-ep/values.yaml`` exactly (the chart's
+    ``.Values.wazuh.credsSecret.{name,authdPasswordKey}``); the two `fail`
+    guards at the top of ``templates/statefulset.yaml`` require both to be
+    present.
+    """
+    return {
+        "replicas": replicas,
+        "wazuh": {
+            "managerHost": wazuh_manager_host,
+            "credsSecret": {
+                "name": authd_secret_name,
+                "authdPasswordKey": authd_secret_key,
+            },
+        },
+        "tenant": {
+            "slug": tenant.slug,
+            "id": str(tenant.id),
+        },
+    }

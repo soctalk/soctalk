@@ -209,6 +209,14 @@ runsWorker:
 soctalkSystem:
   url: ""            # e.g. https://l1.acme-mssp.example
   adapterToken: ""   # opaque plaintext; chart stores it as a Secret
+  # Pod-level /etc/hosts entries applied to the adapter + runs-worker
+  # deployments. Off by default (empty list). When the tenant cluster's
+  # DNS can't resolve the ``soctalkSystem.url`` hostname (Tailscale
+  # MagicDNS disabled, on-prem split-horizon DNS), the L1 controller
+  # populates this with the MSSP hostname mapped to its tailnet/VPN IP
+  # so both pods can heartbeat + ingest without further intervention.
+  # Structure matches k8s pod.spec.hostAliases: [{ip, hostnames: [...]}]
+  hostAliases: []
 
 # Namespace labels applied by the controller (informational; namespace is created
 # by controller before Helm install so these labels are already set)

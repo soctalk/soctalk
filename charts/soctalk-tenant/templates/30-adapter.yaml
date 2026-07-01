@@ -38,6 +38,17 @@ spec:
     spec:
       serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
       automountServiceAccountToken: false
+      {{- /*
+        Pod-level /etc/hosts entries for the adapter. Used when the tenant
+        cluster's DNS can't resolve the MSSP hostname (Tailscale MagicDNS
+        disabled, on-prem split-horizon DNS). Empty by default; the
+        provisioning controller sets it to soctalkSystem.url's host mapped
+        to the reachable tailnet/VPN IP when MagicDNS isn't available.
+      */}}
+      {{- with .Values.soctalkSystem.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

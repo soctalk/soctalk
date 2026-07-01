@@ -21,6 +21,15 @@ spec:
     spec:
       serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
       automountServiceAccountToken: false
+      {{- /*
+        Same soctalkSystem.hostAliases block as the adapter — the runs-
+        worker also calls back to L1 for run.complete events and needs to
+        resolve the MSSP hostname when MagicDNS is off.
+      */}}
+      {{- with .Values.soctalkSystem.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

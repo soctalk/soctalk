@@ -61,15 +61,20 @@ async def helm_install_tenant(
     chart_ref: str,
     values: dict[str, Any],
     *,
+    chart_version: str | None = None,
     wait: bool = True,
     timeout: str = "15m",
 ) -> HelmResult:
     """Run ``helm upgrade --install`` for a tenant release.
 
     ``chart_ref`` may be a local path (dev) or an OCI reference like
-    ``oci://ghcr.io/soctalk/charts/soctalk-tenant`` with a ``--version`` arg
-    added by the caller.
+    ``oci://ghcr.io/soctalk/charts/soctalk-tenant``. Pass ``chart_version``
+    to pin the version (required for OCI refs). ``SOCTALK_HELM_PLAIN_HTTP``
+    env forces ``--plain-http`` for lab / staging OCI mirrors served over
+    plain HTTP (default HTTPS).
     """
+    import os
+    plain_http = os.getenv("SOCTALK_HELM_PLAIN_HTTP", "").strip() in ("1", "true", "yes")
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", delete=False
     ) as vf:
@@ -92,6 +97,10 @@ async def helm_install_tenant(
             "-f",
             values_path,
         ]
+        if chart_version:
+            args.extend(["--version", chart_version])
+        if plain_http:
+            args.append("--plain-http")
         if wait:
             args.extend(["--wait", "--timeout", timeout])
         result = await _run_helm(args, timeout=900.0)

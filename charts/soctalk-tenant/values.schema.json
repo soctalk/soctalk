@@ -7,6 +7,16 @@
   "required": ["tenant", "branding", "llm", "components", "networkPolicies", "resourceQuota", "limitRange", "adapter", "runsWorker"],
   "additionalProperties": false,
   "properties": {
+    "wazuh": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Passthrough values for the bundled wazuh subchart (only rendered when components.wazuh.enabled is true). Structure is defined by charts/wazuh/values.yaml, not this schema."
+    },
+    "linuxep": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Passthrough values for the bundled linux-ep subchart (only rendered when components.linuxep.enabled is true). Structure is defined by charts/linux-ep/values.yaml, not this schema."
+    },
     "tenant": {
       "type": "object",
       "required": ["id", "slug", "msspId", "installId"],
@@ -70,6 +80,22 @@
         "adapterToken": {
           "description": "Plaintext JWT L1 minted for this tenant's adapter. Chart materializes this as the Secret named by adapter.tokenSecretRef.name.",
           "type": "string"
+        },
+        "hostAliases": {
+          "description": "Pod-level /etc/hosts entries applied to the adapter + runs-worker deployments. Populated by the L1 controller when the tenant cluster can't resolve soctalkSystem.url via cluster DNS.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ip", "hostnames"],
+            "properties": {
+              "ip": { "type": "string" },
+              "hostnames": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },
@@ -126,6 +152,14 @@
           "properties": {
             "enabled": { "type": "boolean", "const": false }
           }
+        },
+        "linuxep": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          },
+          "description": "linux-ep simulator subchart gate. Only 'poc' profile installs it; false for 'persistent' + 'provided'."
         }
       }
     },

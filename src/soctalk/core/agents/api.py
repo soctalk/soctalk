@@ -38,6 +38,7 @@ from soctalk.core.agents.models import (
     TenantInstallationRuntimeToken,
 )
 from soctalk.core.agents.tokens import hash_token, mint_token, verify_token
+from soctalk.core.tenancy.context import tenant_context
 
 
 logger = structlog.get_logger()
@@ -208,7 +209,10 @@ async def _build_install_helm_release_spec(
     """
     import os
 
-    from soctalk.core.provisioning.render import render_tenant_values
+    from soctalk.core.provisioning.render import (
+        render_tenant_values,
+        render_wazuh_values,
+    )
     from soctalk.core.tenancy.auth import mint_adapter_token
     from soctalk.core.tenancy.models import (
         BrandingConfig,
@@ -217,28 +221,32 @@ async def _build_install_helm_release_spec(
     )
     from soctalk.core.tenancy.models import Tenant as _Tenant
 
-    tenant = (
-        await db.execute(
-            select(_Tenant).where(_Tenant.id == installation.tenant_id)
-        )
-    ).scalar_one()
-    organization = (
-        await db.execute(
-            select(Organization).where(Organization.id == tenant.organization_id)
-        )
-    ).scalar_one()
-    integration = (
-        await db.execute(
-            select(IntegrationConfig).where(
-                IntegrationConfig.tenant_id == tenant.id
+    # RLS: IntegrationConfig + BrandingConfig + Organization are tenant-scoped
+    # tables. The agent-callback session has no caller-tenant context, so
+    # without this wrap RLS hides the rows even though they exist.
+    async with tenant_context(db, installation.tenant_id):
+        tenant = (
+            await db.execute(
+                select(_Tenant).where(_Tenant.id == installation.tenant_id)
             )
-        )
-    ).scalar_one()
-    branding = (
-        await db.execute(
-            select(BrandingConfig).where(BrandingConfig.tenant_id == tenant.id)
-        )
-    ).scalar_one()
+        ).scalar_one()
+        organization = (
+            await db.execute(
+                select(Organization).where(Organization.id == tenant.organization_id)
+            )
+        ).scalar_one()
+        integration = (
+            await db.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant.id
+                )
+            )
+        ).scalar_one()
+        branding = (
+            await db.execute(
+                select(BrandingConfig).where(BrandingConfig.tenant_id == tenant.id)
+            )
+        ).scalar_one()
 
     llm_secret_name = f"tenant-{tenant.id}-llm"
 
@@ -257,12 +265,32 @@ async def _build_install_helm_release_spec(
     # + rewrite the adapter env to point at soctalkSystem.url instead
     # of the hardcoded in-cluster service DNS.
     adapter_jwt = mint_adapter_token(tenant.id)
-    values["soctalkSystem"] = {
+    system_block: dict[str, Any] = {
         "url": os.getenv(
             "SOCTALK_L1_PUBLIC_URL", "http://host.docker.internal:8000"
         ),
         "adapterToken": adapter_jwt,
     }
+    # Pod-level /etc/hosts for tenants whose cluster DNS can't resolve the
+    # MSSP hostname (Tailscale MagicDNS off, on-prem split-horizon DNS).
+    # SOCTALK_L1_HOST_ALIASES is a comma-list of ``ip=hostname`` pairs — the
+    # install-shared operator hint. Multiple hostnames for the same IP go
+    # in as ``ip=host1,host2``. Rendered into pod.spec.hostAliases on the
+    # adapter + runs-worker via the chart's ``soctalkSystem.hostAliases``.
+    raw = os.getenv("SOCTALK_L1_HOST_ALIASES", "").strip()
+    if raw:
+        entries: list[dict[str, Any]] = []
+        for pair in raw.split(";"):
+            pair = pair.strip()
+            if "=" not in pair:
+                continue
+            ip, hosts = pair.split("=", 1)
+            names = [h.strip() for h in hosts.split(",") if h.strip()]
+            if ip.strip() and names:
+                entries.append({"ip": ip.strip(), "hostnames": names})
+        if entries:
+            system_block["hostAliases"] = entries
+    values["soctalkSystem"] = system_block
     # The runs-worker pod loads its bearer JWT from
     # ``runsWorker.tokenSecretRef`` (name=runs-worker-token by default).
     # In the same-cluster controller path this Secret is created by
@@ -283,25 +311,90 @@ async def _build_install_helm_release_spec(
     #   3. empty string — chart guards on apiKey truthiness and simply
     #      doesn't create the Secret when unset, so the legacy
     #      pre-provisioned-Secret path still works.
-    llm_key = integration.llm_api_key_plain or os.getenv(
-        "SOCTALK_DEFAULT_LLM_API_KEY", ""
+    # LLM API key plaintext. Precedence:
+    #   1. IntegrationConfig.llm_api_key_plain — per-tenant Postgres column.
+    #   2. SOCTALK_DEFAULT_LLM_API_KEY env — install-wide dev fallback.
+    #   3. The soctalk-system install Secret named by
+    #      SOCTALK_INSTALL_LLM_SECRET_NAME (whose key is provider-derived:
+    #      anthropic-api-key / openai-api-key). Read at spec-build time so
+    #      install.sh / chart operators don't have to also export the env.
+    #   4. empty string — chart skips Secret creation; legacy
+    #      pre-provisioned-Secret path still works.
+    llm_key = (
+        integration.llm_api_key_plain
+        or os.getenv("SOCTALK_DEFAULT_LLM_API_KEY", "").strip()
+        or await _read_install_llm_key(integration.llm_provider)
+        or ""
     )
     if not integration.llm_api_key_plain and llm_key:
-        # Operator ran with the install-wide env fallback, not a
-        # per-tenant key. Warn once per install spec so the audit
-        # trail shows which tenants are relying on the dev path.
         import structlog
         structlog.get_logger().info(
-            "install_spec_llm_key_from_env_fallback",
+            "install_spec_llm_key_from_install_fallback",
             tenant_id=str(tenant.id),
             reason="per_tenant_key_unset",
         )
     values["llm"]["apiKey"] = llm_key
 
-    # Per-tenant namespace. The legacy controller derives this per tenant;
-    # keep the same shape for cross-tooling consistency.
+    # Wazuh + linux-ep subchart values. The cross-cluster agent runs a single
+    # ``install_helm_release`` per tenant; for the in-cluster SOC bundle to
+    # come up with adapter+runs-worker+wazuh+linux-ep in one go, the parent
+    # soctalk-tenant chart pulls them as subcharts (deps gated on
+    # components.<name>.enabled). We layer per-tenant credentials + service
+    # wiring here so the chart's subchart values aren't left at chart-default
+    # placeholders.
+    # Per-tenant namespace + release name. The legacy controller derives
+    # both per tenant; keep the same shape for cross-tooling consistency.
     namespace = f"tenant-{tenant.slug}"
     release_name = f"tenant-{tenant.slug}"
+
+    wazuh_block: dict[str, Any] | None = None
+    if values["components"]["wazuh"]["enabled"]:
+        from soctalk.core.provisioning.secrets_gen import generate_bootstrap_secrets
+        # Idempotency: mint fresh every spec build. A rebuild on :retry will
+        # produce new passwords; the wazuh chart's templates write the creds
+        # Secret from values at install time, so the live deployment picks
+        # them up on the next reconcile.
+        bootstrap = generate_bootstrap_secrets()
+        wazuh_block = render_wazuh_values(
+            tenant=tenant,
+            profile=tenant.profile or "poc",
+            admin_password=bootstrap.wazuh_admin_pw,
+            authd_password=bootstrap.wazuh_authd_secret,
+        )
+        values["wazuh"] = wazuh_block
+        # render_tenant_values assumes wazuh is a SEPARATE helm release
+        # named ``wazuh-<slug>`` and points the adapter at
+        # ``wazuh-<slug>-wazuh-*`` resources. In the L2 cross-cluster path
+        # wazuh runs as a SUBCHART of the tenant release, so its resources
+        # are prefixed with the PARENT release name (``tenant-<slug>-wazuh-*``).
+        # Rewrite the adapter's wiring here — the single-cluster
+        # ``render_tenant_values`` output is only correct for the sync path
+        # that installs wazuh as its own release.
+        values["adapter"]["wazuhIndexer"]["url"] = (
+            f"https://{release_name}-wazuh-indexer:9200"
+        )
+        values["adapter"]["wazuhIndexer"]["credsSecret"] = (
+            f"{release_name}-wazuh-creds"
+        )
+
+    if values["components"]["linuxep"]["enabled"]:
+        from soctalk.core.provisioning.render import render_linux_ep_values
+        # When wazuh is a subchart of this release, its Service is
+        # ``<release>-wazuh-manager`` per the chart's standard naming.
+        # authd password lives in the wazuh chart's generated creds Secret
+        # under the ``wazuh_authd_secret`` key.
+        values["linuxep"] = render_linux_ep_values(
+            tenant=tenant,
+            wazuh_manager_host=f"{release_name}-wazuh-manager",
+            authd_secret_name=f"{release_name}-wazuh-creds",
+            # The wazuh chart's ``<release>-wazuh-creds`` Secret stores the
+            # authd password under key ``AUTHD_PASS`` (uppercased, matching
+            # the wazuh chart's Secret template). Not ``wazuh_authd_secret``
+            # — that's the KEY in the parent-owned ``tenant-bootstrap`` Secret
+            # the single-cluster controller writes but the wazuh chart
+            # doesn't reference.
+            authd_secret_key="AUTHD_PASS",
+        )
 
     return {
         "chart_ref": installation.desired_chart_ref,
@@ -311,6 +404,58 @@ async def _build_install_helm_release_spec(
         "create_namespace": True,
         "values": values,
     }
+
+
+async def _read_install_llm_key(provider: str | None) -> str:
+    """Read the install-shared LLM API key from the soctalk-system Secret.
+
+    The Secret name comes from ``SOCTALK_INSTALL_LLM_SECRET_NAME`` (the chart
+    sets it; install.sh's ``create_llm_secret`` populates both
+    ``anthropic-api-key`` and ``openai-api-key`` keys). The key picked here
+    is provider-derived:
+
+      - ``anthropic``  → ``anthropic-api-key``
+      - anything else  → ``openai-api-key``
+
+    Falls back to either-or-empty silently — any failure returns "" so the
+    spec builder lets the chart's ``if .Values.llm.apiKey`` guard skip
+    Secret creation. Best-effort only; per-tenant or env override are still
+    the primary paths.
+    """
+    try:
+        secret_name = os.getenv("SOCTALK_INSTALL_LLM_SECRET_NAME", "").strip()
+        secret_ns = os.getenv("SOCTALK_SYSTEM_NAMESPACE", "soctalk-system").strip()
+        if not secret_name:
+            return ""
+        key_name = (
+            "anthropic-api-key" if (provider or "").lower() == "anthropic"
+            else "openai-api-key"
+        )
+        from kubernetes_asyncio import client as k8s_client
+        from kubernetes_asyncio import config as k8s_config
+        try:
+            k8s_config.load_incluster_config()
+        except Exception:
+            try:
+                await k8s_config.load_kube_config()
+            except Exception:
+                return ""
+        v1 = k8s_client.CoreV1Api()
+        try:
+            sec = await v1.read_namespaced_secret(secret_name, secret_ns)
+        finally:
+            await v1.api_client.close()
+        import base64
+        data = sec.data or {}
+        raw = (
+            data.get(key_name)
+            or data.get("anthropic-api-key")
+            or data.get("openai-api-key")
+            or ""
+        )
+        return base64.b64decode(raw).decode() if raw else ""
+    except Exception:
+        return ""
 
 
 async def _enqueue_agent_job(
@@ -668,11 +813,28 @@ async def complete_job(
                 details={"kind": job.kind, "error_code": body.error_code},
             )
         )
+        await _project_installation_state_to_tenant(
+            db,
+            installation,
+            target_state="degraded",
+            event_type="provisioning_failed_l2",
+            details={
+                "installation_id": str(installation.id),
+                "kind": job.kind,
+                "error_code": body.error_code,
+            },
+        )
         await db.commit()
         return {"ok": True}
 
     # Success path — advance based on job kind.
     if job.kind == "preflight" and installation.state == "agent_connected":
+        # Build the next-phase spec FIRST. If it raises (RLS, missing
+        # IntegrationConfig, render error), the job.status update + state
+        # transition staged above roll back together — no wedge where the
+        # installation is stuck in 'provisioning' without an enqueued job.
+        spec = await _build_install_helm_release_spec(db, installation)
+
         installation.state = "provisioning"
         installation.state_changed_at = _now()
         db.add(
@@ -685,9 +847,7 @@ async def complete_job(
                 details={"after": "preflight"},
             )
         )
-        await db.commit()
 
-        spec = await _build_install_helm_release_spec(db, installation)
         await _enqueue_agent_job(
             db,
             installation_id=installation.id,
@@ -699,6 +859,8 @@ async def complete_job(
             ),
             spec=spec,
         )
+        # _enqueue_agent_job commits, which also flushes job.status,
+        # installation.state, and the lifecycle event — all atomic.
         return {"ok": True}
 
     # install_helm_release and upgrade_helm_release both terminate the
@@ -709,6 +871,10 @@ async def complete_job(
     apply_states = {"install_helm_release": "provisioning",
                     "upgrade_helm_release": "upgrading"}
     if job.kind in apply_kinds and installation.state == apply_states[job.kind]:
+        # Build spec first — same atomic-rollback invariant as the preflight
+        # branch above.
+        wait_spec = await _build_wait_for_ready_spec(db, installation)
+
         db.add(
             TenantInstallationEvent(
                 installation_id=installation.id,
@@ -722,9 +888,7 @@ async def complete_job(
                 },
             )
         )
-        await db.commit()
 
-        wait_spec = await _build_wait_for_ready_spec(db, installation)
         await _enqueue_agent_job(
             db,
             installation_id=installation.id,
@@ -766,9 +930,83 @@ async def complete_job(
                 },
             )
         )
+        # Project L2 install success onto tenants.state so the MSSP UI
+        # health widget, SOC gating, and retry buttons agree with the
+        # actual tenant stack. Without this the tenant stays 'degraded'
+        # forever if the sync helm path failed earlier — even though the
+        # L2 agent has stood the stack up successfully.
+        await _project_installation_state_to_tenant(
+            db,
+            installation,
+            target_state="active",
+            event_type=(
+                "provisioning_succeeded_l2"
+                if prior_state == "provisioning"
+                else "upgrade_succeeded_l2"
+            ),
+            details={"installation_id": str(installation.id)},
+        )
 
     await db.commit()
     return {"ok": True}
+
+
+async def _project_installation_state_to_tenant(
+    db,
+    installation: TenantInstallation,
+    *,
+    target_state: str,
+    event_type: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Mirror an L2 installation state transition onto ``tenants.state``.
+
+    The L2 agent's install state is the authoritative signal for whether
+    the tenant's SOC stack is actually up. ``tenants.state`` is what the
+    MSSP UI and SOC gating consume. Without this projection, a tenant
+    whose sync helm-apply step failed but whose L2 agent later succeeded
+    stays 'degraded' forever — false-alarming the operator and blocking
+    :retry paths.
+
+    Terminal / operator-set states (suspended, decommissioning, archived,
+    purged) are never overridden — the L2 install must not clobber a
+    deliberate operator decision.
+    """
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.models import Tenant as _Tenant
+    from soctalk.core.tenancy.models import TenantLifecycleEvent
+
+    async with tenant_context(db, installation.tenant_id):
+        tenant = (
+            await db.execute(
+                select(_Tenant).where(_Tenant.id == installation.tenant_id)
+            )
+        ).scalar_one_or_none()
+        if tenant is None:
+            return
+        if tenant.state in {
+            "suspended", "decommissioning", "archived", "purged",
+        }:
+            return
+        if tenant.state == target_state:
+            return
+        prior = tenant.state
+        tenant.state = target_state
+        # Tenant.state_changed_at is stored as a NAIVE datetime (see the
+        # model's ``default_factory=datetime.utcnow``); ``_now()`` returns
+        # a tz-aware UTC value which asyncpg rejects with a naive/aware
+        # mismatch. Match the column's naive convention.
+        tenant.state_changed_at = datetime.utcnow()
+        db.add(
+            TenantLifecycleEvent(
+                tenant_id=tenant.id,
+                event_type=event_type,
+                from_state=prior,
+                to_state=target_state,
+                actor_id="controller:l2",
+                details=details or {},
+            )
+        )
 
 
 async def _build_wait_for_ready_spec(
@@ -800,18 +1038,20 @@ async def _build_wait_for_ready_spec(
     from soctalk.core.tenancy.models import IntegrationConfig
     from soctalk.core.tenancy.models import Tenant as _Tenant
 
-    tenant = (
-        await db.execute(
-            select(_Tenant).where(_Tenant.id == installation.tenant_id)
-        )
-    ).scalar_one()
-    integration = (
-        await db.execute(
-            select(IntegrationConfig).where(
-                IntegrationConfig.tenant_id == tenant.id
+    # RLS: see _build_install_helm_release_spec — same wrap required.
+    async with tenant_context(db, installation.tenant_id):
+        tenant = (
+            await db.execute(
+                select(_Tenant).where(_Tenant.id == installation.tenant_id)
             )
-        )
-    ).scalar_one()
+        ).scalar_one()
+        integration = (
+            await db.execute(
+                select(IntegrationConfig).where(
+                    IntegrationConfig.tenant_id == tenant.id
+                )
+            )
+        ).scalar_one()
 
     ns = f"tenant-{tenant.slug}"
     release_name = f"tenant-{tenant.slug}"

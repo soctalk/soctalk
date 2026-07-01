@@ -336,6 +336,25 @@ async def onboard_tenant(
     llm_reasoning_model = payload.llm_reasoning_model
     if payload.llm_api_key and llm_provider is None:
         llm_provider = infer_provider_from_key(payload.llm_api_key)
+    # Install-shared LLM defaults (set by the soctalk-system chart from
+    # ``defaults.llm.*`` values, sourced in turn from SOCTALK_LLM_PROVIDER
+    # at install time). When neither the wizard's "LLM (advanced)"
+    # disclosure nor a key-with-inferred-provider supplied one, fall back
+    # here — so an MSSP that installed with anthropic doesn't see new
+    # tenants come up with openai-compatible/gpt-4o. When provider falls
+    # through to the env default and the operator didn't pick a model
+    # either (the field is still the schema's gpt-4o sentinel),
+    # reconcile model with the env-provided default so the pair stays
+    # internally consistent.
+    if llm_provider is None:
+        import os
+        env_provider = os.getenv("SOCTALK_LLM_PROVIDER_DEFAULT", "").strip()
+        if env_provider:
+            llm_provider = env_provider
+            if llm_model == "gpt-4o":
+                env_model = os.getenv("SOCTALK_LLM_MODEL_DEFAULT", "").strip()
+                if env_model:
+                    llm_model = env_model
     if llm_provider is not None:
         llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
         # Same only-flip-when-clearly-mismatched rule for the overrides: an
@@ -639,6 +658,7 @@ async def get_tenant(tenant_id: UUID, request: Request) -> TenantRead:
         slug=tenant.slug,
         display_name=tenant.display_name,
         state=tenant.state,
+        profile=tenant.profile,
         created_at=tenant.created_at.isoformat(),
         state_changed_at=tenant.state_changed_at.isoformat(),
         runtime=tenant.runtime,
@@ -1253,6 +1273,43 @@ async def retry_install(
             .returning(AgentJob.id)
         )
     ).scalars().all()
+
+    # Rebuild specs for any job being reset. The original spec is frozen
+    # at queue time, which means a job that failed (or got stuck mid-claim)
+    # because of stale chart_ref / chart_version / integration config would
+    # retry with the same broken spec — pointless. Regenerate from current
+    # source of truth (tenant_installations.desired_chart_*,
+    # IntegrationConfig, etc.) so :retry actually picks up operator fixes
+    # (chart version bump, external SIEM creds added, L1 URL corrected, ...).
+    rebuild_ids = set(reclaimed) | set(retried)
+    if rebuild_ids:
+        from soctalk.core.agents.api import (
+            _build_install_helm_release_spec,
+            _build_wait_for_ready_spec,
+        )
+        rebuild_jobs = (
+            await session.execute(
+                select(AgentJob).where(AgentJob.id.in_(rebuild_ids))
+            )
+        ).scalars().all()
+        for job in rebuild_jobs:
+            try:
+                if job.kind in ("install_helm_release", "upgrade_helm_release"):
+                    job.spec = await _build_install_helm_release_spec(
+                        session, installation
+                    )
+                elif job.kind == "wait_for_ready":
+                    job.spec = await _build_wait_for_ready_spec(
+                        session, installation
+                    )
+                # preflight + other kinds: spec is parameter-free, leave as-is.
+            except Exception as exc:
+                structlog.get_logger().warning(
+                    "retry_install.rebuild_spec_failed",
+                    job_id=str(job.id),
+                    kind=job.kind,
+                    error=str(exc),
+                )
 
     actor = request.state.user_identity.get("user_id") \
         if getattr(request.state, "user_identity", None) else "operator"

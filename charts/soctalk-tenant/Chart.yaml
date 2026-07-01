@@ -10,7 +10,7 @@ description: |
 type: application
 
 # Chart version is independent of application versions.
-version: 0.1.2
+version: 0.1.9
 
 # Application version identifier (bumped when subchart versions change)
 appVersion: 0.1.0
@@ -37,24 +37,20 @@ annotations:
   category: Security
   licenses: Apache-2.0
 
-# Subchart dependencies are intentionally undeclared until the chart audit
-# produces patched Wazuh/TheHive/Cortex charts under ./charts/. At that point
-# restore entries like:
-#
-#   dependencies:
-#     - name: wazuh
-#       version: "0.3.2-soctalk-v1"
-#       repository: "file://./charts/wazuh"
-#       condition: components.wazuh.enabled
-#     - name: thehive
-#       version: "5.2.0-soctalk-v1"
-#       repository: "file://./charts/thehive"
-#       condition: components.thehive.enabled
-#     - name: cortex
-#       version: "3.1.8-soctalk-v1"
-#       repository: "file://./charts/cortex"
-#       condition: components.cortex.enabled
-#
-# Adapter, RBAC, NetworkPolicy, ResourceQuota, LimitRange, and ConfigMap are
-# chart-native templates under ./templates/ and do not depend on the subcharts.
-dependencies: []
+# Subchart dependencies. Wazuh + linux-ep ship inline so a single helm install
+# on the tenant cluster (L2) brings up the full SOC stack — required for the
+# cross-cluster MSSP/L2 path where the cloud-agent runs ONE install_helm_release
+# job per tenant (no second helm release to fan out into). Both are gated on
+# components.<name>.enabled in values so a 'provided'-profile tenant (BYO Wazuh)
+# can ship adapter-only. TheHive / Cortex stay undeclared until the chart audit
+# lands their patched charts under ./charts/.
+dependencies:
+  - name: wazuh
+    version: "0.1.1"
+    repository: "file://../wazuh"
+    condition: components.wazuh.enabled
+  - name: linux-ep
+    alias: linuxep
+    version: "0.1.1"
+    repository: "file://../linux-ep"
+    condition: components.linuxep.enabled
