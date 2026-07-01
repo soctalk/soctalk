@@ -66,7 +66,7 @@ def _now() -> datetime:
 
 class RegisterBody(BaseModel):
     cluster_label: str = Field(max_length=128)
-    agent_version: str = Field(max_length=32)
+    agent_version: str = Field(max_length=64)
     kubernetes_version: str | None = Field(default=None, max_length=64)
     node_count: int | None = Field(default=None)
 
