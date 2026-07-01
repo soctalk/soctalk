@@ -137,6 +137,12 @@ jobs:
       - name: helm lint soctalk-system
         run: helm lint charts/soctalk-system
 
+      - name: helm dependency build soctalk-tenant
+        # soctalk-tenant depends on file:// wazuh + linux-ep siblings; without
+        # `dependency build` populating charts/soctalk-tenant/charts/ helm
+        # lint + template both fail with "missing in charts/ directory".
+        run: helm dependency build charts/soctalk-tenant
+
       - name: helm lint soctalk-tenant
         run: helm lint charts/soctalk-tenant
 

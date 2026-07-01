@@ -356,15 +356,20 @@ jobs:
       - name: Wait for soctalk-firstboot
         run: |
           set -e
+          # firstboot.service has RemainAfterExit=yes so ActiveState stays
+          # "active" after a clean exit — that's why we key off SubState +
+          # Result instead. SubState=exited + Result=success is the
+          # unambiguous "ran once and finished ok" signal. SubState=failed
+          # or Result=failed is the terminal failure signal.
           for i in $(seq 1 30); do
-            state=$(ssh -i bt_key -p 8022 -o BatchMode=yes ops@127.0.0.1 \
-                    'systemctl is-active soctalk-firstboot' 2>/dev/null || echo "?")
-            echo "t+${i}m firstboot=$state"
-            if [ "$state" = "inactive" ]; then
-              echo "soctalk-firstboot completed (inactive=done, ConditionPathExists fires)"
+            eval "$(ssh -i bt_key -p 8022 -o BatchMode=yes ops@127.0.0.1 \
+                    'systemctl show soctalk-firstboot --property=SubState,Result' 2>/dev/null || true)"
+            echo "t+${i}m SubState=${SubState:-?} Result=${Result:-?}"
+            if [ "${SubState:-}" = "exited" ] && [ "${Result:-}" = "success" ]; then
+              echo "soctalk-firstboot completed successfully"
               exit 0
             fi
-            if [ "$state" = "failed" ]; then
+            if [ "${SubState:-}" = "failed" ] || [ "${Result:-}" = "failed" ]; then
               echo "firstboot FAILED:"
               ssh -i bt_key -p 8022 ops@127.0.0.1 \
                 'sudo journalctl -u soctalk-firstboot --no-pager -n 50'

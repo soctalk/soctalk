@@ -77,9 +77,10 @@ def test_poc_profile_emits_tight_resource_quota():
     # Chart schema disallows unknown top-level fields, so no "profile"
     # key ends up in values; the overrides land in resourceQuota etc.
     assert "profile" not in v
-    # 4Gi covers adapter + wazuh-{manager,indexer,dashboard} at PoC limits
-    # with restart headroom; bumped from 2Gi when Wazuh joined the bundle.
-    assert v["resourceQuota"]["requests"]["memory"] == "4Gi"
+    # 6Gi covers adapter + wazuh-{manager,indexer,dashboard} + linux-ep
+    # at PoC limits with restart headroom; bumped from 4Gi when linux-ep
+    # joined the poc bundle (attack simulator + Wazuh agent side-by-side).
+    assert v["resourceQuota"]["requests"]["memory"] == "6Gi"
     assert v["resourceQuota"]["pods"] == "20"
 
 
@@ -202,8 +203,10 @@ def test_render_provided_profile():
     # (4, schema) the rendered 'provided' shape validates against the chart schema
     _assert_validates_against_tenant_schema(v)
 
-    # (3 + 6, other profiles) verifySsl is rendered for poc too, and
-    # externalSiemHosts is empty for non-provided profiles. poc still validates.
+    # (3 + 6, other profiles) verifySsl is FORCED false for poc regardless
+    # of the integration row — poc ships in-cluster Wazuh with self-signed
+    # certs, so the adapter can never verify them. externalSiemHosts stays
+    # empty for non-provided profiles. poc still validates.
     poc_integration = _make_integration(t.id)
     poc_integration.wazuh_verify_ssl = True
     v_poc = render_tenant_values(
@@ -215,10 +218,7 @@ def test_render_provided_profile():
         llm_secret_name="tenant-x-llm",
         profile="poc",
     )
-    assert (
-        v_poc["adapter"]["wazuhIndexer"]["verifySsl"]
-        == poc_integration.wazuh_verify_ssl  # True here
-    )
+    assert v_poc["adapter"]["wazuhIndexer"]["verifySsl"] is False
     assert v_poc["networkPolicies"]["externalSiemHosts"] == []
     _assert_validates_against_tenant_schema(v_poc)
 
@@ -364,12 +364,10 @@ def test_chart_fqdn_egress_skipped_when_no_hosts():
 @pytest.mark.parametrize("verify", [True, False])
 def test_verify_ssl_flows_from_integration_for_all_profiles(profile, verify):
     """``adapter.wazuhIndexer.verifySsl`` mirrors ``integration.wazuh_verify_ssl``
-    for EVERY profile (not just 'provided') and for both boolean inputs.
-
-    This is the value the adapter image consumes via ``WAZUH_INDEXER_VERIFY_SSL``
-    (feature tenant.profile.provided.adapter-tls); it must be wired for in-cluster
-    profiles too so a tenant's self-signed-vs-CA TLS preference is honoured
-    regardless of where the indexer lives.
+    only for the ``provided`` profile — the two in-cluster profiles (``poc``,
+    ``persistent``) always emit ``verifySsl: false`` because the bundled Wazuh
+    subchart ships a self-signed indexer cert with no operator-facing way to
+    swap it. The adapter would fail every ingest if verify were True.
     """
     t = _make_tenant(profile)
     integration = _make_integration(t.id)
@@ -385,7 +383,8 @@ def test_verify_ssl_flows_from_integration_for_all_profiles(profile, verify):
         llm_secret_name="tenant-x-llm",
         profile=profile,
     )
-    assert v["adapter"]["wazuhIndexer"]["verifySsl"] is verify
+    expected = verify if profile == "provided" else False
+    assert v["adapter"]["wazuhIndexer"]["verifySsl"] is expected
 
 
 def test_tenant_identity_always_rendered():
