@@ -143,6 +143,14 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/helm-out
 
+          # soctalk-tenant depends on wazuh + linux-ep via file:// refs.
+          # `helm package` won't traverse those without a resolved deps
+          # directory, so run `dependency update` first — it copies the
+          # referenced sibling charts into charts/soctalk-tenant/charts/.
+          echo "::group::dependency update soctalk-tenant"
+          helm dependency update charts/soctalk-tenant
+          echo "::endgroup::"
+
           for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
             echo "::group::package $chart"
             helm package "charts/$chart" --destination /tmp/helm-out
