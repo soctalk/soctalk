@@ -170,6 +170,10 @@ jobs:
 
       - name: helm template soctalk-tenant (smoke)
         run: |
+          # linux-ep subchart requires wazuh.managerHost + creds ref pointing
+          # at whatever the wazuh subchart materializes in a real install
+          # (the provisioning render sets these from wazuh's Service name).
+          # For the smoke test we synthesize the same values by convention.
           helm template tenant-acme charts/soctalk-tenant \
             --set tenant.id=00000000-0000-0000-0000-000000000002 \
             --set tenant.slug=acme \
@@ -178,7 +182,11 @@ jobs:
             --set tenant.displayName=Acme \
             --set llm.apiKeyRef.name=tenant-00000000-0000-0000-0000-000000000002-llm \
             --set agentIngress.hostname=acme.soc.mssp.local \
-            --set networkPolicies.allowedLlmHosts[0]=api.openai.com > /tmp/tenant.rendered.yaml
+            --set networkPolicies.allowedLlmHosts[0]=api.openai.com \
+            --set linuxep.wazuh.managerHost=tenant-acme-wazuh-manager \
+            --set linuxep.wazuh.credsSecret.name=tenant-acme-wazuh-creds \
+            --set linuxep.wazuh.credsSecret.authdPasswordKey=AUTHD_PASS \
+            > /tmp/tenant.rendered.yaml
           wc -l /tmp/tenant.rendered.yaml
 
   frontend:
