@@ -1,0 +1,14 @@
+name: azure
+version: 0.1.0
+protocol: "1"
+executable: ./bin/plugin
+license: MIT
+homepage: https://github.com/soctalk/soctalk
+env:
+  - TAILSCALE_API_KEY
+  - AZURE_CLIENT_ID
+  - AZURE_TENANT_ID
+  - AZURE_CLIENT_SECRET
+  - AZURE_SUBSCRIPTION_ID
+  - HOME
+  - SSH_AUTH_SOCK

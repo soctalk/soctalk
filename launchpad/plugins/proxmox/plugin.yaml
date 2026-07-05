@@ -1,0 +1,14 @@
+name: proxmox
+version: 0.1.0
+protocol: "1"
+executable: ./bin/plugin
+license: MIT
+homepage: https://github.com/soctalk/soctalk
+env:
+  - PROXMOX_API_TOKEN_ID
+  - PROXMOX_API_TOKEN_SECRET
+  - PVE_URL
+  - PVE_TOKEN_ID
+  - PVE_TOKEN_SECRET
+  - SSH_AUTH_SOCK
+  - HOME

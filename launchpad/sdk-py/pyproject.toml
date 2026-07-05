@@ -1,0 +1,18 @@
+[project]
+name = "launchpad-sdk"
+version = "0.1.0"
+description = "Python SDK for SocTalk Launchpad plugins"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+readme = "README.md"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
