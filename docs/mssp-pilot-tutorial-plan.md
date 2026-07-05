@@ -1,8 +1,7 @@
 # MSSP Pilot Quickstart — tutorial plan
 
 **Status:** plan, not the tutorial itself. The artifact described here will
-live at `docs.soctalk.ai/mssp-pilot/` and serves the gap until the
-`soctalk-launchpad` artifact (see `launchpad-design-draft.md`) is shipped.
+live at `docs.soctalk.ai/mssp-pilot/`.
 
 > **Reviewer brief — read first.** This is a documentation plan, not
 > code. Review it from a DX/UX angle, biased toward the perspective of
@@ -25,9 +24,8 @@ live at `docs.soctalk.ai/mssp-pilot/` and serves the gap until the
 >   choose-your-own-adventure?
 > - The handoff moment — §4 generates four strings the MSSP must convey
 >   to the tenant manually. Is the friction honest about itself? Does
->   the tutorial signpost "this is what Launchpad will automate later"
->   clearly enough that the reader doesn't think this is the steady
->   state?
+>   the tutorial signpost that this manual handoff is a known rough edge,
+>   not the steady state, clearly enough?
 > - Tenant-side §5: same Linux VM, same k3s, same chart, but the
 >   tenant operator may never have seen SocTalk before. Is the
 >   per-tenant section self-contained enough that the MSSP can copy
@@ -199,11 +197,9 @@ MSSP can paste a URL fragment to their tenant contact.
   shared item, share via team password manager, OR email if no PWM is
   in use. Do NOT paste into a public Slack channel or send the
   bootstrap token unencrypted over the same channel as the auth key.
-- **The "Launchpad will fix this" callout.** Inline note: *"This is
-  the manual handoff. When `soctalk-launchpad` ships, it will generate
-  a signed bundle and send it to the tenant contact in one click."*
-  Sets expectations that this is the rough edge and won't always
-  be like this.
+- **The manual-handoff callout.** Inline note flagging that this
+  copy-by-hand step is the known rough edge, not the steady state, so
+  the reader knows it won't always be like this.
 
 ### 5. Tenant side: stand up the data plane (~30 min per tenant)
 
@@ -268,8 +264,7 @@ chance of a good outcome:
 
 ### Appendix A — Troubleshooting
 
-Symptom → fix table, biased to the failure modes that are real today
-(not future Launchpad failures):
+Symptom → fix table, biased to the failure modes that are real today:
 
 - Tailscale auth key expired before tenant ran the join command
 - Helm pull blocked by tenant's corporate HTTPS proxy
@@ -300,7 +295,7 @@ without re-reading §3 + §5.
   as collapsed alts. Cost: harder to land in the "right" tab if you
   arrive via Google. Benefit: the same tutorial works for everyone.
 - **Honest about manual handoff.** §4 documents the four-string copy
-  with a "Launchpad will automate this" callout. Doesn't pretend
+  with a callout flagging it as a known rough edge. Doesn't pretend
   smoothness that doesn't exist yet.
 - **Tenant operator may read ONLY §5.** Section is structured to be
   self-contained, with terms (slug, bootstrap token, tailnet) glossed
@@ -312,7 +307,7 @@ without re-reading §3 + §5.
   side.** Because we don't currently ship a tenant appliance image —
   only the system image. Tenant operator spins up generic Ubuntu,
   installs k3s + helm, helm-installs the chart. The tutorial is
-  honest about this being the path until Launchpad changes it.
+  honest about this being the current path.
 
 ## Open questions for the reviewer to interrogate
 
@@ -323,11 +318,9 @@ without re-reading §3 + §5.
    enough that two MSSPs running this independently produce the same
    shape? Or should the format be left flexible and we just enumerate
    the required keys?
-3. **The "Launchpad will fix this" callouts.** Useful (sets
-   expectations) or distracting (reader wonders why the rough edge
-   isn't already fixed)? Frequency: I have them in §4 and §5. Should
-   they be in §3 too (e.g. "Launchpad will set up the tailnet for
-   you")?
+3. **The "known rough edge" callouts.** Useful (sets expectations) or
+   distracting (reader wonders why the rough edge isn't already fixed)?
+   Frequency: I have them in §4 and §5. Should they be in §3 too?
 4. **The §6 demo moment specificity.** Currently prescribes the exact
    query strings. Pro: predictable outcome. Con: feels canned and
    reduces operator's sense of discovery. Halfway: prescribe one
