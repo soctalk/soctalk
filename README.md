@@ -28,12 +28,12 @@ screenshots: **[Run on VirtualBox](https://soctalk.github.io/soctalk-docs/virtua
 
 ```bash
 # qcow2 shown — pick the format for your hypervisor on the Downloads page
-curl -L -O https://github.com/soctalk/soctalk/releases/download/v0.1.2/soctalk-demo-0.1.2.qcow2.xz
-xz -d soctalk-demo-0.1.2.qcow2.xz
+curl -L -O https://github.com/soctalk/soctalk/releases/download/v0.1.4/soctalk-demo-0.1.4.qcow2.xz
+xz -d soctalk-demo-0.1.4.qcow2.xz
 
 # Boot with KVM and forward the setup wizard to localhost:8443
 qemu-system-x86_64 -m 8G -smp 4 -enable-kvm \
-  -drive file=soctalk-demo-0.1.2.qcow2,if=virtio \
+  -drive file=soctalk-demo-0.1.4.qcow2,if=virtio \
   -netdev user,id=n,hostfwd=tcp::8443-:8443 -device virtio-net,netdev=n -nographic
 ```
 
