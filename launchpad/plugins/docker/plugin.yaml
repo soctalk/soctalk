@@ -1,9 +1,0 @@
-name: docker
-version: 0.1.0
-protocol: "1"
-executable: ./bin/plugin
-license: MIT
-homepage: https://github.com/soctalk/soctalk
-env:
-  - DOCKER_HOST
-  - PATH
