@@ -62,11 +62,26 @@ type StartConfig struct {
 	HelloTimeout time.Duration
 }
 
+// SpawnVerifier, if set, is called with a manifest immediately before its
+// subprocess is spawned. A non-nil error aborts the spawn. It is the single
+// chokepoint for spawn-time trust: the main binary wires it to a verifier that
+// re-checks a managed plugin's binary and env policy against the cached signed
+// index (never the editable plugin.yaml), so tampering after install cannot
+// reach execution. Left nil in tests and library use, where no enforcement is
+// wanted.
+var SpawnVerifier func(*Manifest) error
+
 // Start spawns the plugin subprocess and waits for the hello frame. Caller
 // must call Shutdown or Kill to reclaim resources.
 func Start(ctx context.Context, m *Manifest, cfg StartConfig) (*Client, error) {
 	if cfg.HelloTimeout == 0 {
 		cfg.HelloTimeout = 15 * time.Second
+	}
+
+	if SpawnVerifier != nil {
+		if err := SpawnVerifier(m); err != nil {
+			return nil, fmt.Errorf("refusing to spawn plugin %q: %w", m.Name, err)
+		}
 	}
 
 	// Build a clean environment for the child. Do not use os.Setenv (parent

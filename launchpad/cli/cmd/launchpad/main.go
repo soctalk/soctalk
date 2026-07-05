@@ -1,9 +1,10 @@
 // Command launchpad is the CLI entry point.
 //
 // v1 subcommands:
-//   launchpad plugin list                    — discovered plugins
-//   launchpad plugin verify <name-or-path>   — compliance suite
-//   launchpad plugin run <name> <method>     — one-shot RPC (dev tool)
+//
+//	launchpad plugin list                    — discovered plugins
+//	launchpad plugin verify <name-or-path>   — compliance suite
+//	launchpad plugin run <name> <method>     — one-shot RPC (dev tool)
 package main
 
 import (
@@ -18,16 +19,27 @@ import (
 
 	"github.com/soctalk/launchpad/internal/cli"
 	"github.com/soctalk/launchpad/internal/pluginhost"
+	"github.com/soctalk/launchpad/internal/pluginstore"
 )
 
-const version = "0.1.0-alpha"
+// version is the CLI release. Injected at build time via
+// -ldflags "-X main.version=<tag>"; the value here is the dev default. It also
+// pins which signed plugin index the CLI trusts, so build and release must agree.
+var version = "0.1.0-alpha"
 
 func main() {
+	// Enforce spawn-time plugin trust for every subprocess launch in this
+	// process: managed plugins are re-verified against the cached signed index,
+	// unsigned/dev plugins require an explicit opt-in.
+	pluginhost.SpawnVerifier = pluginstore.VerifySpawn
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "init":
+		initCmd(os.Args[2:])
 	case "plugin":
 		pluginCmd(os.Args[2:])
 	case "up":
@@ -77,6 +89,7 @@ func upCmd(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: launchpad up --config PATH [--state PATH] [--headless] [--auto-resolve-gates]")
 		os.Exit(2)
 	}
+	ensurePluginsSynced()
 	if err := cli.Up(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -145,6 +158,7 @@ func uiCmd(args []string) {
 		}
 		i++
 	}
+	ensurePluginsSynced()
 	if err := cli.UI(opts); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -155,42 +169,58 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: launchpad <command> [args]
 
 Commands:
+  init                            download + verify all plugins for this platform
   up --config PATH                orchestrate a rollout (MSSP + tenants)
                                   --headless emits JSON events on stdout
                                   --auto-resolve-gates auto-confirms every gate
   down --config PATH              tear down every VM in state (via vm.destroy)
                                   --headless emits JSON events on stdout
                                   --keep-state leave the state file in place
-  plugin list                     list discovered plugins
+  plugin list [--available]       list installed plugins (or those in the index)
+  plugin sync                     re-download + verify plugins into the store
   plugin verify <name-or-path>    run compliance suite against a plugin
   plugin run <name> <method> [json-params]   send one RPC to a plugin
   version                         print launchpad + protocol version
 
 Environment:
-  LAUNCHPAD_PLUGIN_DIR   :-separated extra plugin search directories
+  LAUNCHPAD_PLUGIN_DIR      :-separated dev plugin dirs (unsigned)
+  LAUNCHPAD_DEV=1           trust unsigned/dev plugins (implies --allow-unsigned)
+  LAUNCHPAD_INDEX_BASEURL   override the release index base URL (staging)
+  LAUNCHPAD_PUBKEY          hex ed25519 index-signing key (staging/dev)
 
 `)
 }
 
 func pluginCmd(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: launchpad plugin <list|verify|run> ...")
+		fmt.Fprintln(os.Stderr, "usage: launchpad plugin <list|sync|verify|run> ...")
 		os.Exit(2)
 	}
 	switch args[0] {
 	case "list":
-		cmdPluginList()
+		if len(args) > 1 && args[1] == "--available" {
+			cmdPluginListAvailable()
+		} else {
+			cmdPluginList()
+		}
+	case "sync":
+		pluginSyncCmd(args[1:])
 	case "verify":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "usage: launchpad plugin verify <name-or-path>")
 			os.Exit(2)
 		}
+		// verify is a dev/CI tool that runs the compliance suite against an
+		// explicit local plugin, so allow spawning unsigned builds.
+		os.Setenv("LAUNCHPAD_ALLOW_UNSIGNED", "1")
 		cmdPluginVerify(args[1])
 	case "run":
 		if len(args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: launchpad plugin run <name> <method> [json-params]")
 			os.Exit(2)
 		}
+		// run is a raw debug tool for an explicitly named plugin.
+		os.Setenv("LAUNCHPAD_ALLOW_UNSIGNED", "1")
 		params := "{}"
 		if len(args) >= 4 {
 			params = args[3]

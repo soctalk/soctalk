@@ -59,11 +59,12 @@ A run is a single deployment. You assign the control node and each tenant to a h
 ### Web console
 
 ```bash
-export LAUNCHPAD_PLUGIN_DIR=/path/to/plugins-with-manifests
-./cli/bin/launchpad ui
+launchpad ui
 ```
 
-This starts the console and opens it in your browser. From there:
+On first run the CLI downloads and verifies the plugin set for your release
+into `~/.launchpad/plugins`, then starts the console and opens it in your
+browser. From there:
 
 1. Open **Networks**, add your overlay name and access key, and use **Test** to confirm the key works.
 2. Open **Hosts**, add a host for each place you want to provision on, and **Test** each one.
@@ -77,9 +78,36 @@ For automation, drive a run from a YAML config without the console:
 
 ```bash
 export TAILSCALE_API_KEY=tskey-api-...
-export LAUNCHPAD_PLUGIN_DIR=/path/to/plugins-with-manifests
+launchpad up --config pilot.yaml --headless --auto-resolve-gates
+```
 
-./cli/bin/launchpad up --config pilot.yaml --headless --auto-resolve-gates
+## Plugin distribution
+
+Plugins are not bundled into the binary; the CLI fetches them from the release
+on first use. This keeps the binary small and lets a plugin ship a fix without
+a CLI release.
+
+- `launchpad init` (and the first `ui`/`up`) download **all** plugins for your
+  platform into `~/.launchpad/plugins`, pinned to the CLI's own release.
+- Trust is rooted in a single **ed25519 signature** over a release index. The
+  index carries every artifact's SHA-256 and each plugin's env allow-list, so
+  one verified signature covers both binary integrity and env policy. Nothing is
+  made executable or run before its hash matches the signed index, and the check
+  is repeated immediately before every spawn against the cached index (never the
+  editable `plugin.yaml`).
+- `launchpad plugin list --available` shows what the index offers;
+  `launchpad plugin sync` re-pulls or repairs the store.
+- Air-gapped installs use the offline bundle:
+  `launchpad plugin sync --from launchpad-plugins-bundle.tar.gz`, verified
+  against the same signature.
+
+For local plugin development, point the CLI at your own builds and opt in to
+running unsigned plugins:
+
+```bash
+export LAUNCHPAD_DEV=1                       # trust unsigned/dev plugins
+export LAUNCHPAD_PLUGIN_DIR=$PWD/plugins-built
+launchpad ui
 ```
 
 ## Layout
