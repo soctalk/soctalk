@@ -109,6 +109,13 @@ tenantProvisioning:
   # ``100.76.82.51=soctalk-mssp-1.tail6397c.ts.net``. Empty when the MSSP
   # is reachable via cluster / cloud DNS (production default).
   l1HostAliases: ""
+  # Install-wide TLS-verify hint for the tenant adapter's connection back to
+  # this MSSP. Set to "false" when the MSSP serves a self-signed cert
+  # (launchpad demo / pending launchpad-owned certs) so tenant adapters can
+  # heartbeat + forward alerts. Fed into each tenant install's
+  # soctalkSystem.verifySsl. Empty (production CA-signed MSSP) leaves the
+  # tenant chart default (verify on).
+  l1VerifySsl: ""
   wazuhChartPath: /app/charts/wazuh
   adapterImageRepo: ''
   adapterImageTag: ''

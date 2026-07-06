@@ -385,6 +385,14 @@ EOF
   if [[ -n "${SOCTALK_L1_HOST_ALIASES:-}" ]]; then
     printf '  l1HostAliases: %s\n' "$(yaml_sq "$SOCTALK_L1_HOST_ALIASES")" >> "$VALUES_FILE"
   fi
+  # TLS verification for the tenant adapter's connection back to this MSSP.
+  # Set SOCTALK_L1_VERIFY_SSL=false when the MSSP serves a self-signed cert
+  # (launchpad demo / pending launchpad-owned certs) so tenant adapters can
+  # heartbeat + forward alerts. Threaded to the api pod, which emits it into
+  # each tenant install's soctalkSystem.verifySsl.
+  if [[ -n "${SOCTALK_L1_VERIFY_SSL:-}" ]]; then
+    printf '  l1VerifySsl: %s\n' "$(yaml_sq "$SOCTALK_L1_VERIFY_SSL")" >> "$VALUES_FILE"
+  fi
   cat >> "$VALUES_FILE" <<EOF
 postgres:
   enabled: true

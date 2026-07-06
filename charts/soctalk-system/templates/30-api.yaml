@@ -409,6 +409,18 @@ spec:
             - name: SOCTALK_L1_HOST_ALIASES
               value: {{ .Values.tenantProvisioning.l1HostAliases | quote }}
             {{- end }}
+            {{- if .Values.tenantProvisioning.l1VerifySsl }}
+            {{- /*
+              TLS verification for the tenant adapter's connection back to this
+              MSSP. Set to "false" when the MSSP serves a self-signed cert
+              (launchpad demo / pending launchpad-owned certs) so tenant
+              adapters can heartbeat + forward alerts. Fed into each tenant
+              install's ``values.soctalkSystem.verifySsl``. Absent (production
+              CA-signed MSSP) leaves the tenant chart default (verify on).
+            */}}
+            - name: SOCTALK_L1_VERIFY_SSL
+              value: {{ .Values.tenantProvisioning.l1VerifySsl | quote }}
+            {{- end }}
             - name: SOCTALK_WAZUH_CHART_PATH
               value: {{ .Values.tenantProvisioning.wazuhChartPath | quote }}
           resources:

@@ -371,6 +371,10 @@
           "type": "string",
           "description": "Install-wide pod-level /etc/hosts entries baked into every new tenant install. Semicolon-list of ``ip=host[,host]`` pairs. Empty when the MSSP is reachable via cluster / cloud DNS."
         },
+        "l1VerifySsl": {
+          "type": "string",
+          "description": "Install-wide TLS-verify hint for the tenant adapter's connection back to this MSSP. Set to \"false\" when the MSSP serves a self-signed cert so tenant adapters can heartbeat + forward alerts. Empty for a production CA-signed MSSP (verify on)."
+        },
         "wazuhChartPath": {
           "type": "string"
         },

@@ -96,6 +96,10 @@
               }
             }
           }
+        },
+        "verifySsl": {
+          "description": "TLS verification for the adapter's connection to soctalkSystem.url (heartbeat + alert forwarding). Set false by the L1 controller when L1 serves a self-signed cert (launchpad demo / pending launchpad-owned certs). Absent leaves verification on.",
+          "type": "boolean"
         }
       }
     },

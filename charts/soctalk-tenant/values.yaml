@@ -217,6 +217,12 @@ soctalkSystem:
   # so both pods can heartbeat + ingest without further intervention.
   # Structure matches k8s pod.spec.hostAliases: [{ip, hostnames: [...]}]
   hostAliases: []
+  # TLS verification for the adapter's connection to ``url`` (heartbeat +
+  # alert forwarding). The L1 controller sets this false when the MSSP serves
+  # a self-signed cert (launchpad demo / pending launchpad-owned certs) so the
+  # adapter can reach L1. Omitted key => the chart defaults verification on
+  # (SOCTALK_API_VERIFY_SSL="true"). Only set false for self-signed L1.
+  # verifySsl: false
 
 # Namespace labels applied by the controller (informational; namespace is created
 # by controller before Helm install so these labels are already set)

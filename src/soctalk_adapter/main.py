@@ -130,6 +130,31 @@ def _wazuh_indexer_verify_ssl() -> bool:
     return True
 
 
+def _soctalk_api_verify_ssl() -> bool:
+    """Resolve TLS verification for the SocTalk L1 (MSSP) API httpx clients.
+
+    Reads ``SOCTALK_API_VERIFY_SSL`` (default ``"true"``) with the same
+    spelling rules as ``WAZUH_INDEXER_VERIFY_SSL``. The provisioning controller
+    sets this to ``"false"`` for cross-cluster tenants whose L1 serves a
+    self-signed cert (launchpad demo / pending launchpad-owned certs): the
+    adapter must reach L1 to heartbeat and forward alerts, so a self-signed L1
+    can opt out of verification explicitly. A malformed value fails safe to
+    verify=True — a typo must never silently disable TLS against L1.
+    """
+    raw = os.environ.get("SOCTALK_API_VERIFY_SSL", "true")
+    normalized = raw.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    logger.warning(
+        "SOCTALK_API_VERIFY_SSL=%r is not a recognised boolean; "
+        "defaulting to verify=True",
+        raw,
+    )
+    return True
+
+
 def _severity_from_rule_level(level: int | None) -> int:
     if level is None:
         return 0
@@ -337,7 +362,7 @@ async def _heartbeat_once(client: httpx.AsyncClient) -> None:
 
 async def _heartbeat_loop() -> None:
     interval = float(os.environ.get("SOCTALK_HEARTBEAT_INTERVAL_SECONDS", "30"))
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=_soctalk_api_verify_ssl()) as client:
         while True:
             try:
                 await _heartbeat_once(client)
@@ -365,8 +390,9 @@ async def _ingest_loop() -> None:
     # former hard-coded verify=False so externally-provided CA-signed indexers
     # are verified while self-signed in-cluster ones can opt out.
     verify_indexer_tls = _wazuh_indexer_verify_ssl()
+    verify_api_tls = _soctalk_api_verify_ssl()
     async with (
-        httpx.AsyncClient() as api_client,
+        httpx.AsyncClient(verify=verify_api_tls) as api_client,
         httpx.AsyncClient(verify=verify_indexer_tls) as wazuh_client,
     ):
         while True:

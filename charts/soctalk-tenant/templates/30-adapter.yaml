@@ -88,6 +88,16 @@ spec:
               {{- else -}}
                 "http://{{ .Values.adapter.api.serviceHost }}:{{ .Values.adapter.api.servicePort }}"
               {{- end }}
+            {{/*
+            TLS verification for the L1 (MSSP) API client — heartbeat + alert
+            forwarding. The provisioning controller sets soctalkSystem.verifySsl
+            to false for cross-cluster tenants whose L1 serves a self-signed cert
+            (launchpad demo / pending launchpad-owned certs). hasKey guard, like
+            the indexer knob, so an explicit false isn't clobbered by default().
+            Defaults to "true" when the key is absent (co-located / CA-signed L1).
+            */}}
+            - name: SOCTALK_API_VERIFY_SSL
+              value: {{ if hasKey .Values.soctalkSystem "verifySsl" }}{{ .Values.soctalkSystem.verifySsl | quote }}{{ else }}"true"{{ end }}
             - name: ADAPTER_TOKEN_PATH
               value: /run/secrets/adapter/token
             {{- with .Values.adapter.wazuhIndexer }}

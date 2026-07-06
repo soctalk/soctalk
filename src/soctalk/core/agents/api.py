@@ -290,6 +290,17 @@ async def _build_install_helm_release_spec(
                 entries.append({"ip": ip.strip(), "hostnames": names})
         if entries:
             system_block["hostAliases"] = entries
+    # TLS verification for the tenant adapter's connection back to L1. When L1
+    # serves a self-signed cert (launchpad demo / pending launchpad-owned certs)
+    # the operator sets SOCTALK_L1_VERIFY_SSL=false so the adapter can heartbeat
+    # + forward alerts without cert validation. Rendered into the tenant chart's
+    # soctalkSystem.verifySsl (-> the adapter's SOCTALK_API_VERIFY_SSL env).
+    # Only an explicit false/0 disables it; absence leaves the chart default on.
+    verify_raw = os.getenv("SOCTALK_L1_VERIFY_SSL", "").strip().lower()
+    if verify_raw in {"false", "0"}:
+        system_block["verifySsl"] = False
+    elif verify_raw in {"true", "1"}:
+        system_block["verifySsl"] = True
     values["soctalkSystem"] = system_block
     # The runs-worker pod loads its bearer JWT from
     # ``runsWorker.tokenSecretRef`` (name=runs-worker-token by default).
