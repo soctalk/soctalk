@@ -363,8 +363,9 @@ tenantProvisioning:
   # on .Values.tenantProvisioning.adapterImageRepo. Emitting an explicit
   # chart-default entry below keeps the map non-nil so the chart's other
   # tenantProvisioning defaults survive the merge.
-  # NOTE: this heredoc is unquoted (it expands $vars), so keep backticks and
-  # <>/$() out of these comments or bash will try to run them.
+  # NOTE: this heredoc is unquoted, so it expands shell variables. Keep
+  # backticks and command substitution out of these comments, or bash will
+  # try to expand or run them (and set -u aborts on any unbound name).
   helmPlainHttp: false
 EOF
   # Optional tenant chart pin — useful for lab registries / staged
