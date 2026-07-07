@@ -180,7 +180,12 @@ class LifecycleEventRead(BaseModel):
 
 
 async def _get_organization(session: AsyncSession) -> Organization:
-    result = await session.execute(select(Organization).limit(1))
+    # An install has exactly one Organization, but order deterministically so
+    # that if more ever exist (e.g. a botched re-bootstrap) new tenants attach
+    # to a stable org — the oldest — rather than a nondeterministic row.
+    result = await session.execute(
+        select(Organization).order_by(Organization.created_at.asc()).limit(1)
+    )
     org = result.scalar_one_or_none()
     if org is None:
         raise HTTPException(500, "install not bootstrapped (no Organization row)")
