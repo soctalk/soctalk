@@ -267,7 +267,11 @@ prompt_config() {
     ADMIN_EMAIL="${ADMIN_EMAIL:-admin@soctalk.local}"
     ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(uuid | tr -d - | cut -c1-16)}"
     LLM_API_KEY="${LLM_API_KEY:-sk-REPLACE-ME}"
-    ONBOARD_DEMO="true"
+    # --demo still seeds a demo tenant for the standalone "just show me" path,
+    # but callers that only want the non-interactive install (e.g. launchpad,
+    # which onboards its own real tenants) can suppress it with
+    # SOCTALK_ONBOARD_DEMO=false so no throwaway 'demo' tenant is created.
+    ONBOARD_DEMO="${SOCTALK_ONBOARD_DEMO:-true}"
     return 0
   }
   # interactive: only prompt for what env didn't supply, and only if a tty exists
