@@ -479,6 +479,11 @@ def render_linux_ep_values(
     """
     return {
         "replicas": replicas,
+        # Auto-run the attack simulator. linux-ep only installs on the 'poc'
+        # profile (its endpoints ARE simulators), so a pilot demos live Wazuh
+        # detections immediately — no manual /opt/scripts/run-attack.sh step.
+        # Rate is governed by the chart's attackInterval / dailyAlertCap.
+        "simulator": {"enabled": True},
         "wazuh": {
             "managerHost": wazuh_manager_host,
             "credsSecret": {
