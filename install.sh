@@ -62,7 +62,14 @@ API_BASE="https://127.0.0.1"
 # --------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------- #
-c_bold=$'\033[1m'; c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_rst=$'\033[0m'
+# Colour only when stdout is a real terminal. When the installer is piped
+# (e.g. run over SSH by launchpad and streamed into the web console) raw ANSI
+# codes would otherwise surface as literal [32m ... [0m in the event log.
+if [[ -t 1 ]]; then
+  c_bold=$'\033[1m'; c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_rst=$'\033[0m'
+else
+  c_bold=''; c_red=''; c_grn=''; c_yel=''; c_rst=''
+fi
 log()  { printf '%s==>%s %s\n' "$c_grn" "$c_rst" "$*"; }
 warn() { printf '%sWARN:%s %s\n' "$c_yel" "$c_rst" "$*" >&2; }
 die()  { printf '%sERROR:%s %s\n' "$c_red" "$c_rst" "$*" >&2; exit 1; }
@@ -346,12 +353,14 @@ defaults:
   llm:
     provider: $(yaml_sq "$LLM_PROVIDER")
 tenantProvisioning:
-  # Explicit null-map guard: helm merges an empty `tenantProvisioning:` block
+  # Explicit null-map guard: helm merges an empty tenantProvisioning block
   # (which happens when none of the SOCTALK_TENANT_* env vars below are set)
-  # into a nil map, and the chart's 30-api.yaml then fails on
-  # `nil pointer evaluating <.Values.tenantProvisioning.adapterImageRepo>`.
-  # Emitting an explicit chart-default entry keeps the map non-nil so the
-  # chart's other tenantProvisioning defaults survive the merge.
+  # into a nil map, and the chart's 30-api.yaml then fails with a nil-pointer
+  # on .Values.tenantProvisioning.adapterImageRepo. Emitting an explicit
+  # chart-default entry below keeps the map non-nil so the chart's other
+  # tenantProvisioning defaults survive the merge.
+  # NOTE: this heredoc is unquoted (it expands $vars), so keep backticks and
+  # <>/$() out of these comments or bash will try to run them.
   helmPlainHttp: false
 EOF
   # Optional tenant chart pin — useful for lab registries / staged
