@@ -34,15 +34,6 @@ class LLMConfig(BaseModel):
     max_tokens: int = 4096
 
 
-class PollingConfig(BaseModel):
-    """Configuration for alert polling."""
-
-    interval_seconds: int = 30
-    max_alerts_per_poll: int = 100
-    batch_size: int = 5  # Process alerts in batches of this size
-    correlation_window_minutes: int = 15
-
-
 class ThresholdsConfig(BaseModel):
     """Configuration for decision thresholds."""
 
@@ -86,9 +77,6 @@ class Config(BaseModel):
 
     # LLM settings
     llm: LLMConfig
-
-    # Polling settings
-    polling: PollingConfig
 
     # Decision thresholds
     thresholds: ThresholdsConfig
@@ -260,14 +248,6 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),
     )
 
-    # Polling config
-    polling_config = PollingConfig(
-        interval_seconds=int(os.getenv("SOCTALK_POLLING_INTERVAL", "30")),
-        max_alerts_per_poll=int(os.getenv("SOCTALK_MAX_ALERTS_PER_POLL", "100")),
-        batch_size=int(os.getenv("SOCTALK_BATCH_SIZE", "5")),
-        correlation_window_minutes=int(os.getenv("SOCTALK_CORRELATION_WINDOW", "15")),
-    )
-
     # Thresholds config
     thresholds_config = ThresholdsConfig(
         auto_close_confidence=float(os.getenv("SOCTALK_AUTO_CLOSE_THRESHOLD", "0.25")),
@@ -306,7 +286,6 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         thehive_mcp_server=thehive_config,
         misp_mcp_server=misp_config,
         llm=llm_config,
-        polling=polling_config,
         thresholds=thresholds_config,
         hil=hil_config,
         database=database_config,

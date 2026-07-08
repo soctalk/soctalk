@@ -8,7 +8,6 @@ from typing import Any
 import structlog
 
 from soctalk.mcp.bindings import get_wazuh_client
-from soctalk.models.alerts import Alert
 from soctalk.models.enums import Phase, Severity
 from soctalk.models.investigation import Finding
 from soctalk.models.state import SecOpsState
@@ -340,50 +339,3 @@ def _analyze_ports(ports_text: str) -> list[str]:
             unusual.append(f"Unusual port {port}: {context}")
 
     return unusual
-
-
-async def poll_wazuh_alerts(limit: int = 100) -> list[Alert]:
-    """Poll alerts from Wazuh.
-
-    This is a standalone function used by the alert poller.
-
-    Args:
-        limit: Maximum number of alerts to retrieve.
-
-    Returns:
-        List of parsed alerts.
-    """
-    client = get_wazuh_client()
-
-    try:
-        result = await client.call_tool(
-            "get_wazuh_alert_summary",
-            {"limit": limit}
-        )
-
-        if not result:
-            logger.info("no_alerts_returned", result=result)
-            return []
-
-        # Parse alerts from the response
-        # Each alert starts with "Alert ID:" - split on this pattern
-        alerts = []
-
-        # Split by "Alert ID:" but keep the delimiter
-        import re
-        alert_blocks = re.split(r'(?=Alert ID:)', result)
-
-        for block in alert_blocks:
-            block = block.strip()
-            if block and block.startswith("Alert ID:"):
-                alert = Alert.from_wazuh_response(block)
-                if alert:
-                    alerts.append(alert)
-                    logger.debug("alert_parsed", alert_id=alert.id, description=alert.rule_description[:50])
-
-        logger.info("alerts_polled", count=len(alerts), raw_blocks=len(alert_blocks))
-        return alerts
-
-    except Exception as e:
-        logger.error("failed_to_poll_alerts", error=str(e), exc_info=True)
-        return []
