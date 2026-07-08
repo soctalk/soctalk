@@ -108,7 +108,7 @@ in pkgs.mkShell {
     if [ ! -f .venv/.installed ]; then
       echo "Installing Python dependencies..."
       # Temporarily set LD_LIBRARY_PATH for pip install (native deps may need it)
-      LD_LIBRARY_PATH="$NIX_LD_LIBRARY_PATH" pip install -e ".[dev,slack]" --quiet
+      LD_LIBRARY_PATH="$NIX_LD_LIBRARY_PATH" pip install -e ".[dev]" --quiet
       touch .venv/.installed
     fi
     
@@ -126,7 +126,7 @@ in pkgs.mkShell {
     echo "    pytest -m integration        # Run integration tests"
     echo "    ruff check src/              # Lint Python code"
     echo "    alembic upgrade head         # Run migrations"
-    echo "    uvicorn soctalk.api.app:app --reload  # Start API server"
+    echo "    uvicorn soctalk.core.api.app_v1:app --reload  # Start API server"
     echo ""
     echo "  Frontend:"
     echo "    cd frontend && pnpm install  # Install deps"

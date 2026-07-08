@@ -160,6 +160,40 @@ class InvestigationRunState(BaseModel):
         """
         return [e for e in self.enrichments if e.is_suspicious]
 
+    def generate_title(self) -> str:
+        """Generate a descriptive title based on alerts.
+
+        Returns:
+            Generated title.
+        """
+        if not self.alerts:
+            return "Empty InvestigationRunState"
+
+        # Find the most descriptive alert (skip generic ones)
+        generic_descriptions = {
+            "no description available",
+            "no description",
+            "",
+        }
+
+        best_description = None
+        for alert in self.alerts:
+            desc = alert.rule_description.strip()
+            if desc.lower() not in generic_descriptions:
+                best_description = desc
+                break
+
+        # Fall back to first alert if all are generic
+        if not best_description:
+            best_description = self.alerts[0].rule_description or "Security Alert"
+
+        base = best_description[:50]
+
+        if len(self.alerts) > 1:
+            return f"{base} (+{len(self.alerts) - 1} related alerts)"
+
+        return base
+
     def to_thehive_case_data(self) -> dict[str, Any]:
         """Generate data for creating a TheHive case.
 
