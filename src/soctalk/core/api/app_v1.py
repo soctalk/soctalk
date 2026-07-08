@@ -4,10 +4,7 @@ Composes the V1 routers (tenants, branding, LLM config, adapter, health,
 metrics) and wires the identity middleware appropriate for the install's
 ``SOCTALK_AUTH_MODE``.
 
-Used by a new entrypoint (see ``src/soctalk/core/entrypoints/api.py``) during
-V1 rollout. The existing ``soctalk.api.app`` stays untouched during Phase 1
-so legacy single-tenant tests keep running; V1 integration is via mounting
-the V1 app on a separate port or path as needed.
+This is the production API entrypoint (served as ``soctalk.core.api.app_v1:app``).
 """
 
 from __future__ import annotations

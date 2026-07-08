@@ -7,12 +7,10 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.mcp.bindings import get_thehive_client
 from soctalk.models.enums import Phase, InvestigationStatus, Severity
 from soctalk.models.investigation import InvestigationRunState
-from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
 
 logger = structlog.get_logger()
 
@@ -33,11 +31,6 @@ async def thehive_worker_node(
     Returns:
         Updated state dictionary.
     """
-    try:
-        config = get_langgraph_config()
-    except RuntimeError:
-        config = None
-
     logger.info("thehive_worker_started")
 
     client = get_thehive_client()
@@ -45,10 +38,6 @@ async def thehive_worker_node(
 
     # Reconstruct InvestigationRunState object
     investigation = InvestigationRunState(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
-
-    # Get emitter for event emission
-    emitter = get_emitter_from_config(config)
-    investigation_id = get_investigation_id_from_state(state)
 
     try:
         # Create the case in TheHive. ``thehive_case_id`` is TheHive's
@@ -62,22 +51,9 @@ async def thehive_worker_node(
             investigation.status = InvestigationStatus.ESCALATED
             logger.info(
                 "thehive_case_created",
-                investigation_id=investigation_id,
+                investigation_id=investigation.id,
                 thehive_case_id=thehive_case_id,
             )
-
-            # Emit thehive case created event
-            if emitter and investigation_id:
-                try:
-                    await emitter.emit_thehive_case_created(
-                        investigation_id=investigation_id,
-                        thehive_case_id=thehive_case_id,
-                        case_number=None,
-                        title=investigation.title,
-                        idempotency_key=f"thehive-case-{investigation_id}-{thehive_case_id}",
-                    )
-                except Exception as emit_error:
-                    logger.warning("event_emission_failed", error=str(emit_error))
         else:
             logger.warning("case_creation_failed")
             state["last_error"] = "Failed to create TheHive case"
@@ -277,113 +253,3 @@ def _extract_case_id(result: str) -> str | None:
         return result.strip()
 
     return None
-
-
-async def check_existing_cases(title_pattern: str) -> list[dict[str, Any]]:
-    """Check for existing cases matching a pattern.
-
-    Args:
-        title_pattern: Pattern to search in case titles.
-
-    Returns:
-        List of matching cases.
-    """
-    client = get_thehive_client()
-
-    try:
-        result = await client.call_tool(
-            "get_thehive_cases",
-            {"limit": 50}
-        )
-
-        if not result:
-            return []
-
-        # Parse cases and filter by title
-        cases = _parse_cases(result)
-        matching = [
-            c for c in cases
-            if title_pattern.lower() in c.get("title", "").lower()
-        ]
-
-        return matching
-
-    except Exception as e:
-        logger.error("failed_to_check_cases", error=str(e))
-        return []
-
-
-def _parse_cases(result: str) -> list[dict[str, Any]]:
-    """Parse cases from TheHive response.
-
-    Args:
-        result: Raw response from TheHive.
-
-    Returns:
-        List of case dictionaries.
-    """
-    cases = []
-
-    # Try JSON array
-    try:
-        if result.strip().startswith("["):
-            return json.loads(result)
-    except json.JSONDecodeError:
-        pass
-
-    # Parse text format
-    # Format: Case #X: Title\n  ID: xxx\n  Status: xxx\n ...
-    current_case: dict[str, Any] = {}
-
-    for line in result.split("\n"):
-        line = line.strip()
-
-        if line.startswith("Case #") or line.startswith("Case:"):
-            if current_case:
-                cases.append(current_case)
-            current_case = {"title": line.split(":", 1)[-1].strip() if ":" in line else line}
-
-        elif ":" in line and current_case:
-            key, value = line.split(":", 1)
-            key = key.strip().lower().replace(" ", "_")
-            current_case[key] = value.strip()
-
-    if current_case:
-        cases.append(current_case)
-
-    return cases
-
-
-async def get_case_details(investigation_id: str) -> dict[str, Any] | None:
-    """Get details of a specific case.
-
-    Args:
-        investigation_id: TheHive case ID.
-
-    Returns:
-        Case details or None.
-    """
-    client = get_thehive_client()
-
-    try:
-        result = await client.call_tool(
-            "get_thehive_case_by_id",
-            {"investigation_id": investigation_id}
-        )
-
-        if result:
-            # Try to parse
-            try:
-                if result.strip().startswith("{"):
-                    return json.loads(result)
-            except json.JSONDecodeError:
-                pass
-
-            # Return as text
-            return {"raw": result}
-
-        return None
-
-    except Exception as e:
-        logger.error("failed_to_get_case", investigation_id=investigation_id, error=str(e))
-        return None

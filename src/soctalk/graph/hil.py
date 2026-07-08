@@ -5,24 +5,17 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import datetime
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any
 
 import structlog
-from langgraph.config import get_config as get_langgraph_config
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
 from soctalk.models.enums import HumanDecision
 from soctalk.models.investigation import InvestigationRunState
 from soctalk.models.verdict import Verdict
-from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
-
-if TYPE_CHECKING:
-    from soctalk.hil.service import HILService
 
 logger = structlog.get_logger()
-
-_HUMAN_REVIEW_REQUESTED_FLAG = "_human_review_requested_emitted"
 
 
 async def human_review_node(
@@ -33,10 +26,9 @@ async def human_review_node(
     Presents the investigation summary and verdict to a human analyst
     for approval before creating an incident.
 
-    Supports multiple backends:
-    - Slack: Uses configured HIL service
+    Supports two backends:
     - Dashboard: Uses LangGraph interrupt + UI decision
-    - CLI: Local interactive prompt
+    - CLI: Local interactive prompt (falls back to dashboard when not a TTY)
 
     Args:
         state: Current graph state.
@@ -44,11 +36,6 @@ async def human_review_node(
     Returns:
         Updated state with human decision.
     """
-    try:
-        config = get_langgraph_config()
-    except RuntimeError:
-        config = None
-
     logger.info("human_review_started")
 
     state["awaiting_human_approval"] = True
@@ -57,49 +44,14 @@ async def human_review_node(
     investigation_data = state.get("investigation", {})
     verdict_data = state.get("verdict", {})
 
-    emitter = get_emitter_from_config(config)
-    investigation_id = get_investigation_id_from_state(state)
-    if emitter and investigation_id and not state.get(_HUMAN_REVIEW_REQUESTED_FLAG):
-        try:
-            verdict_decision = verdict_data.get("decision", "unknown") if verdict_data else "unknown"
-            # Handle enum or string value
-            if hasattr(verdict_decision, "value"):
-                verdict_decision = verdict_decision.value
-            verdict_confidence = verdict_data.get("confidence", 0.0) if verdict_data else 0.0
-            await emitter.emit_human_review_requested(
-                investigation_id=investigation_id,
-                reason="Verdict requires human approval before escalation",
-                verdict_decision=str(verdict_decision),
-                verdict_confidence=float(verdict_confidence),
-            )
-            state[_HUMAN_REVIEW_REQUESTED_FLAG] = True
-        except Exception as emit_error:
-            logger.warning("event_emission_failed", error=str(emit_error))
-
     investigation = InvestigationRunState(**investigation_data) if isinstance(investigation_data, dict) else investigation_data
     verdict = Verdict(**verdict_data) if verdict_data and isinstance(verdict_data, dict) else None
 
-    hil_service: Optional[HILService] = None
-    hil_backend = "cli"
-    if config:
-        configurable = config.get("configurable") or {}
-        hil_service = configurable.get("hil_service")
-        hil_backend = configurable.get("hil_backend") or hil_backend
-
     try:
-        if hil_service and hil_service.is_connected:
-            # Use configured HIL backend (Slack, Discord, etc.)
-            decision, feedback = await _present_via_hil_service(
-                hil_service, investigation, verdict, state
-            )
-            emit_decision_event = True
-            reviewer = None
-        else:
-            decision, feedback, reviewer, emit_decision_event = await _handle_noninteractive_review(
-                hil_backend=hil_backend,
-                investigation=investigation,
-                verdict=verdict,
-            )
+        decision, feedback = await _handle_noninteractive_review(
+            investigation=investigation,
+            verdict=verdict,
+        )
 
         state["human_decision"] = decision.value
         state["human_feedback"] = feedback
@@ -110,18 +62,6 @@ async def human_review_node(
             decision=decision.value,
             has_feedback=bool(feedback),
         )
-
-        # Emit human decision received event
-        if emit_decision_event and emitter and investigation_id:
-            try:
-                await emitter.emit_human_decision_received(
-                    investigation_id=investigation_id,
-                    decision=decision.value,
-                    feedback=feedback,
-                    reviewer=reviewer,
-                )
-            except Exception as emit_error:
-                logger.warning("event_emission_failed", error=str(emit_error))
 
     except GraphInterrupt:
         raise
@@ -138,18 +78,11 @@ async def human_review_node(
 
 async def _handle_noninteractive_review(
     *,
-    hil_backend: str,
     investigation: InvestigationRunState,
     verdict: Verdict | None,
-) -> tuple[HumanDecision, str | None, str | None, bool]:
-    if hil_backend == "cli":
-        if sys.stdin and sys.stdin.isatty():
-            decision, feedback = await _prompt_cli_decision(investigation, verdict)
-            return decision, feedback, None, True
-        hil_backend = "dashboard"
-
-    if hil_backend not in ("dashboard", "ui"):
-        logger.warning("unknown_hil_backend", hil_backend=hil_backend)
+) -> tuple[HumanDecision, str | None]:
+    if sys.stdin and sys.stdin.isatty():
+        return await _prompt_cli_decision(investigation, verdict)
 
     try:
         resume_value = interrupt(
@@ -164,16 +97,12 @@ async def _handle_noninteractive_review(
         raise
     except Exception as e:
         logger.error("hil_interrupt_failed", error=str(e))
-        return HumanDecision.MORE_INFO, "HIL interrupt failed - manual follow-up required", None, True
+        return HumanDecision.MORE_INFO, "HIL interrupt failed - manual follow-up required"
 
     payload = resume_value if isinstance(resume_value, dict) else {"decision": resume_value}
-    decision_str = payload.get("decision")
-    decision = _coerce_human_decision(decision_str)
+    decision = _coerce_human_decision(payload.get("decision"))
     feedback = payload.get("feedback")
-    reviewer = payload.get("reviewer")
-    source = payload.get("source")
-    emit_event = source not in ("dashboard", "ui")
-    return decision, feedback, reviewer, emit_event
+    return decision, feedback
 
 
 def _coerce_human_decision(value: Any) -> HumanDecision:
@@ -213,55 +142,3 @@ async def _prompt_cli_decision(
     if choice in ("r", "reject"):
         return HumanDecision.REJECT, None
     return HumanDecision.MORE_INFO, None
-
-
-async def _present_via_hil_service(
-    hil_service: "HILService",
-    investigation: InvestigationRunState,
-    verdict: Optional[Verdict],
-    state: dict[str, Any],
-) -> tuple[HumanDecision, Optional[str]]:
-    """Present investigation via HIL service (Slack, Discord, etc.).
-
-    Args:
-        hil_service: The HIL service to use.
-        investigation: InvestigationRunState to review.
-        verdict: Verdict from reasoning LLM.
-        state: Current LangGraph state for conversational HIL.
-
-    Returns:
-        Tuple of (decision, optional feedback).
-    """
-    from soctalk.hil.base import HILTimeoutError, HILConnectionError
-
-    logger.info(
-        "hil_presenting_via_service",
-        backend=hil_service.backend_name,
-        investigation_id=investigation.id,
-    )
-
-    try:
-        response = await hil_service.request_approval(
-            investigation=investigation,
-            verdict=verdict,
-            state=state,
-        )
-
-        logger.info(
-            "hil_response_received",
-            decision=response.decision.value,
-            reviewer=response.reviewer,
-            response_time=response.response_time_seconds,
-        )
-
-        return response.decision, response.feedback
-
-    except HILTimeoutError:
-        logger.warning("hil_timeout", investigation_id=investigation.id)
-        # On timeout, request more info rather than auto-approving
-        return HumanDecision.MORE_INFO, "HIL review timed out - please review manually"
-
-    except HILConnectionError as e:
-        logger.error("hil_connection_error", error=str(e))
-        # On connection error, fall back to more info
-        return HumanDecision.MORE_INFO, f"HIL connection error: {e}"

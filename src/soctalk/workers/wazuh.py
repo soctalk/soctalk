@@ -10,7 +10,6 @@ import structlog
 from soctalk.mcp.bindings import get_wazuh_client
 from soctalk.models.enums import Phase, Severity
 from soctalk.models.investigation import Finding
-from soctalk.models.state import SecOpsState
 
 logger = structlog.get_logger()
 

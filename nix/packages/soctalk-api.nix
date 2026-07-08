@@ -78,7 +78,7 @@ in pkgs.stdenv.mkDerivation rec {
     # Create wrapper script for the API
     makeWrapper ${pythonEnv}/bin/uvicorn $out/bin/soctalk-api \
       --set PYTHONPATH "$out/lib/python${python.pythonVersion}/site-packages:${pythonEnv}/${python.sitePackages}" \
-      --add-flags "soctalk.api.app:app" \
+      --add-flags "soctalk.core.api.app_v1:app" \
       --add-flags "--host 0.0.0.0" \
       --add-flags "--port 8000"
 

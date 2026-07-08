@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 from urllib.parse import urlsplit
 
 import structlog
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.config import MCPServerConfig
-from soctalk.persistence.models import UserSettings
 
 logger = structlog.get_logger()
 
@@ -56,49 +52,10 @@ class IntegrationSettings:
     slack_notify_on_verdict: bool = True
 
 
-@dataclass(frozen=True)
-class IntegrationSecrets:
-    """Secret integration settings (env-only)."""
-
-    wazuh_username: Optional[str] = None
-    wazuh_password: Optional[str] = None
-    cortex_api_key: Optional[str] = None
-    thehive_api_key: Optional[str] = None
-    misp_api_key: Optional[str] = None
-    slack_webhook_url: Optional[str] = None
-
-
-@dataclass
-class LLMSettings:
-    """Non-secret LLM settings (DB-backed, env-seeded)."""
-
-    llm_provider: Literal["anthropic", "openai"] = "anthropic"
-    llm_fast_model: str = "claude-sonnet-4-6"
-    llm_reasoning_model: str = "claude-sonnet-4-6"
-    llm_temperature: float = 0.0
-    llm_max_tokens: int = 4096
-    llm_anthropic_base_url: Optional[str] = None
-    llm_openai_base_url: Optional[str] = None
-    llm_openai_organization: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class LLMSecrets:
-    """Secret LLM settings (env-only)."""
-
-    anthropic_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
-
-
 def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def is_settings_readonly() -> bool:
-    """Whether Settings UI edits are disabled for this environment."""
-    return _parse_bool(os.getenv("SETTINGS_READONLY"), False)
 
 
 def load_integration_settings_from_env() -> IntegrationSettings:
@@ -135,205 +92,6 @@ def load_integration_settings_from_env() -> IntegrationSettings:
         slack_channel=os.getenv("SLACK_CHANNEL"),
         slack_notify_on_escalation=_parse_bool(os.getenv("SLACK_NOTIFY_ON_ESCALATION"), True),
         slack_notify_on_verdict=_parse_bool(os.getenv("SLACK_NOTIFY_ON_VERDICT"), True),
-    )
-
-
-def load_integration_secrets_from_env() -> IntegrationSecrets:
-    """Load secret integration settings from environment variables."""
-    return IntegrationSecrets(
-        wazuh_username=os.getenv("WAZUH_API_USER") or os.getenv("WAZUH_API_USERNAME"),
-        wazuh_password=os.getenv("WAZUH_API_PASSWORD"),
-        cortex_api_key=os.getenv("CORTEX_API_KEY"),
-        thehive_api_key=os.getenv("THEHIVE_API_KEY") or os.getenv("THEHIVE_API_TOKEN"),
-        misp_api_key=os.getenv("MISP_API_KEY"),
-        slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL"),
-    )
-
-
-def load_llm_settings_from_env() -> LLMSettings:
-    """Load non-secret LLM settings from environment variables."""
-    provider = (os.getenv("SOCTALK_LLM_PROVIDER") or "").strip().lower()
-    anthropic_key_set = bool((os.getenv("ANTHROPIC_API_KEY") or "").strip())
-    openai_key_set = bool((os.getenv("OPENAI_API_KEY") or "").strip())
-
-    if provider not in {"anthropic", "openai"}:
-        provider = "openai" if openai_key_set and not anthropic_key_set else "anthropic"
-
-    openai_base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-    openai_base_url = openai_base_url.strip() if openai_base_url else None
-
-    return LLMSettings(
-        llm_provider=provider,  # type: ignore[arg-type]
-        llm_fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
-        llm_reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
-        llm_temperature=float(os.getenv("SOCTALK_LLM_TEMPERATURE", "0.0")),
-        llm_max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),
-        llm_anthropic_base_url=(os.getenv("ANTHROPIC_BASE_URL") or "").strip() or None,
-        llm_openai_base_url=openai_base_url or None,
-        llm_openai_organization=(os.getenv("OPENAI_ORGANIZATION") or "").strip() or None,
-    )
-
-
-def load_llm_secrets_from_env() -> LLMSecrets:
-    """Load secret LLM settings from environment variables."""
-    anthropic_api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
-    openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip() or None
-    return LLMSecrets(anthropic_api_key=anthropic_api_key, openai_api_key=openai_api_key)
-
-
-async def seed_settings_from_env(
-    session: AsyncSession,
-    *,
-    overwrite: bool,
-) -> UserSettings:
-    """Seed the settings table from environment variables.
-
-    - If no settings row exists, creates one from env values.
-    - If ``overwrite`` is True, updates existing settings with env values.
-    """
-    env_settings = load_integration_settings_from_env()
-    env_llm_settings = load_llm_settings_from_env()
-
-    result = await session.execute(select(UserSettings).where(UserSettings.id == "default"))
-    settings = result.scalar_one_or_none()
-    created = False
-
-    if settings is None:
-        settings = UserSettings(id="default")
-        session.add(settings)
-        overwrite = True
-        created = True
-
-    if overwrite:
-        changed = created
-        updates = {
-            "wazuh_enabled": env_settings.wazuh_enabled,
-            "wazuh_url": env_settings.wazuh_url,
-            "wazuh_verify_ssl": env_settings.wazuh_verify_ssl,
-            "cortex_enabled": env_settings.cortex_enabled,
-            "cortex_url": env_settings.cortex_url,
-            "cortex_verify_ssl": env_settings.cortex_verify_ssl,
-            "thehive_enabled": env_settings.thehive_enabled,
-            "thehive_url": env_settings.thehive_url,
-            "thehive_organisation": env_settings.thehive_organisation,
-            "thehive_verify_ssl": env_settings.thehive_verify_ssl,
-            "misp_enabled": env_settings.misp_enabled,
-            "misp_url": env_settings.misp_url,
-            "misp_verify_ssl": env_settings.misp_verify_ssl,
-            "slack_enabled": env_settings.slack_enabled,
-            "slack_channel": env_settings.slack_channel,
-            "slack_notify_on_escalation": env_settings.slack_notify_on_escalation,
-            "slack_notify_on_verdict": env_settings.slack_notify_on_verdict,
-            # LLM
-            "llm_provider": env_llm_settings.llm_provider,
-            "llm_fast_model": env_llm_settings.llm_fast_model,
-            "llm_reasoning_model": env_llm_settings.llm_reasoning_model,
-            "llm_temperature": env_llm_settings.llm_temperature,
-            "llm_max_tokens": env_llm_settings.llm_max_tokens,
-            "llm_anthropic_base_url": env_llm_settings.llm_anthropic_base_url,
-            "llm_openai_base_url": env_llm_settings.llm_openai_base_url,
-            "llm_openai_organization": env_llm_settings.llm_openai_organization,
-        }
-
-        for field, value in updates.items():
-            if getattr(settings, field) != value:
-                setattr(settings, field, value)
-                changed = True
-
-        if changed:
-            settings.updated_at = datetime.utcnow()
-            session.add(settings)
-            await session.commit()
-            await session.refresh(settings)
-
-    return settings
-
-
-async def fetch_integration_settings(session: AsyncSession) -> IntegrationSettings:
-    """Fetch integration settings from the database.
-
-    Args:
-        session: Async database session.
-
-    Returns:
-        IntegrationSettings with values from database or defaults.
-    """
-    query = select(UserSettings).where(UserSettings.id == "default")
-    result = await session.execute(query)
-    db_settings = result.scalar_one_or_none()
-
-    if db_settings is None:
-        logger.info("no_settings_in_db_using_defaults")
-        return IntegrationSettings()
-
-    logger.info(
-        "loaded_integration_settings",
-        wazuh_enabled=db_settings.wazuh_enabled,
-        cortex_enabled=db_settings.cortex_enabled,
-        thehive_enabled=db_settings.thehive_enabled,
-        misp_enabled=db_settings.misp_enabled,
-        slack_enabled=db_settings.slack_enabled,
-    )
-
-    return IntegrationSettings(
-        # Wazuh
-        wazuh_enabled=db_settings.wazuh_enabled,
-        wazuh_url=db_settings.wazuh_url,
-        wazuh_verify_ssl=db_settings.wazuh_verify_ssl,
-        # Cortex
-        cortex_enabled=db_settings.cortex_enabled,
-        cortex_url=db_settings.cortex_url,
-        cortex_verify_ssl=db_settings.cortex_verify_ssl,
-        # TheHive
-        thehive_enabled=db_settings.thehive_enabled,
-        thehive_url=db_settings.thehive_url,
-        thehive_organisation=db_settings.thehive_organisation,
-        thehive_verify_ssl=db_settings.thehive_verify_ssl,
-        # MISP
-        misp_enabled=db_settings.misp_enabled,
-        misp_url=db_settings.misp_url,
-        misp_verify_ssl=db_settings.misp_verify_ssl,
-        # Slack
-        slack_enabled=db_settings.slack_enabled,
-        slack_channel=db_settings.slack_channel,
-        slack_notify_on_escalation=db_settings.slack_notify_on_escalation,
-        slack_notify_on_verdict=db_settings.slack_notify_on_verdict,
-    )
-
-
-async def fetch_llm_settings(session: AsyncSession) -> LLMSettings:
-    """Fetch LLM settings from the database.
-
-    Args:
-        session: Async database session.
-
-    Returns:
-        LLMSettings with values from database or defaults.
-    """
-    query = select(UserSettings).where(UserSettings.id == "default")
-    result = await session.execute(query)
-    db_settings = result.scalar_one_or_none()
-
-    if db_settings is None:
-        logger.info("no_llm_settings_in_db_using_defaults")
-        return LLMSettings()
-
-    logger.info(
-        "loaded_llm_settings",
-        provider=db_settings.llm_provider,
-        fast_model=db_settings.llm_fast_model,
-        reasoning_model=db_settings.llm_reasoning_model,
-    )
-
-    return LLMSettings(
-        llm_provider=db_settings.llm_provider if db_settings.llm_provider in ("anthropic", "openai") else "anthropic",
-        llm_fast_model=db_settings.llm_fast_model,
-        llm_reasoning_model=db_settings.llm_reasoning_model,
-        llm_temperature=db_settings.llm_temperature,
-        llm_max_tokens=db_settings.llm_max_tokens,
-        llm_anthropic_base_url=db_settings.llm_anthropic_base_url,
-        llm_openai_base_url=db_settings.llm_openai_base_url,
-        llm_openai_organization=db_settings.llm_openai_organization,
     )
 
 

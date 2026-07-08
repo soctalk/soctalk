@@ -82,8 +82,8 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-misp" && \
 COPY pyproject.toml README.md ./
 COPY src/soctalk ./src/soctalk
 
-# Install Python dependencies (with slack HIL backend)
-RUN pip install --no-cache-dir .[slack]
+# Install Python dependencies
+RUN pip install --no-cache-dir .
 
 # Set MCP server paths
 ENV WAZUH_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-wazuh
@@ -91,5 +91,6 @@ ENV CORTEX_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-cortex
 ENV THEHIVE_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-thehive
 ENV MISP_MCP_SERVER_PATH=/opt/mcp-servers/mcp-server-misp
 
-# Run the orchestrator
-CMD ["python", "-m", "soctalk.main"]
+# Run the per-tenant runs worker (L2). The tenant chart sets the same
+# entrypoint explicitly; this default keeps the image runnable standalone.
+CMD ["python", "-m", "soctalk.runs_worker.main"]

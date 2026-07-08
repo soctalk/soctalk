@@ -11,10 +11,6 @@
     soctalk-frontend = packages.soctalk-frontend;
   };
   
-  docker-orchestrator = import ./orchestrator.nix { 
-    inherit pkgs; 
-    soctalk-orchestrator = packages.soctalk-orchestrator;
-  };
   
   docker-mock-endpoint = import ./mock-endpoint.nix { 
     inherit pkgs; 
