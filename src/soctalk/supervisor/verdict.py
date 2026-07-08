@@ -8,7 +8,6 @@ from typing import Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
@@ -21,7 +20,6 @@ from soctalk.models.enums import (
     Urgency,
 )
 from soctalk.models.verdict import Verdict
-from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
 
 logger = structlog.get_logger()
 
@@ -142,11 +140,6 @@ async def verdict_node(
     Returns:
         Updated state with verdict.
     """
-    try:
-        config = get_langgraph_config()
-    except RuntimeError:
-        config = None
-
     logger.info("verdict_node_started")
 
     app_config = get_config()
@@ -175,21 +168,6 @@ async def verdict_node(
             confidence=verdict.confidence,
             impact=verdict.potential_impact.value,
         )
-
-        # Emit verdict event
-        emitter = get_emitter_from_config(config)
-        investigation_id = get_investigation_id_from_state(state)
-        if emitter and investigation_id:
-            try:
-                await emitter.emit_verdict_rendered(
-                    investigation_id=investigation_id,
-                    decision=verdict.decision.value,
-                    confidence=verdict.confidence,
-                    reasoning=verdict.recommendation,
-                    threat_actor=None,  # Could extract from verdict if available
-                )
-            except Exception as emit_error:
-                logger.warning("event_emission_failed", error=str(emit_error))
 
     except Exception as e:
         # Classify so the worker can route LLM-provider failures

@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime
 from typing import Any
 
 import structlog
-from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.mcp.bindings import get_cortex_client
 from soctalk.models.enums import ObservableType, Verdict, Phase
 from soctalk.models.observables import Observable, EnrichmentResult
-from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
 
 logger = structlog.get_logger()
 
@@ -64,20 +61,11 @@ async def cortex_worker_node(
     Returns:
         Updated state dictionary.
     """
-    try:
-        config = get_langgraph_config()
-    except RuntimeError:
-        config = None
-
     logger.info("cortex_worker_started")
 
     client = get_cortex_client()
     investigation = state.get("investigation", {})
     pending_observables = state.get("pending_observables", [])
-
-    # Get emitter for event emission
-    emitter = get_emitter_from_config(config)
-    investigation_id = get_investigation_id_from_state(state)
 
     # Convert dict observables back to Observable objects if needed
     observables_to_process = []
@@ -99,73 +87,25 @@ async def cortex_worker_node(
         if observable.value in processed_values:
             continue
 
-        # Determine analyzer for this observable
-        analyzers = ANALYZER_MAP.get(observable.type, [])
-        analyzer_name = analyzers[0][1] if analyzers else "unknown"
-
         logger.info(
             "enriching_observable",
             type=observable.type.value,
             value=observable.value[:50],
         )
 
-        # Emit enrichment requested event
-        if emitter and investigation_id:
-            try:
-                await emitter.emit_enrichment_requested(
-                    investigation_id=investigation_id,
-                    observable_type=observable.type.value,
-                    observable_value=observable.value[:200],
-                    analyzer=analyzer_name,
-                    idempotency_key=f"enrich-{investigation_id}-{observable.type.value}-{observable.value[:50]}",
-                )
-            except Exception as emit_error:
-                logger.warning("event_emission_failed", error=str(emit_error))
-
-        start_time = time.time()
         try:
             enrichment = await _enrich_observable(client, observable)
-            elapsed_ms = int((time.time() - start_time) * 1000)
 
             if enrichment:
                 enrichments.append(enrichment.model_dump())
                 processed_values.add(observable.value)
 
-                # Emit enrichment completed event
-                if emitter and investigation_id:
-                    try:
-                        await emitter.emit_enrichment_completed(
-                            investigation_id=investigation_id,
-                            observable_type=observable.type.value,
-                            observable_value=observable.value[:200],
-                            analyzer=enrichment.analyzer,
-                            verdict=enrichment.verdict.value,
-                            score=enrichment.confidence,
-                            response_time_ms=elapsed_ms,
-                        )
-                    except Exception as emit_error:
-                        logger.warning("event_emission_failed", error=str(emit_error))
-
         except Exception as e:
-            elapsed_ms = int((time.time() - start_time) * 1000)
             logger.warning(
                 "enrichment_failed",
                 observable=observable.value[:50],
                 error=str(e),
             )
-
-            # Emit enrichment failed event
-            if emitter and investigation_id:
-                try:
-                    await emitter.emit_enrichment_failed(
-                        investigation_id=investigation_id,
-                        observable_type=observable.type.value,
-                        observable_value=observable.value[:200],
-                        analyzer=analyzer_name,
-                        error=str(e)[:500],
-                    )
-                except Exception as emit_error:
-                    logger.warning("event_emission_failed", error=str(emit_error))
 
             # Add a failed enrichment result
             failed_enrichment = EnrichmentResult(

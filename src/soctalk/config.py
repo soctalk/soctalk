@@ -34,38 +34,6 @@ class LLMConfig(BaseModel):
     max_tokens: int = 4096
 
 
-class ThresholdsConfig(BaseModel):
-    """Configuration for decision thresholds."""
-
-    auto_close_confidence: float = 0.25
-    escalation_confidence: float = 0.50
-    critical_severity_level: int = 12  # Wazuh severity 12+ is critical
-
-
-class HILConfig(BaseModel):
-    """Configuration for Human-in-the-Loop backend."""
-
-    backend: str = "cli"  # 'dashboard', 'cli', 'slack', 'discord'
-    enabled: bool = True
-    timeout_seconds: int = 300  # 5 minutes default
-
-    # Slack-specific settings
-    slack_bot_token: Optional[str] = None
-    slack_app_token: Optional[str] = None
-    slack_channel: Optional[str] = None
-
-    # Discord-specific settings (for future use)
-    discord_bot_token: Optional[str] = None
-    discord_channel_id: Optional[int] = None
-
-
-class DatabaseConfig(BaseModel):
-    """Configuration for database (event sourcing persistence)."""
-
-    enabled: bool = False
-    url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/soctalk"
-
-
 class Config(BaseModel):
     """Main configuration for SocTalk agent."""
 
@@ -77,15 +45,6 @@ class Config(BaseModel):
 
     # LLM settings
     llm: LLMConfig
-
-    # Decision thresholds
-    thresholds: ThresholdsConfig
-
-    # Human-in-the-Loop settings
-    hil: HILConfig
-
-    # Database settings (event sourcing)
-    database: Optional[DatabaseConfig] = None
 
     # Logging
     log_level: str = "INFO"
@@ -248,47 +207,12 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),
     )
 
-    # Thresholds config
-    thresholds_config = ThresholdsConfig(
-        auto_close_confidence=float(os.getenv("SOCTALK_AUTO_CLOSE_THRESHOLD", "0.25")),
-        escalation_confidence=float(os.getenv("SOCTALK_ESCALATION_THRESHOLD", "0.50")),
-        critical_severity_level=int(os.getenv("SOCTALK_CRITICAL_SEVERITY", "12")),
-    )
-
-    # HIL config
-    discord_channel_str = os.getenv("SOCTALK_HIL_DISCORD_CHANNEL_ID")
-    hil_config = HILConfig(
-        backend=os.getenv("SOCTALK_HIL_BACKEND", "cli"),
-        enabled=os.getenv("SOCTALK_HIL_ENABLED", "true").lower() == "true",
-        timeout_seconds=int(os.getenv("SOCTALK_HIL_TIMEOUT", "300")),
-        slack_bot_token=os.getenv("SLACK_BOT_TOKEN"),
-        slack_app_token=os.getenv("SLACK_APP_TOKEN"),
-        slack_channel=os.getenv("SOCTALK_HIL_SLACK_CHANNEL"),
-        discord_bot_token=os.getenv("DISCORD_BOT_TOKEN"),
-        discord_channel_id=int(discord_channel_str) if discord_channel_str else None,
-    )
-
-    # Database config (optional - event sourcing persistence)
-    db_enabled = os.getenv("SOCTALK_DB_ENABLED", "false").lower() == "true"
-    database_config = None
-    if db_enabled:
-        database_config = DatabaseConfig(
-            enabled=True,
-            url=os.getenv(
-                "SOCTALK_DATABASE_URL",
-                "postgresql+asyncpg://postgres:postgres@localhost:5432/soctalk",
-            ),
-        )
-
     return Config(
         wazuh_mcp_server=wazuh_config,
         cortex_mcp_server=cortex_config,
         thehive_mcp_server=thehive_config,
         misp_mcp_server=misp_config,
         llm=llm_config,
-        thresholds=thresholds_config,
-        hil=hil_config,
-        database=database_config,
         log_level=os.getenv("SOCTALK_LOG_LEVEL", "INFO"),
         log_format=os.getenv("SOCTALK_LOG_FORMAT", "json"),
     )

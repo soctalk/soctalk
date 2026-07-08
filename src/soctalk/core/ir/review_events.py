@@ -2,7 +2,7 @@
 
 Background
 ----------
-The legacy projector in ``soctalk.persistence.projector`` is coupled to
+The legacy projector (removed with the event-sourcing runtime) was coupled to
 ``InvestigationReadModel`` (SQLModel) which declares columns the V1
 ``investigations`` table does not have (``phase``, ``max_severity``,
 ``alert_count``, ``malicious_count``, ``verdict_decision``, ...). The

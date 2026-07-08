@@ -48,10 +48,6 @@
             type = "app";
             program = "${packages.soctalk-api}/bin/soctalk-api";
           };
-          orchestrator = {
-            type = "app";
-            program = "${packages.soctalk-orchestrator}/bin/soctalk";
-          };
         };
       }
     );

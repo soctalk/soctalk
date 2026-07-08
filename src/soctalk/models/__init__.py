@@ -17,7 +17,7 @@ from soctalk.models.observables import Observable, EnrichmentResult
 from soctalk.models.alerts import Alert, AlertSource
 from soctalk.models.investigation import InvestigationRunState, Finding
 from soctalk.models.verdict import Verdict
-from soctalk.models.state import SecOpsState, SupervisorDecision
+from soctalk.models.state import SupervisorDecision
 
 __all__ = [
     # Enums
@@ -40,6 +40,5 @@ __all__ = [
     "InvestigationRunState",
     "Finding",
     "Verdict",
-    "SecOpsState",
     "SupervisorDecision",
 ]

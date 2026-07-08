@@ -60,12 +60,11 @@ class TestNixImages:
     EXPECTED_NIX_IMAGES = {
         "api": "soctalk-api:latest",
         "frontend": "soctalk-frontend:latest",
-        "orchestrator": "soctalk-orchestrator:latest",
         "mock-endpoint": "soctalk-mock-endpoint:latest",
     }
 
     def test_uses_prebuilt_nix_images(self, nix_compose: dict) -> None:
-        """Uses pre-built Nix images: soctalk-api:latest, soctalk-frontend:latest, soctalk-orchestrator:latest, soctalk-mock-endpoint:latest."""
+        """Uses pre-built Nix images: soctalk-api:latest, soctalk-frontend:latest, soctalk-mock-endpoint:latest."""
         services = nix_compose.get("services", {})
 
         for service_name, expected_image in self.EXPECTED_NIX_IMAGES.items():
@@ -85,7 +84,7 @@ class TestNoBuildsForNixServices:
         services = nix_compose.get("services", {})
 
         # Services that should use Nix images (not build)
-        nix_services = ["api", "frontend", "orchestrator", "mock-endpoint"]
+        nix_services = ["api", "frontend", "mock-endpoint"]
 
         for service_name in nix_services:
             if service_name in services:

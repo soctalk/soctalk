@@ -10,14 +10,12 @@ from uuid import UUID
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.config import get_config as get_langgraph_config
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
 from soctalk.llm import create_chat_model
 from soctalk.models.enums import Phase
-from soctalk.models.state import SecOpsState, SupervisorDecision
-from soctalk.persistence.emitter import get_emitter_from_config, get_investigation_id_from_state
+from soctalk.models.state import SupervisorDecision
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
 
 logger = structlog.get_logger()
@@ -42,11 +40,6 @@ async def supervisor_node(
     Returns:
         Updated state with supervisor decision.
     """
-    try:
-        config = get_langgraph_config()
-    except RuntimeError:
-        config = None
-
     logger.info("supervisor_started", iteration=state.get("iteration_count", 0))
 
     app_config = get_config()
@@ -114,21 +107,6 @@ async def supervisor_node(
             confidence=decision.tp_confidence,
             reasoning=decision.action_reasoning[:100],
         )
-
-        # Emit supervisor decision event
-        emitter = get_emitter_from_config(config)
-        investigation_id = get_investigation_id_from_state(state)
-        if emitter and investigation_id:
-            try:
-                await emitter.emit_supervisor_decision(
-                    investigation_id=investigation_id,
-                    action=decision.next_action,
-                    reasoning=decision.action_reasoning,
-                    tp_confidence=decision.tp_confidence,
-                    iteration=iteration,
-                )
-            except Exception as emit_error:
-                logger.warning("event_emission_failed", error=str(emit_error))
 
     except Exception as e:
         logger.error("supervisor_error", error=str(e))

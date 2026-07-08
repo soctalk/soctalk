@@ -142,7 +142,7 @@ start_api() {
     if [ -f ".venv/bin/activate" ]; then
         (
             source .venv/bin/activate
-            nohup uvicorn soctalk.api.app:app \
+            nohup uvicorn soctalk.core.api.app_v1:app \
                 --host "$API_HOST" \
                 --port "$API_PORT" \
                 > "$PROJECT_ROOT/logs/api.log" 2>&1 &
@@ -175,7 +175,7 @@ stop_api() {
     fi
 
     # Also kill any stray uvicorn processes
-    pkill -f "uvicorn soctalk.api" 2>/dev/null || true
+    pkill -f "uvicorn soctalk.core.api" 2>/dev/null || true
 
     log_success "Backend API stopped"
 }
