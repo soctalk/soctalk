@@ -31,7 +31,6 @@ let
     langchain-core
     langchain-anthropic
     langchain-openai
-    langgraph-checkpoint-postgres
     mcp
     
     # Additional deps that may be needed

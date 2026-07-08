@@ -52,6 +52,30 @@ class IntegrationSettings:
     slack_notify_on_verdict: bool = True
 
 
+@dataclass(frozen=True)
+class IntegrationSecrets:
+    """Secret integration settings (env-only)."""
+
+    wazuh_username: Optional[str] = None
+    wazuh_password: Optional[str] = None
+    cortex_api_key: Optional[str] = None
+    thehive_api_key: Optional[str] = None
+    misp_api_key: Optional[str] = None
+    slack_webhook_url: Optional[str] = None
+
+
+def load_integration_secrets_from_env() -> IntegrationSecrets:
+    """Load secret integration settings from environment variables."""
+    return IntegrationSecrets(
+        wazuh_username=os.getenv("WAZUH_API_USER") or os.getenv("WAZUH_API_USERNAME"),
+        wazuh_password=os.getenv("WAZUH_API_PASSWORD"),
+        cortex_api_key=os.getenv("CORTEX_API_KEY"),
+        thehive_api_key=os.getenv("THEHIVE_API_KEY") or os.getenv("THEHIVE_API_TOKEN"),
+        misp_api_key=os.getenv("MISP_API_KEY"),
+        slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL"),
+    )
+
+
 def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
