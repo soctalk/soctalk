@@ -60,7 +60,6 @@ dev = [
 ]
 
 [project.scripts]
-soctalk = "soctalk.main:main"
 soctalk-auth = "soctalk.core.cli.auth:main"
 
 [build-system]
