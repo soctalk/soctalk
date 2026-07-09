@@ -79,15 +79,10 @@ Consider:
 - Behavioral context (is this normal for this host?)
 - Correlation with other alerts
 - Evidence of actual malicious activity vs just suspicious indicators
-"""
-
-SUPERVISOR_USER_PROMPT_TEMPLATE = """## Current Investigation State
-
-{context_summary}
 
 ## Your Task
 
-Based on the current state, decide:
+On every turn you receive the current investigation state. Decide:
 1. What is your confidence (0.0-1.0) this is a TRUE POSITIVE?
 2. What should be the next action?
 3. If INVESTIGATE, what specific forensics do you need?
@@ -98,4 +93,13 @@ Provide your decision with:
 - tp_confidence: 0.0-1.0
 - confidence_reasoning: why you have this confidence level
 - specific_instructions: only if INVESTIGATE — what to look for
+"""
+
+# Ordered most-static -> most-variable so successive supervisor calls in
+# one investigation share the longest possible byte-identical prefix
+# (prompt-cache friendly: alerts stay stable across iterations while
+# enrichments/findings grow and iteration/phase churn at the tail).
+SUPERVISOR_USER_PROMPT_TEMPLATE = """## Current Investigation State
+
+{context_summary}
 """

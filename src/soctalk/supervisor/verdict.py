@@ -6,11 +6,11 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
-from soctalk.llm import ainvoke_structured, create_chat_model
+from soctalk.llm import ainvoke_structured, create_chat_model, make_system_message
 from soctalk.llm import classify_llm_error as _classify_llm_error
 from soctalk.models.enums import Phase, VerdictDecision
 from soctalk.models.verdict import Verdict, VerdictDraft
@@ -60,13 +60,11 @@ Provide your verdict with these fields:
 - additional_investigation_needed: (if needs_more_info) What specific investigation is needed
 """
 
-VERDICT_USER_PROMPT_TEMPLATE = """## Investigation Summary
-
-**Investigation ID:** {investigation_id}
-**Duration:** {duration}
-**Supervisor Iterations:** {iterations}
-
-## Alerts ({alert_count})
+# Ordered most-static -> most-variable: alert evidence first, per-run
+# metadata (ID, wall-clock duration, iteration count) at the tail so the
+# prompt shares the longest possible cacheable prefix with the supervisor
+# calls that preceded it in the same investigation.
+VERDICT_USER_PROMPT_TEMPLATE = """## Alerts ({alert_count})
 
 {alerts_detail}
 
@@ -83,6 +81,12 @@ VERDICT_USER_PROMPT_TEMPLATE = """## Investigation Summary
 **Last Action:** {supervisor_action}
 **TP Confidence:** {supervisor_confidence:.0%}
 **Reasoning:** {supervisor_reasoning}
+
+## Run Metadata
+
+**Investigation ID:** {investigation_id}
+**Duration:** {duration}
+**Supervisor Iterations:** {iterations}
 
 ---
 
@@ -291,7 +295,7 @@ async def _get_verdict(
     )
 
     messages = [
-        SystemMessage(content=VERDICT_SYSTEM_PROMPT),
+        make_system_message(VERDICT_SYSTEM_PROMPT, config.llm),
         HumanMessage(content=VERDICT_USER_PROMPT_TEMPLATE.format(**context)),
     ]
 

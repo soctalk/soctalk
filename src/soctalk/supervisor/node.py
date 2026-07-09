@@ -7,11 +7,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
-from soctalk.llm import ainvoke_structured, classify_llm_error, create_chat_model
+from soctalk.llm import ainvoke_structured, classify_llm_error, create_chat_model, make_system_message
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
@@ -137,10 +137,10 @@ def _build_context_summary(state: dict[str, Any]) -> str:
     pending = state.get("pending_observables", [])
     misp_context = investigation.get("misp_context", {})
 
+    # Cache-stability: volatile fields (iteration, phase, errors) render at
+    # the TAIL — everything before them is stable or append-only across the
+    # supervisor loop, so the prompt prefix stays byte-identical.
     lines = [
-        f"**Iteration:** {state.get('iteration_count', 0)}",
-        f"**Phase:** {state.get('current_phase', 'unknown')}",
-        "",
         f"### Alerts ({len(alerts)})",
     ]
 
@@ -268,6 +268,11 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         lines.append(f"### ⚠️ Last Error")
         lines.append(last_error[:200])
 
+    # Volatile tail (see note at top of this function).
+    lines.append("")
+    lines.append(f"**Iteration:** {state.get('iteration_count', 0)}")
+    lines.append(f"**Phase:** {state.get('current_phase', 'unknown')}")
+
     return "\n".join(lines)
 
 
@@ -291,7 +296,7 @@ async def _get_supervisor_decision(
     )
 
     messages = [
-        SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT),
+        make_system_message(SUPERVISOR_SYSTEM_PROMPT, config.llm),
         HumanMessage(content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)),
     ]
 

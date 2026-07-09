@@ -59,6 +59,30 @@ def classify_llm_error(e: BaseException) -> str:
     return "unknown"
 
 
+def make_system_message(text: str, llm_config: LLMConfig) -> Any:
+    """Build the system message, opting into provider prompt caching.
+
+    Anthropic caching is opt-in per content block: the block-form system
+    message with ``cache_control: ephemeral`` caches the tools+system
+    prefix (tool definitions precede system in Anthropic's prefix order,
+    so structured-output schemas ride along). OpenAI-compatible providers
+    cache stable prefixes automatically — plain string content there.
+    """
+    from langchain_core.messages import SystemMessage
+
+    if llm_config.provider == "anthropic":
+        return SystemMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        )
+    return SystemMessage(content=text)
+
+
 async def ainvoke_structured(
     llm: BaseChatModel,
     schema: type,
