@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -13,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
-from soctalk.llm import create_chat_model
+from soctalk.llm import ainvoke_structured, classify_llm_error, create_chat_model
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
@@ -109,26 +107,15 @@ async def supervisor_node(
         )
 
     except Exception as e:
-        logger.error("supervisor_error", error=str(e))
-        # Default to enrichment on error if there are pending observables
-        pending = state.get("pending_observables", [])
-        if pending:
-            state["supervisor_decision"] = SupervisorDecision(
-                next_action="ENRICH",
-                action_reasoning=f"Error in decision making, defaulting to enrichment: {str(e)}",
-                tp_confidence=0.5,
-                confidence_reasoning="Unable to assess due to error",
-            ).model_dump()
-        else:
-            state["supervisor_decision"] = SupervisorDecision(
-                next_action="VERDICT",
-                action_reasoning=f"Error in decision making, proceeding to verdict: {str(e)}",
-                tp_confidence=0.5,
-                confidence_reasoning="Unable to assess due to error",
-            ).model_dump()
-            state["current_phase"] = Phase.VERDICT.value
-
-        state["last_error"] = str(e)
+        # Never fabricate a triage decision from an error. Classify so the
+        # worker can route provider failures (credit lack, rate limit,
+        # timeout, schema validation) to run status ``failed`` instead of
+        # a fake enrichment loop or verdict; the graph routes straight to
+        # close_investigation without HIL.
+        category = classify_llm_error(e)
+        logger.error("supervisor_error", category=category, error=str(e))
+        state["supervisor_error"] = {"category": category}
+        state["last_error"] = f"supervisor_failed:{category}"
 
     state["last_updated"] = datetime.now().isoformat()
     return state
@@ -289,14 +276,12 @@ async def _get_supervisor_decision(
     context_summary: str,
     state: dict[str, Any] | None = None,
 ) -> SupervisorDecision:
-    """Get decision from LLM.
+    """Get a schema-enforced decision from the router LLM.
 
-    Args:
-        config: Application configuration.
-        context_summary: Context summary for the LLM.
-
-    Returns:
-        SupervisorDecision object.
+    Structured output (tool-use on Anthropic, json_schema on OpenAI)
+    replaces the old free-text-JSON parsing: an invalid ``next_action``
+    or malformed response is retried once with the validation error fed
+    back, then fails the run loudly via SchemaValidationError.
     """
     llm = create_chat_model(
         config.llm,
@@ -310,131 +295,10 @@ async def _get_supervisor_decision(
         HumanMessage(content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)),
     ]
 
-    response = await llm.ainvoke(messages)
-    if state is not None:
-        token_budget.track(state, response)
-    response_text = response.content
+    def _track(raw: Any) -> None:
+        if state is not None:
+            token_budget.track(state, raw)
 
-    # Parse JSON response
-    decision_data = _parse_decision_response(response_text)
-
-    return SupervisorDecision(
-        next_action=decision_data.get("next_action", "ENRICH"),
-        action_reasoning=decision_data.get("action_reasoning", "No reasoning provided"),
-        tp_confidence=float(decision_data.get("tp_confidence", 0.5)),
-        confidence_reasoning=decision_data.get("confidence_reasoning", "No reasoning provided"),
-        specific_instructions=decision_data.get("specific_instructions"),
+    return await ainvoke_structured(
+        llm, SupervisorDecision, messages, on_response=_track
     )
-
-
-def _sanitize_json_string(json_str: str) -> str:
-    """Sanitize JSON string by escaping literal newlines inside string values.
-    
-    LLMs sometimes return JSON with unescaped newlines in string values,
-    which causes JSON decode errors. This function escapes them.
-    
-    Args:
-        json_str: Raw JSON string that may have unescaped newlines.
-        
-    Returns:
-        Sanitized JSON string with escaped newlines.
-    """
-    # Replace literal newlines that are inside strings with escaped versions
-    # This regex finds content between quotes and escapes newlines within
-    result = []
-    in_string = False
-    escape_next = False
-    
-    for char in json_str:
-        if escape_next:
-            result.append(char)
-            escape_next = False
-            continue
-            
-        if char == '\\':
-            result.append(char)
-            escape_next = True
-            continue
-            
-        if char == '"' and not escape_next:
-            in_string = not in_string
-            result.append(char)
-            continue
-            
-        if in_string and char == '\n':
-            result.append('\\n')
-            continue
-            
-        if in_string and char == '\r':
-            result.append('\\r')
-            continue
-            
-        if in_string and char == '\t':
-            result.append('\\t')
-            continue
-            
-        result.append(char)
-    
-    return ''.join(result)
-
-
-def _parse_decision_response(response_text: str) -> dict[str, Any]:
-    """Parse LLM response to extract decision JSON.
-
-    Args:
-        response_text: Raw LLM response.
-
-    Returns:
-        Parsed decision dictionary.
-    """
-    # Look for JSON block in markdown
-    json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-    if json_match:
-        try:
-            result = json.loads(_sanitize_json_string(json_match.group(1)))
-            logger.debug("parsed_json_from_markdown_block")
-            return result
-        except json.JSONDecodeError as e:
-            logger.warning("json_decode_failed_markdown", error=str(e), content=json_match.group(1)[:500])
-
-    # Try to find raw JSON object (improved regex for nested objects)
-    json_match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", response_text, re.DOTALL)
-    if json_match:
-        try:
-            result = json.loads(_sanitize_json_string(json_match.group(0)))
-            logger.debug("parsed_json_from_raw")
-            return result
-        except json.JSONDecodeError as e:
-            logger.warning("json_decode_failed_raw", error=str(e), content=json_match.group(0)[:500])
-
-    # Fallback: try to parse entire response as JSON
-    try:
-        result = json.loads(_sanitize_json_string(response_text))
-        logger.debug("parsed_json_from_full_response")
-        return result
-    except json.JSONDecodeError as e:
-        logger.warning("json_decode_failed_full", error=str(e))
-
-    # Last resort: extract fields manually
-    # Log the full response so we can debug why parsing failed
-    logger.error(
-        "llm_response_parse_failed",
-        response_text=response_text[:1000],
-        response_length=len(response_text),
-    )
-
-    result = {
-        "next_action": "ENRICH",
-        "action_reasoning": "Failed to parse LLM response",
-        "tp_confidence": 0.5,
-        "confidence_reasoning": "Unable to determine",
-        "specific_instructions": "",  # Add default to prevent None
-    }
-
-    # Try to extract action
-    for action in ["VERDICT", "CLOSE", "INVESTIGATE", "CONTEXTUALIZE", "ENRICH"]:
-        if action in response_text.upper():
-            result["next_action"] = action
-            break
-
-    return result

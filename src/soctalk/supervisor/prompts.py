@@ -92,14 +92,10 @@ Based on the current state, decide:
 2. What should be the next action?
 3. If INVESTIGATE, what specific forensics do you need?
 
-Respond with a JSON object:
-```json
-{{
-  "next_action": "ENRICH | CONTEXTUALIZE | INVESTIGATE | VERDICT | CLOSE",
-  "action_reasoning": "Why this action is appropriate now",
-  "tp_confidence": 0.0-1.0,
-  "confidence_reasoning": "Why you have this confidence level",
-  "specific_instructions": "Only if INVESTIGATE - what to look for"
-}}
-```
+Provide your decision with:
+- next_action: one of ENRICH, CONTEXTUALIZE, INVESTIGATE, VERDICT, CLOSE
+- action_reasoning: why this action is appropriate now
+- tp_confidence: 0.0-1.0
+- confidence_reasoning: why you have this confidence level
+- specific_instructions: only if INVESTIGATE — what to look for
 """

@@ -97,6 +97,18 @@ class InvestigationStatus(str, Enum):
     CLOSED = "closed"
 
 
+class SupervisorAction(str, Enum):
+    """Actions the supervisor router can choose. Bound into the
+    structured-output schema so invalid actions are rejected at the
+    schema layer instead of defaulting downstream."""
+
+    ENRICH = "ENRICH"
+    CONTEXTUALIZE = "CONTEXTUALIZE"
+    INVESTIGATE = "INVESTIGATE"
+    VERDICT = "VERDICT"
+    CLOSE = "CLOSE"
+
+
 class Phase(str, Enum):
     """Investigation phase."""
 

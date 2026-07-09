@@ -15,12 +15,10 @@ from soctalk.models.enums import (
 )
 
 
-class Verdict(BaseModel):
-    """Structured verdict from the reasoning LLM.
-
-    This represents the final decision gate before human review,
-    produced by an advanced reasoning model.
-    """
+class VerdictDraft(BaseModel):
+    """LLM-facing verdict schema — bound as the structured output of the
+    reasoning model. Excludes locally-stamped metadata (reasoning_model,
+    timestamp) so the model is never asked to produce it."""
 
     decision: VerdictDecision = Field(
         ..., description="The verdict decision: escalate, close, or needs_more_info"
@@ -68,6 +66,15 @@ class Verdict(BaseModel):
     additional_investigation_needed: Optional[list[str]] = Field(
         None, description="What additional investigation is needed (if decision is needs_more_info)"
     )
+
+
+class Verdict(VerdictDraft):
+    """Structured verdict from the reasoning LLM.
+
+    This represents the final decision gate before human review,
+    produced by an advanced reasoning model. Extends the LLM-facing
+    draft with locally-stamped metadata.
+    """
 
     # Metadata
     reasoning_model: str = Field(

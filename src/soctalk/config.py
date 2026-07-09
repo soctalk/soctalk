@@ -32,6 +32,9 @@ class LLMConfig(BaseModel):
     openai_organization: Optional[str] = None
     temperature: float = 0.0
     max_tokens: int = 4096
+    # Transport bounds passed to the provider SDK (single retry layer).
+    timeout_seconds: float = 120.0
+    max_retries: int = 2
 
 
 class Config(BaseModel):
@@ -205,6 +208,8 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         openai_organization=_optional_env("OPENAI_ORGANIZATION"),
         temperature=float(os.getenv("SOCTALK_LLM_TEMPERATURE", "0.0")),
         max_tokens=int(os.getenv("SOCTALK_LLM_MAX_TOKENS", "4096")),
+        timeout_seconds=float(os.getenv("SOCTALK_LLM_TIMEOUT_SECONDS", "120")),
+        max_retries=int(os.getenv("SOCTALK_LLM_MAX_RETRIES", "2")),
     )
 
     return Config(
