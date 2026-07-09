@@ -138,8 +138,14 @@ def ensure(state: dict[str, Any]) -> None:
     state.setdefault("dollars_budget", _dollar_budget_default())
 
 
-def _extract_usage(response: Any) -> tuple[int, int]:
-    """Return (input_tokens, output_tokens) from an LLM response."""
+def extract_usage(response: Any) -> tuple[int, int]:
+    """Return (input_tokens, output_tokens) from an LLM response.
+
+    Handles langchain ``usage_metadata`` (both providers normalize into
+    input_tokens/output_tokens; Anthropic folds cache read/creation tokens
+    into input_tokens) and falls back to raw ``response_metadata`` shapes.
+    Public: chat and any future call sites share this one extractor.
+    """
     um = getattr(response, "usage_metadata", None)
     if isinstance(um, dict):
         return (
@@ -185,7 +191,7 @@ def track(state: dict[str, Any], response: Any) -> int:
     ``state["dollars_used"]`` directly.
     """
     ensure(state)
-    input_tokens, output_tokens = _extract_usage(response)
+    input_tokens, output_tokens = extract_usage(response)
     delta_tokens = input_tokens + output_tokens
     model = _model_name(response)
     delta_dollars = _cost_dollars(input_tokens, output_tokens, model)

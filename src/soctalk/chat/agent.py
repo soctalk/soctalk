@@ -631,8 +631,9 @@ async def run_turn(
                 "dollars_budget": ctx.budget_dollars,
             }
             token_budget.track(state, response)
-            turn_in = max(0, int(state["tokens_used"]) - total_tokens_out - total_tokens_in)
-            total_tokens_in += turn_in  # crude but ordered-correct
+            call_in, call_out = token_budget.extract_usage(response)
+            total_tokens_in += call_in
+            total_tokens_out += call_out
             turn_dollars_this_call = float(state["dollars_used"])
             total_turn_dollars += turn_dollars_this_call
 

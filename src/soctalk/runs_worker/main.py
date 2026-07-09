@@ -443,10 +443,19 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
     halted = bool(final.get("budget_terminated"))
     verdict_err = final.get("verdict_error") or {}
     verdict_err_category = verdict_err.get("category") if isinstance(verdict_err, dict) else None
+    supervisor_err = final.get("supervisor_error") or {}
+    supervisor_err_category = (
+        supervisor_err.get("category") if isinstance(supervisor_err, dict) else None
+    )
     if last_error:
         status = "failed"
     elif halted:
         status = "halted_budget"
+    elif supervisor_err_category:
+        # Same contract as verdict_error below: a provider failure in the
+        # supervisor must not masquerade as a completed triage.
+        status = "failed"
+        last_error = f"supervisor_failed:{supervisor_err_category}"
     elif verdict_err_category:
         # LLM provider failed mid-run — credit lack, rate limit, etc.
         # Mark the run failed so the API skips pending_reviews creation;

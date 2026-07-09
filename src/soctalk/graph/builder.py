@@ -36,6 +36,17 @@ def route_from_supervisor(state: dict[str, Any]) -> Literal[
     Returns:
         Next node name.
     """
+    sup_err = state.get("supervisor_error") or {}
+    if sup_err:
+        # LLM failed in the supervisor — close without HIL; the worker
+        # reports the run ``failed`` (mirrors verdict_error handling).
+        logger.warning(
+            "routing_from_supervisor_error",
+            category=sup_err.get("category"),
+            decision="forcing_close_no_hil",
+        )
+        return "close_investigation"
+
     decision = state.get("supervisor_decision", {})
     action = decision.get("next_action", "ENRICH")
 

@@ -4,15 +4,23 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from soctalk.models.enums import SupervisorAction
 
 
 class SupervisorDecision(BaseModel):
-    """Decision output from the supervisor node."""
+    """Decision output from the supervisor node.
 
-    next_action: str = Field(
+    Bound directly as the structured-output schema for the router LLM;
+    ``use_enum_values`` keeps dumped state JSON-plain for the graph.
+    """
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    next_action: SupervisorAction = Field(
         ...,
-        description="Next action: ENRICH, INVESTIGATE, VERDICT, CLOSE",
+        description="Next action: ENRICH, CONTEXTUALIZE, INVESTIGATE, VERDICT, or CLOSE",
     )
     action_reasoning: str = Field(..., description="Reasoning for the action")
     tp_confidence: float = Field(

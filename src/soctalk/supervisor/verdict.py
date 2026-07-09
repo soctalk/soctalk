@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any
 
@@ -11,45 +10,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
-from soctalk.llm import create_chat_model
-from soctalk.models.enums import (
-    Phase,
-    VerdictDecision,
-    EvidenceStrength,
-    ImpactLevel,
-    Urgency,
-)
-from soctalk.models.verdict import Verdict
+from soctalk.llm import ainvoke_structured, create_chat_model
+from soctalk.llm import classify_llm_error as _classify_llm_error
+from soctalk.models.enums import Phase, VerdictDecision
+from soctalk.models.verdict import Verdict, VerdictDraft
 
 logger = structlog.get_logger()
-
-
-def _classify_llm_error(e: BaseException) -> str:
-    """Bucket an LLM-provider exception into a stable category string.
-
-    Categories the worker actually branches on:
-      * ``insufficient_credit`` — provider billing / quota lack
-      * ``rate_limited``       — provider 429 / TPM RPM exceeded
-      * ``provider_error``     — other 4xx/5xx from the provider
-      * ``timeout``            — local/transport timeout
-      * ``unknown``            — fallback
-
-    The category goes to logs + state["verdict_error"]; the raw error
-    string is intentionally kept out of any user-facing field.
-    """
-    msg = str(e).lower()
-    status = getattr(e, "status_code", None) or getattr(
-        getattr(e, "response", None), "status_code", None
-    )
-    if "credit balance" in msg or "insufficient_quota" in msg or "billing" in msg:
-        return "insufficient_credit"
-    if status == 429 or "rate limit" in msg or "tokens per minute" in msg:
-        return "rate_limited"
-    if status and 400 <= int(status) < 600:
-        return "provider_error"
-    if "timeout" in msg or "timed out" in msg:
-        return "timeout"
-    return "unknown"
 
 
 VERDICT_SYSTEM_PROMPT = """You are a Principal Security Analyst providing final verdict on a security investigation.
@@ -79,7 +45,7 @@ Your role is to critically evaluate all evidence and make a final recommendation
 
 ## Response Format
 
-Provide your verdict as a JSON object with these fields:
+Provide your verdict with these fields:
 - decision: "escalate" | "close" | "needs_more_info"
 - confidence: 0.0-1.0
 - threat_assessment: Overall assessment of the threat
@@ -120,7 +86,7 @@ VERDICT_USER_PROMPT_TEMPLATE = """## Investigation Summary
 
 ---
 
-Provide your final verdict as JSON.
+Provide your final verdict.
 """
 
 
@@ -329,105 +295,16 @@ async def _get_verdict(
         HumanMessage(content=VERDICT_USER_PROMPT_TEMPLATE.format(**context)),
     ]
 
-    response = await llm.ainvoke(messages)
-    if state is not None:
-        token_budget.track(state, response)
-    response_text = response.content
+    def _track(raw: Any) -> None:
+        if state is not None:
+            token_budget.track(state, raw)
 
-    # Parse verdict
-    verdict_data = _parse_verdict_response(response_text)
-
-    # Safely parse enum values with fallbacks
-    def safe_enum(enum_class, value, default):
-        try:
-            return enum_class(value)
-        except (ValueError, KeyError):
-            return default
-
-    # Normalize list fields - LLM sometimes returns strings instead of lists
-    def ensure_list(value):
-        if value is None:
-            return []
-        if isinstance(value, str):
-            return [value] if value.strip() else []
-        if isinstance(value, list):
-            return value
-        return []
-
-    additional_inv = verdict_data.get("additional_investigation_needed")
-    if additional_inv is not None:
-        additional_inv = ensure_list(additional_inv) or None
-
+    draft = await ainvoke_structured(
+        llm, VerdictDraft, messages, on_response=_track
+    )
     return Verdict(
-        decision=safe_enum(VerdictDecision, verdict_data.get("decision", "needs_more_info"), VerdictDecision.NEEDS_MORE_INFO),
-        confidence=float(verdict_data.get("confidence", 0.5)),
-        threat_assessment=verdict_data.get("threat_assessment", "No assessment provided"),
-        evidence_strength=safe_enum(EvidenceStrength, verdict_data.get("evidence_strength", "weak"), EvidenceStrength.WEAK),
-        potential_impact=safe_enum(ImpactLevel, verdict_data.get("potential_impact", "medium"), ImpactLevel.MEDIUM),
-        urgency=safe_enum(Urgency, verdict_data.get("urgency", "routine"), Urgency.ROUTINE),
-        key_evidence=ensure_list(verdict_data.get("key_evidence")),
-        gaps_in_evidence=ensure_list(verdict_data.get("gaps_in_evidence")),
-        assumptions_made=ensure_list(verdict_data.get("assumptions_made")),
-        alternative_explanations=ensure_list(verdict_data.get("alternative_explanations")),
-        recommendation=verdict_data.get("recommendation", "No recommendation provided"),
-        additional_investigation_needed=additional_inv,
+        **draft.model_dump(),
         reasoning_model=config.llm.reasoning_model,
     )
 
 
-def _parse_verdict_response(response_text: str) -> dict[str, Any]:
-    """Parse verdict response from LLM.
-
-    Args:
-        response_text: Raw LLM response.
-
-    Returns:
-        Parsed verdict dictionary.
-    """
-    import re
-
-    # Try to find JSON block
-    json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # Try to find raw JSON object (more permissive)
-    json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(0))
-        except json.JSONDecodeError:
-            pass
-
-    # Fallback: try entire response
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    # Last resort: extract what we can
-    result = {
-        "decision": "needs_more_info",
-        "confidence": 0.5,
-        "threat_assessment": "Unable to parse verdict response",
-        "evidence_strength": "weak",
-        "potential_impact": "medium",
-        "urgency": "routine",
-        "key_evidence": [],
-        "gaps_in_evidence": ["Failed to parse LLM response"],
-        "assumptions_made": [],
-        "alternative_explanations": [],
-        "recommendation": "Manual review required - verdict parsing failed",
-    }
-
-    # Try to extract decision
-    response_lower = response_text.lower()
-    if "escalate" in response_lower:
-        result["decision"] = "escalate"
-    elif "close" in response_lower and "false positive" in response_lower:
-        result["decision"] = "close"
-
-    return result
