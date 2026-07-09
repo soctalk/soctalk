@@ -54,6 +54,9 @@ class _State:
         self.last_heartbeat_ok: datetime | None = None
         self.last_heartbeat_error: str | None = None
         self.last_alert_ts: str = _initial_alert_ts()
+        # search_after tie-breaker: the ``id`` of the last event ingested at
+        # last_alert_ts. None means "start of this timestamp".
+        self.last_alert_id: str | None = None
         self.alerts_queried: int = 0
         self.alerts_forwarded: int = 0
         self.alerts_duplicate: int = 0
@@ -348,16 +351,21 @@ def _hit_to_event(hit: dict) -> dict | None:
     # IOC extraction reads the RAW text (must run before redaction).
     iocs = _extract_iocs(f"{rule_desc} {full_log}")
     entities = _extract_entities(src, agent, agent_name)
-    thash = template_hash(full_log)
 
     # Redaction (issue #17 fix 9): strip secrets from every outbound text
-    # path AFTER IOC extraction, BEFORE anything leaves the tenant.
-    description = redact_text((full_log or rule_desc).strip()[:1024])
+    # path AFTER IOC extraction, BEFORE anything leaves the tenant. Redact
+    # on the FULL text, THEN truncate — truncating first could cut a
+    # multi-line secret (e.g. a PEM block) before its END marker so the
+    # pattern never matches.
+    full_log_red = redact_text(full_log)[:4096] if full_log else ""
+    rule_desc_red = redact_text(rule_desc)[:512] if rule_desc else ""
+    description = redact_text((full_log or rule_desc).strip())[:1024] or None
     title = redact_text(
         _compose_title(rule_desc, agent_name, _extract_subject(full_log))
     )
-    rule_desc_red = redact_text(rule_desc[:512])
-    full_log_red = redact_text(full_log[:4096])
+    # Template hash over REDACTED text: masking secrets out of the hash
+    # keeps the fingerprint secret-free AND stable when only a secret varies.
+    thash = template_hash(full_log_red)
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     return {
@@ -400,13 +408,15 @@ def _min_severity() -> int:
     return max(0, min(15, v))
 
 
-async def _query_alerts(client: httpx.AsyncClient, since_ts: str, limit: int) -> list[dict]:
+async def _query_alerts(
+    client: httpx.AsyncClient, since_ts: str, since_id: str | None, limit: int
+) -> list[dict]:
     user, pw = _wazuh_indexer_creds()
-    # Overlap query (issue #17 fix 6): ``gte`` instead of ``gt`` so events
-    # sharing the high-water timestamp are never skipped. Re-reads of
-    # already-ingested events are absorbed by the control plane's
-    # (tenant, source, source_event_id) idempotency constraint, which
-    # returns them as ``duplicate`` no-ops.
+    # Keyset pagination (issue #17 fix 6): sort by (@timestamp, id) and use
+    # ``search_after`` so a page that ends mid-timestamp resumes exactly
+    # after the last event — no skipping same-timestamp events, and no
+    # livelock when more than ``limit`` alerts share one timestamp. Re-reads
+    # are still absorbed by the control-plane idempotency constraint.
     filters: list[dict] = [
         {"range": {"@timestamp": {"gte": since_ts}}},
         {"range": {"rule.level": {"gte": _min_severity()}}},
@@ -427,11 +437,15 @@ async def _query_alerts(client: httpx.AsyncClient, since_ts: str, limit: int) ->
     bool_query: dict = {"filter": filters}
     if must_not:
         bool_query["must_not"] = must_not
-    body = {
+    body: dict = {
         "size": limit,
-        "sort": [{"@timestamp": {"order": "asc"}}],
+        # id.keyword is the stable secondary sort so ``search_after`` gives a
+        # total order across equal timestamps.
+        "sort": [{"@timestamp": {"order": "asc"}}, {"id": {"order": "asc"}}],
         "query": {"bool": bool_query},
     }
+    if since_id is not None:
+        body["search_after"] = [since_ts, since_id]
     resp = await client.post(
         f"{_wazuh_indexer_url()}/wazuh-alerts-*/_search",
         auth=(user, pw),
@@ -456,16 +470,18 @@ async def _load_checkpoint(
         cp = resp.json()
         if cp.get("cursor_ts"):
             _state.last_alert_ts = cp["cursor_ts"]
+        _state.last_alert_id = cp.get("cursor_event_id")
         _state.batch_seq = int(cp.get("batch_seq") or 0)
         _state.checkpoint_loaded = True
-        logger.info("checkpoint_loaded cursor=%s batch_seq=%d",
-                    _state.last_alert_ts, _state.batch_seq)
+        logger.info("checkpoint_loaded cursor=%s id=%s batch_seq=%d",
+                    _state.last_alert_ts, _state.last_alert_id, _state.batch_seq)
     except Exception as e:  # noqa: BLE001
         logger.warning("checkpoint_load_failed: %s (starting from local cursor)", e)
 
 
 async def _save_checkpoint(
-    client: httpx.AsyncClient, api_url: str, tenant_id: str, token: str, cursor_ts: str
+    client: httpx.AsyncClient, api_url: str, tenant_id: str, token: str,
+    cursor_ts: str, cursor_event_id: str | None,
 ) -> None:
     try:
         resp = await client.put(
@@ -475,6 +491,7 @@ async def _save_checkpoint(
                 "tenant_id": tenant_id,
                 "source": "wazuh",
                 "cursor_ts": cursor_ts,
+                "cursor_event_id": cursor_event_id,
                 "batch_seq": _state.batch_seq,
                 "dropped_total": _state.alerts_dropped_rate_limit,
             },
@@ -552,47 +569,41 @@ async def _ingest_loop() -> None:
         await _load_checkpoint(api_client, api_url, tenant_id, token)
         while True:
             try:
-                hits = await _query_alerts(wazuh_client, _state.last_alert_ts, batch_size)
+                hits = await _query_alerts(
+                    wazuh_client, _state.last_alert_ts, _state.last_alert_id, batch_size
+                )
                 _state.alerts_queried += len(hits)
                 if hits:
                     events: list[dict] = []
-                    new_high = _state.last_alert_ts
                     for h in hits:
                         ev = _hit_to_event(h)
-                        if ev is None:
-                            continue
-                        if ev["ts"] and ev["ts"] > new_high:
-                            new_high = ev["ts"]
-                        events.append(ev)
-                    # Per-tenant rate limit — drop the tail past the
-                    # bucket capacity. The high-water cursor (new_high)
-                    # still advances past the dropped events so we don't
-                    # replay them next tick; the goal here is to refuse
-                    # work, not to defer it.
+                        if ev is not None:
+                            events.append(ev)
+                    # Keyset cursor: the resume point is the LAST hit's
+                    # (ts, id) regardless of whether the timestamp advanced.
+                    # This is what breaks the same-timestamp livelock — the
+                    # id tie-breaker always moves forward even when many
+                    # alerts share one timestamp.
+                    new_cursor_ts = _state.last_alert_ts
+                    new_cursor_id = _state.last_alert_id
+                    if events:
+                        last = events[-1]
+                        new_cursor_ts = last["ts"] or new_cursor_ts
+                        new_cursor_id = last["source_event_id"]
+
+                    # Per-tenant rate limit — drop the tail past the bucket
+                    # capacity. The cursor still advances past dropped events
+                    # (shedding, not deferral); drops are recorded as facts.
                     if events:
                         allowed, dropped = _rate_limiter.take(len(events))
                         if dropped > 0:
                             _state.alerts_dropped_rate_limit += dropped
                             logger.warning(
                                 "rate_limited dropped=%d total_dropped=%d batch=%d",
-                                dropped,
-                                _state.alerts_dropped_rate_limit,
-                                len(events),
+                                dropped, _state.alerts_dropped_rate_limit, len(events),
                             )
                         events = events[:allowed]
-                        # If the rate-limiter dropped the entire batch
-                        # the POST below is skipped, but the cursor
-                        # still needs to advance — otherwise next tick
-                        # re-fetches and re-drops the same hits forever
-                        # while newer alerts queue behind them.
-                        if allowed == 0 and new_high > _state.last_alert_ts:
-                            _state.last_alert_ts = new_high
-                            # Persist the advanced cursor + drop count so a
-                            # restart doesn't re-fetch and re-drop the same
-                            # flood (loss recorded, not silently replayed).
-                            await _save_checkpoint(
-                                api_client, api_url, tenant_id, token, new_high
-                            )
+
                     if events:
                         _state.batch_seq += 1
                         resp = await api_client.post(
@@ -611,17 +622,23 @@ async def _ingest_loop() -> None:
                         dup = (body.get("action_counts") or {}).get("duplicate", 0)
                         _state.alerts_duplicate += dup
                         _state.alerts_forwarded += len(events) - dup
-                        _state.last_alert_ts = new_high
                         _state.last_ingest_error = None
+
+                    # Advance + persist the keyset cursor whether we forwarded
+                    # or shed the whole batch — either way those hits are done.
+                    if (new_cursor_ts, new_cursor_id) != (
+                        _state.last_alert_ts, _state.last_alert_id
+                    ):
+                        _state.last_alert_ts = new_cursor_ts
+                        _state.last_alert_id = new_cursor_id
                         await _save_checkpoint(
-                            api_client, api_url, tenant_id, token, new_high
+                            api_client, api_url, tenant_id, token,
+                            new_cursor_ts, new_cursor_id,
                         )
                         logger.info(
-                            "ingest_ok forwarded=%d duplicate=%d total=%d highwater=%s",
-                            len(events) - dup,
-                            dup,
-                            _state.alerts_forwarded,
-                            new_high,
+                            "ingest_ok forwarded=%d duplicate=%d total=%d cursor=%s/%s",
+                            _state.alerts_forwarded, _state.alerts_duplicate,
+                            _state.alerts_forwarded, new_cursor_ts, new_cursor_id,
                         )
             except Exception as e:
                 _state.last_ingest_error = str(e)

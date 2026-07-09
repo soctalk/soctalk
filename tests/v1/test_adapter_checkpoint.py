@@ -26,8 +26,12 @@ _UPSERT = text(
       (tenant_id, source, cursor_ts, cursor_event_id, batch_seq, dropped_total, updated_at)
     VALUES (:t, :s, :cts, :ceid, COALESCE(:bseq, 0), COALESCE(:dropped, 0), now())
     ON CONFLICT (tenant_id, source) DO UPDATE SET
-        cursor_ts = EXCLUDED.cursor_ts,
-        cursor_event_id = EXCLUDED.cursor_event_id,
+        cursor_ts = GREATEST(adapter_checkpoints.cursor_ts, EXCLUDED.cursor_ts),
+        cursor_event_id = CASE
+            WHEN EXCLUDED.cursor_ts >= adapter_checkpoints.cursor_ts
+            THEN EXCLUDED.cursor_event_id
+            ELSE adapter_checkpoints.cursor_event_id
+        END,
         batch_seq = GREATEST(adapter_checkpoints.batch_seq, EXCLUDED.batch_seq),
         dropped_total = GREATEST(adapter_checkpoints.dropped_total, EXCLUDED.dropped_total),
         updated_at = now()
@@ -36,14 +40,15 @@ _UPSERT = text(
 
 
 async def _put(s: AsyncSession, tid, **kw):
+    kw.setdefault("ceid", None)
     await s.execute(_UPSERT, {"t": str(tid), "s": "wazuh", **kw})
     await s.commit()
 
 
 async def _get(s: AsyncSession, tid) -> dict:
     return dict((await s.execute(
-        text("SELECT cursor_ts, batch_seq, dropped_total FROM adapter_checkpoints "
-             "WHERE tenant_id = :t AND source = 'wazuh'"),
+        text("SELECT cursor_ts, cursor_event_id, batch_seq, dropped_total "
+             "FROM adapter_checkpoints WHERE tenant_id = :t AND source = 'wazuh'"),
         {"t": str(tid)},
     )).mappings().one())
 
@@ -54,19 +59,29 @@ async def test_checkpoint_persists_and_is_monotonic(
     tenant_a, _ = seed_two_tenants
 
     await _put(mssp_session, tenant_a.tenant_id,
-               cts="2026-07-09T10:00:00.000Z", ceid=None, bseq=5, dropped=3)
+               cts="2026-07-09T10:00:00.000Z", ceid="wz-100", bseq=5, dropped=3)
     row = await _get(mssp_session, tenant_a.tenant_id)
     assert row["cursor_ts"] == "2026-07-09T10:00:00.000Z"
+    assert row["cursor_event_id"] == "wz-100"
     assert row["batch_seq"] == 5
     assert row["dropped_total"] == 3
 
-    # A later cursor with LOWER seq/drops: cursor advances, counters hold.
+    # A LATER cursor with lower counters: cursor + id advance, counters hold.
     await _put(mssp_session, tenant_a.tenant_id,
-               cts="2026-07-09T11:00:00.000Z", ceid=None, bseq=2, dropped=1)
+               cts="2026-07-09T11:00:00.000Z", ceid="wz-200", bseq=2, dropped=1)
     row = await _get(mssp_session, tenant_a.tenant_id)
     assert row["cursor_ts"] == "2026-07-09T11:00:00.000Z"
+    assert row["cursor_event_id"] == "wz-200"
     assert row["batch_seq"] == 5, "batch_seq must not regress"
     assert row["dropped_total"] == 3, "dropped_total must not regress"
+
+    # A STALE writer with an EARLIER cursor must NOT move it backward
+    # (issue: delayed old pod regressing the durable cursor).
+    await _put(mssp_session, tenant_a.tenant_id,
+               cts="2026-07-09T09:00:00.000Z", ceid="wz-050", bseq=1, dropped=0)
+    row = await _get(mssp_session, tenant_a.tenant_id)
+    assert row["cursor_ts"] == "2026-07-09T11:00:00.000Z", "cursor must not regress"
+    assert row["cursor_event_id"] == "wz-200", "tie-breaker must not regress"
 
 
 async def test_checkpoint_tenant_isolated(

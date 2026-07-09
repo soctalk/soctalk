@@ -68,6 +68,22 @@ def test_redaction_none_and_empty():
     assert redact_text("") == ""
 
 
+@pytest.mark.parametrize(
+    "text,secret",
+    [
+        # Bypass cases the adversarial review found (commit 414eb8d).
+        ('{"password":"hunter2"}', "hunter2"),
+        ("'api_key': 'AKIAZZ1234'", "AKIAZZ1234"),
+        ("client_secret=abc123def456", "abc123def456"),
+        ("db-password=s3cr3t", "s3cr3t"),
+        ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA=="),
+        ('config { "client_secret" : "topsecret" }', "topsecret"),
+    ],
+)
+def test_redaction_covers_json_and_compound_keys(text, secret):
+    assert secret not in redact_text(text)
+
+
 # --------------------------------------------------------------------- template
 
 
@@ -100,6 +116,44 @@ def test_event_v2_fields_optional():
     assert ev.entities == []
     assert ev.mitre is None
     assert SCHEMA_VERSION == 2
+
+
+async def test_adapter_query_uses_keyset_search_after():
+    """The indexer query must sort by (@timestamp, id) and use search_after
+    when a tie-breaker id is present — the fix for the same-timestamp
+    paging livelock."""
+    import soctalk_adapter.main as m
+
+    captured = {}
+
+    class _FakeResp:
+        def raise_for_status(self): ...
+        def json(self): return {"hits": {"hits": []}}
+
+    class _FakeClient:
+        async def post(self, url, **kw):
+            captured.update(kw["json"])
+            return _FakeResp()
+
+    await m._query_alerts(_FakeClient(), "2026-07-09T10:00:00.000Z", "wz-42", 100)
+    assert captured["sort"] == [
+        {"@timestamp": {"order": "asc"}}, {"id": {"order": "asc"}}
+    ]
+    assert captured["search_after"] == ["2026-07-09T10:00:00.000Z", "wz-42"]
+
+    # No tie-breaker id → no search_after (first page).
+    captured.clear()
+    await m._query_alerts(_FakeClient(), "2026-07-09T10:00:00.000Z", None, 100)
+    assert "search_after" not in captured
+
+
+def test_template_hash_secret_free_and_stable():
+    """Hashing redacted text: same shape with different secrets hashes
+    identically, and no secret substring leaks into the fingerprint."""
+    from soctalk_wire import redact_text
+    a = template_hash(redact_text("auth password=hunter2 for user bob"))
+    b = template_hash(redact_text("auth password=correcthorsebatterystaple for user bob"))
+    assert a == b
 
 
 def test_adapter_hit_to_event_extracts_and_redacts():
