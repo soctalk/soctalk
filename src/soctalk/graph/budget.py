@@ -163,6 +163,24 @@ def extract_usage(response: Any) -> tuple[int, int]:
     return (0, 0)
 
 
+def extract_cache_details(response: Any) -> tuple[int, int]:
+    """Return (cache_read_tokens, cache_creation_tokens) from a response.
+
+    langchain-anthropic folds cache tokens INTO input_tokens and exposes
+    the split under ``input_token_details`` (cache_read / cache_creation);
+    langchain-openai exposes ``cache_read`` there too (reads only).
+    """
+    um = getattr(response, "usage_metadata", None)
+    if isinstance(um, dict):
+        details = um.get("input_token_details") or {}
+        if isinstance(details, dict):
+            return (
+                int(details.get("cache_read") or 0),
+                int(details.get("cache_creation") or 0),
+            )
+    return (0, 0)
+
+
 def _model_name(response: Any) -> str | None:
     """Pull the model identifier from the response (langchain populates this)."""
     rm = getattr(response, "response_metadata", None)
@@ -174,11 +192,29 @@ def _model_name(response: Any) -> str | None:
     return None
 
 
-def _cost_dollars(input_tokens: int, output_tokens: int, model: str | None) -> float:
+def _cost_dollars(
+    input_tokens: int,
+    output_tokens: int,
+    model: str | None,
+    *,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float:
+    """Price a call. Cache tokens are a subset of input_tokens: reads bill
+    at ~10% of the input rate, cache writes at 125% (Anthropic pricing
+    model) — without this split, cached runs would be overcharged ~10x on
+    exactly the tokens caching exists to make cheap."""
     normalized = _normalize_model(model)
     price = _MODEL_PRICES_PER_MTOK.get(normalized, _UNKNOWN_MODEL_FALLBACK)
+    cache_read_tokens = min(max(cache_read_tokens, 0), input_tokens)
+    cache_creation_tokens = min(
+        max(cache_creation_tokens, 0), input_tokens - cache_read_tokens
+    )
+    uncached_input = input_tokens - cache_read_tokens - cache_creation_tokens
     return (
-        (input_tokens / 1_000_000.0) * price["input"]
+        (uncached_input / 1_000_000.0) * price["input"]
+        + (cache_read_tokens / 1_000_000.0) * price["input"] * 0.1
+        + (cache_creation_tokens / 1_000_000.0) * price["input"] * 1.25
         + (output_tokens / 1_000_000.0) * price["output"]
     )
 
@@ -192,12 +228,23 @@ def track(state: dict[str, Any], response: Any) -> int:
     """
     ensure(state)
     input_tokens, output_tokens = extract_usage(response)
+    cache_read, cache_creation = extract_cache_details(response)
     delta_tokens = input_tokens + output_tokens
     model = _model_name(response)
-    delta_dollars = _cost_dollars(input_tokens, output_tokens, model)
+    delta_dollars = _cost_dollars(
+        input_tokens,
+        output_tokens,
+        model,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+    )
 
     state["tokens_used"] = int(state["tokens_used"]) + delta_tokens
     state["dollars_used"] = float(state["dollars_used"]) + delta_dollars
+    state["cache_read_tokens"] = int(state.get("cache_read_tokens", 0)) + cache_read
+    state["cache_creation_tokens"] = (
+        int(state.get("cache_creation_tokens", 0)) + cache_creation
+    )
 
     if delta_tokens or delta_dollars:
         logger.debug(
@@ -205,6 +252,8 @@ def track(state: dict[str, Any], response: Any) -> int:
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
             delta_dollars=round(delta_dollars, 6),
             tokens_used=state["tokens_used"],
             tokens_budget=state["tokens_budget"],
