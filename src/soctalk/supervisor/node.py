@@ -150,6 +150,15 @@ def _build_context_summary(state: dict[str, Any]) -> str:
         desc = alert.get("rule_description", "No description")[:60]
         agent = alert.get("source", {}).get("agent_name", "unknown")
         lines.append(f"- [{severity}] {desc} (agent: {agent})")
+        # Rule semantics (issue #17 T6): show MITRE techniques/tactics and
+        # rule groups when the evidence store carried them.
+        mitre = alert.get("mitre") or {}
+        techniques = mitre.get("techniques") or mitre.get("ids") or []
+        if techniques:
+            lines.append(f"  MITRE: {', '.join(str(t) for t in techniques[:6])}")
+        groups = alert.get("rule_groups") or []
+        if groups:
+            lines.append(f"  Rule groups: {', '.join(str(g) for g in groups[:6])}")
 
     if len(alerts) > 5:
         lines.append(f"- ... and {len(alerts) - 5} more alerts")

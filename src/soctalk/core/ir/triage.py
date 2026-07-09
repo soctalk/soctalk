@@ -49,18 +49,35 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
-def assess(severity: int, rule_id: str | None = None) -> tuple[str, float]:
+def assess(
+    severity: int,
+    rule_id: str | None = None,
+    *,
+    mitre: dict[str, Any] | None = None,
+) -> tuple[str, float]:
     """Return (assessment, confidence).
 
     Rules-based stub. Replace with LLM-driven assessment later.
+
+    Rule semantics (issue #17 T6): if the rule carries MITRE ATT&CK
+    technique/tactic references, never classify it as a high-confidence
+    false positive — a technique-mapped detection is by definition not
+    obvious noise, so it must not be auto-closed without the LLM looking.
     """
 
     if severity >= 8:
         return "real", 0.85
     if severity >= 5:
         return "unclear", 0.5
+
+    has_mitre = bool(mitre) and any(
+        (mitre.get(k) for k in ("ids", "tactics", "techniques"))
+    )
     if severity >= 3:
         return "likely_fp", 0.75
+    if has_mitre:
+        # Low severity but technique-mapped — bump out of auto-close range.
+        return "unclear", 0.5
     return "high_conf_fp", 0.95
 
 
@@ -543,13 +560,70 @@ async def triage_event(
     ts: datetime | None = None,
     description: str | None = None,
     title: str | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Main triage entry: raw event → alert → investigation or auto-close.
 
     Returns a dict with alert_id and investigation_id (if promoted / closed).
+
+    ``evidence`` carries the optional schema-v2 sidecar (entities, mitre,
+    rule_groups, decoder, redacted full_log, template hash, observed_at)
+    persisted to ``alert_source_events`` — which also enforces
+    idempotency: a replayed ``(tenant, source, source_event_id)`` no-ops
+    without touching coalescing counters.
     """
 
     ts = ts or datetime.now(timezone.utc)
+    evidence = evidence or {}
+
+    # 0. Idempotency gate (issue #17 fix 7). Reserve the source-event key
+    #    up front; a conflict means we've already processed this event, so
+    #    return a clean no-op WITHOUT running triage (no event_count
+    #    inflation, no attach event, no duplicate investigation).
+    reserved = (
+        await db.execute(
+            text(
+                """
+                INSERT INTO alert_source_events
+                  (id, tenant_id, source, source_event_id,
+                   occurred_at, observed_at,
+                   description_redacted, full_log_redacted, entities, mitre,
+                   rule_groups, decoder, template_hash, template_version,
+                   redaction_version, schema_version, batch_seq)
+                VALUES
+                  (:id, :t, :src, :seid,
+                   :occurred, :observed,
+                   :desc, :full_log, CAST(:entities AS JSONB), CAST(:mitre AS JSONB),
+                   CAST(:rule_groups AS JSONB), :decoder, :thash, :tver,
+                   :rver, :sver, :bseq)
+                ON CONFLICT (tenant_id, source, source_event_id) DO NOTHING
+                RETURNING id
+                """
+            ),
+            {
+                "id": str(uuid4()),
+                "t": str(tenant_id),
+                "src": source,
+                "seid": source_event_id,
+                "occurred": ts,
+                "observed": evidence.get("observed_at"),
+                "desc": (description or None),
+                "full_log": evidence.get("full_log"),
+                "entities": canonical_json(evidence.get("entities", [])),
+                "mitre": canonical_json(evidence.get("mitre", {})),
+                "rule_groups": canonical_json(evidence.get("rule_groups", [])),
+                "decoder": evidence.get("decoder"),
+                "thash": evidence.get("template_hash"),
+                "tver": evidence.get("template_version"),
+                "rver": evidence.get("redaction_version"),
+                "sver": evidence.get("schema_version", 1),
+                "bseq": evidence.get("batch_seq"),
+            },
+        )
+    ).first()
+    if reserved is None:
+        return {"action": "duplicate", "source_event_id": source_event_id}
+    source_event_row_id = reserved[0]
 
     # 1. Upsert alert with coalescing.
     alert_result = await upsert_alert(
@@ -565,16 +639,18 @@ async def triage_event(
     )
     alert_id = alert_result["id"]
 
+    # Link the source-event row to its alert.
+    await db.execute(
+        text("UPDATE alert_source_events SET alert_id = :a WHERE id = :id"),
+        {"a": str(alert_id), "id": str(source_event_row_id)},
+    )
+
     if description and not alert_result["merged"] and not alert_result.get("attached"):
-        # Persist the human-readable line into ai_assessment so the
-        # downstream LangGraph runs-worker can show the actual rule/log
-        # text to the supervisor instead of a hash. Overwrites the
-        # rule-based assess() label (real/unclear/likely_fp/high_conf_fp)
-        # which the supervisor never used directly anyway.
+        # Persist the human-readable line into the alert's dedicated
+        # description column (issue #17 fix 3 — no longer clobbering
+        # ai_assessment, which holds the rules-based assess() label).
         await db.execute(
-            text(
-                "UPDATE alerts SET ai_assessment = :d WHERE id = :id"
-            ),
+            text("UPDATE alerts SET description = :d WHERE id = :id"),
             {"d": description[:1024], "id": str(alert_id)},
         )
 
@@ -649,8 +725,9 @@ async def triage_event(
             "action": "reopened",
         }
 
-    # 3. Decide based on AI assessment + policy.
-    assessment, confidence = assess(severity, rule_id)
+    # 3. Decide based on AI assessment + policy. Rule semantics (MITRE) can
+    #    veto a high-confidence-FP auto-close (issue #17 T6).
+    assessment, confidence = assess(severity, rule_id, mitre=evidence.get("mitre"))
     policy = await effective_policy(db, tenant_id)
 
     if (

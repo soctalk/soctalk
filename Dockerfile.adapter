@@ -23,6 +23,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir 'fastapi==0.115.*' 'uvicorn[standard]==0.30.*' 'httpx==0.27.*'
 
 COPY src/soctalk_adapter /app/soctalk_adapter
+COPY src/soctalk_wire /app/soctalk_wire
 
 # Match the chart's runAsUser; ensures /app is readable.
 RUN find /app -type f -exec chmod a+r {} + \

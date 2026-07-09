@@ -15,12 +15,14 @@ from uuid import UUID
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.triage import triage_event
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.models import Tenant
+from soctalk_wire import SCHEMA_VERSION as WIRE_SCHEMA_VERSION
+from soctalk_wire import IngestBatch
 
 logger = structlog.get_logger()
 
@@ -91,54 +93,55 @@ async def heartbeat(payload: HeartbeatPayload, request: Request) -> dict:
     return {"ok": True}
 
 
-class IngestedIOC(BaseModel):
-    type: str = Field(..., max_length=32)
-    value: str = Field(..., max_length=2048)
-
-
-class AdapterEvent(BaseModel):
-    """One Wazuh (or equivalent) event forwarded by the tenant adapter.
-
-    Kept minimal for ingestion — the adapter is expected to pre-normalise
-    Wazuh JSON into this shape. Unknown fields on the adapter side can
-    travel in ``raw`` for audit but are not indexed.
-    """
-
-    source_event_id: str = Field(..., max_length=128)
-    source: str = Field(default="wazuh", max_length=32)
-    rule_id: str | None = Field(default=None, max_length=64)
-    severity: int = Field(ge=0, le=15)
-    asset_ids: list[str] = Field(default_factory=list)
-    initial_iocs: list[IngestedIOC] = Field(default_factory=list)
-    ts: datetime | None = None
-    description: str | None = Field(default=None, max_length=1024)
-    title: str | None = Field(default=None, max_length=255)
-    raw: dict[str, Any] | None = None
-
-
-class IngestBatch(BaseModel):
-    tenant_id: UUID
-    events: list[AdapterEvent] = Field(..., max_length=500)
-
-
 @router.post("/events")
 async def ingest_events(payload: IngestBatch, request: Request) -> dict[str, Any]:
     """Wazuh → native IR ingest.
 
-    Adapter posts a batch; each event runs through the triage pipeline,
-    which coalesces bursts into alerts, auto-closes high-confidence FPs,
-    and promotes the rest into cases. Writes are wrapped in
-    ``tenant_context`` so RLS WITH CHECK passes for the app-role session.
+    The batch is validated against the shared ``soctalk_wire`` schema. Each
+    event runs through the triage pipeline, which now reserves an
+    idempotency key in ``alert_source_events`` first (a replay no-ops),
+    coalesces bursts into alerts, auto-closes high-confidence FPs, and
+    promotes the rest into cases. Writes are wrapped in ``tenant_context``
+    so RLS WITH CHECK passes for the app-role session.
+
+    Following the Netflix Dispatch "filter action" pattern, the response
+    reports the disposition of EVERY event — including ``duplicate`` and
+    ``skipped_schema`` — so a consumer can account for coverage rather than
+    infer it from a bare count. ``schema_version`` on the batch drives
+    additive-only handling: a higher-than-supported version is processed
+    best-effort (unknown fields already ignored by the model) with a warning.
     """
 
     authed_tid = _verify_adapter_jwt(request)
     if authed_tid != payload.tenant_id:
         raise HTTPException(403, "adapter token tenant_id mismatch")
 
+    if payload.schema_version > WIRE_SCHEMA_VERSION:
+        logger.warning(
+            "adapter_batch_newer_schema",
+            tenant_id=str(payload.tenant_id),
+            batch_schema_version=payload.schema_version,
+            supported=WIRE_SCHEMA_VERSION,
+        )
+
     db = _db(request)
     results: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
     async with tenant_context(db, payload.tenant_id):
         for ev in payload.events:
+            evidence = {
+                "observed_at": ev.observed_at,
+                "full_log": ev.full_log,
+                "entities": [e.model_dump() for e in ev.entities],
+                "mitre": ev.mitre.model_dump() if ev.mitre else {},
+                "rule_groups": list(ev.rule_groups),
+                "decoder": ev.decoder,
+                "template_hash": ev.template_hash,
+                "template_version": ev.template_version,
+                "redaction_version": ev.redaction_version,
+                "schema_version": payload.schema_version,
+                "batch_seq": payload.batch_seq,
+            }
             outcome = await triage_event(
                 db,
                 tenant_id=payload.tenant_id,
@@ -151,9 +154,87 @@ async def ingest_events(payload: IngestBatch, request: Request) -> dict[str, Any
                 ts=ev.ts or datetime.now(timezone.utc),
                 description=ev.description,
                 title=ev.title,
+                evidence=evidence,
             )
             results.append(outcome)
-    return {"ingested": len(results), "outcomes": results}
+            counts[outcome.get("action", "unknown")] = (
+                counts.get(outcome.get("action", "unknown"), 0) + 1
+            )
+    return {
+        "ingested": len(results),
+        "action_counts": counts,
+        "outcomes": results,
+    }
+
+
+class CheckpointBody(BaseModel):
+    tenant_id: UUID
+    source: str = Field(default="wazuh", max_length=32)
+    cursor_ts: str | None = Field(default=None, max_length=64)
+    cursor_event_id: str | None = Field(default=None, max_length=128)
+    batch_seq: int | None = Field(default=None, ge=0)
+    # Alertmanager-style loss accounting: total events the adapter shed to
+    # its rate limiter since boot, so a quiet period is distinguishable
+    # from a dropped one on the control-plane side.
+    dropped_total: int | None = Field(default=None, ge=0)
+
+
+@router.get("/checkpoint")
+async def get_checkpoint(request: Request, source: str = "wazuh") -> dict:
+    """Durable ingest cursor (issue #17 fix 6). Restart-safe: the adapter
+    resumes from here instead of an in-memory cursor that resets on pod
+    replacement."""
+    tid = _verify_adapter_jwt(request)
+    db = _db(request)
+    async with tenant_context(db, tid):
+        row = (
+            await db.execute(
+                text(
+                    "SELECT cursor_ts, cursor_event_id, batch_seq, dropped_total "
+                    "FROM adapter_checkpoints WHERE tenant_id = :t AND source = :s"
+                ),
+                {"t": str(tid), "s": source},
+            )
+        ).mappings().first()
+    if row is None:
+        return {"tenant_id": str(tid), "source": source, "cursor_ts": None,
+                "cursor_event_id": None, "batch_seq": 0, "dropped_total": 0}
+    return {"tenant_id": str(tid), "source": source, **dict(row)}
+
+
+@router.put("/checkpoint")
+async def put_checkpoint(payload: CheckpointBody, request: Request) -> dict:
+    authed_tid = _verify_adapter_jwt(request)
+    if authed_tid != payload.tenant_id:
+        raise HTTPException(403, "adapter token tenant_id mismatch")
+    db = _db(request)
+    async with tenant_context(db, payload.tenant_id):
+        await db.execute(
+            text(
+                """
+                INSERT INTO adapter_checkpoints
+                  (tenant_id, source, cursor_ts, cursor_event_id, batch_seq,
+                   dropped_total, updated_at)
+                VALUES (:t, :s, :cts, :ceid, COALESCE(:bseq, 0),
+                        COALESCE(:dropped, 0), now())
+                ON CONFLICT (tenant_id, source) DO UPDATE SET
+                    cursor_ts = EXCLUDED.cursor_ts,
+                    cursor_event_id = EXCLUDED.cursor_event_id,
+                    batch_seq = GREATEST(adapter_checkpoints.batch_seq, EXCLUDED.batch_seq),
+                    dropped_total = GREATEST(adapter_checkpoints.dropped_total, EXCLUDED.dropped_total),
+                    updated_at = now()
+                """
+            ),
+            {
+                "t": str(payload.tenant_id),
+                "s": payload.source,
+                "cts": payload.cursor_ts,
+                "ceid": payload.cursor_event_id,
+                "bseq": payload.batch_seq,
+                "dropped": payload.dropped_total,
+            },
+        )
+    return {"ok": True}
 
 
 @router.get("/config")
