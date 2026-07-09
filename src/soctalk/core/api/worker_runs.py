@@ -182,7 +182,11 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                         SELECT mitre, rule_groups, entities
                         FROM alert_source_events
                         WHERE alert_id = a.id
-                        ORDER BY ingested_at DESC
+                        -- Prefer a source event that actually carries rule
+                        -- semantics: a later empty/coalesced v1 event must
+                        -- not hide the MITRE/entities of an earlier one.
+                        ORDER BY (mitre <> '{}'::jsonb OR entities <> '[]'::jsonb) DESC,
+                                 ingested_at DESC
                         LIMIT 1
                     ) se ON true
                     WHERE a.investigation_id = :c

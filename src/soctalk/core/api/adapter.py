@@ -22,7 +22,7 @@ from soctalk.core.ir.triage import triage_event
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.models import Tenant
 from soctalk_wire import SCHEMA_VERSION as WIRE_SCHEMA_VERSION
-from soctalk_wire import IngestBatch
+from soctalk_wire import IngestBatch, redact_text
 
 logger = structlog.get_logger()
 
@@ -127,11 +127,18 @@ async def ingest_events(payload: IngestBatch, request: Request) -> dict[str, Any
     db = _db(request)
     results: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
+    # Defense-in-depth: re-run redaction server-side over every text path.
+    # New adapters already redact (markers no-op on re-run); PRE-redaction
+    # adapters deployed before this change would otherwise persist raw
+    # secrets — this closes that window before anything is stored.
     async with tenant_context(db, payload.tenant_id):
         for ev in payload.events:
+            desc = redact_text(ev.description)
+            title = redact_text(ev.title)
+            full_log = redact_text(ev.full_log)
             evidence = {
                 "observed_at": ev.observed_at,
-                "full_log": ev.full_log,
+                "full_log": full_log,
                 "entities": [e.model_dump() for e in ev.entities],
                 "mitre": ev.mitre.model_dump() if ev.mitre else {},
                 "rule_groups": list(ev.rule_groups),
@@ -152,8 +159,8 @@ async def ingest_events(payload: IngestBatch, request: Request) -> dict[str, Any
                 initial_iocs=[i.model_dump() for i in ev.initial_iocs],
                 source_event_id=ev.source_event_id,
                 ts=ev.ts or datetime.now(timezone.utc),
-                description=ev.description,
-                title=ev.title,
+                description=desc,
+                title=title,
                 evidence=evidence,
             )
             results.append(outcome)
@@ -218,8 +225,19 @@ async def put_checkpoint(payload: CheckpointBody, request: Request) -> dict:
                 VALUES (:t, :s, :cts, :ceid, COALESCE(:bseq, 0),
                         COALESCE(:dropped, 0), now())
                 ON CONFLICT (tenant_id, source) DO UPDATE SET
-                    cursor_ts = EXCLUDED.cursor_ts,
-                    cursor_event_id = EXCLUDED.cursor_event_id,
+                    -- Monotonic cursor: a delayed/stale writer must never move
+                    -- the durable cursor backward (ISO-8601 sorts lexically, so
+                    -- GREATEST on the text is a valid time comparison). Only
+                    -- overwrite the event-id tie-breaker when the timestamp
+                    -- actually advances.
+                    cursor_ts = GREATEST(
+                        adapter_checkpoints.cursor_ts, EXCLUDED.cursor_ts
+                    ),
+                    cursor_event_id = CASE
+                        WHEN EXCLUDED.cursor_ts >= adapter_checkpoints.cursor_ts
+                        THEN EXCLUDED.cursor_event_id
+                        ELSE adapter_checkpoints.cursor_event_id
+                    END,
                     batch_seq = GREATEST(adapter_checkpoints.batch_seq, EXCLUDED.batch_seq),
                     dropped_total = GREATEST(adapter_checkpoints.dropped_total, EXCLUDED.dropped_total),
                     updated_at = now()

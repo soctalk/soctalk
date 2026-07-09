@@ -44,6 +44,17 @@ from soctalk.core.observability.audit import log_audit
 logger = structlog.get_logger()
 
 
+def _evidence_retention_days() -> int:
+    """Retention window for raw evidence rows (issue #17 fix 3). Raw logs
+    carry PII/secrets even after redaction markers, so they expire; a
+    reaper (separate job) deletes rows past retention_until."""
+    import os
+    try:
+        return max(1, int(os.getenv("SOCTALK_EVIDENCE_RETENTION_DAYS", "90")))
+    except ValueError:
+        return 90
+
+
 # ---------------------------------------------------------------------------
 # Rules-based AI assessment (MVP)
 # ---------------------------------------------------------------------------
@@ -116,6 +127,7 @@ async def upsert_alert(
     initial_iocs: list[dict[str, Any]],
     source_event_id: str,
     ts: datetime,
+    mitre: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Upsert an alert row with coalescing.
 
@@ -209,7 +221,7 @@ async def upsert_alert(
 
     # Fresh insert.
     alert_id = uuid4()
-    assessment, confidence = assess(severity, rule_id)
+    assessment, confidence = assess(severity, rule_id, mitre=mitre)
     await db.execute(
         text(
             """
@@ -589,13 +601,15 @@ async def triage_event(
                    occurred_at, observed_at,
                    description_redacted, full_log_redacted, entities, mitre,
                    rule_groups, decoder, template_hash, template_version,
-                   redaction_version, schema_version, batch_seq)
+                   redaction_version, schema_version, batch_seq,
+                   retention_until)
                 VALUES
                   (:id, :t, :src, :seid,
                    :occurred, :observed,
                    :desc, :full_log, CAST(:entities AS JSONB), CAST(:mitre AS JSONB),
                    CAST(:rule_groups AS JSONB), :decoder, :thash, :tver,
-                   :rver, :sver, :bseq)
+                   :rver, :sver, :bseq,
+                   now() + make_interval(days => :retention_days))
                 ON CONFLICT (tenant_id, source, source_event_id) DO NOTHING
                 RETURNING id
                 """
@@ -618,6 +632,7 @@ async def triage_event(
                 "rver": evidence.get("redaction_version"),
                 "sver": evidence.get("schema_version", 1),
                 "bseq": evidence.get("batch_seq"),
+                "retention_days": _evidence_retention_days(),
             },
         )
     ).first()
@@ -636,6 +651,7 @@ async def triage_event(
         initial_iocs=initial_iocs,
         source_event_id=source_event_id,
         ts=ts,
+        mitre=evidence.get("mitre"),
     )
     alert_id = alert_result["id"]
 
