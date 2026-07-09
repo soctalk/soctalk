@@ -48,6 +48,9 @@ services:
       DATABASE_URL_APP: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
       DATABASE_URL_MSSP: postgresql+asyncpg://soctalk:soctalk@postgres:5432/soctalk
       SOCTALK_AUTH_MODE: internal
+      # Localhost compose serves plain HTTP — allow the session cookie
+      # without the Secure attribute or login silently fails.
+      SOCTALK_AUTH_COOKIE_SECURE: "0"
       SOCTALK_PUBLIC_ORIGIN: http://localhost:5173
       # No k8s in the compose stack — don't start the provisioning worker.
       SOCTALK_PROVISIONING_WORKER: "0"

@@ -38,7 +38,7 @@ from soctalk.core.ir.events import (
     ioc_fingerprint,
 )
 from soctalk.core.ir.policies import effective_policy
-from soctalk.core.ir.runtime import start_run
+from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.observability.audit import log_audit
 
 logger = structlog.get_logger()
@@ -102,12 +102,26 @@ async def upsert_alert(
 ) -> dict[str, Any]:
     """Upsert an alert row with coalescing.
 
-    Same (rule_id, asset_ids, 5-min bucket) signature → merge into the
-    existing open alert; increment event_count and update last_event_at.
+    Same (rule_id, asset_ids, 5-min bucket) signature:
+      - matching ``new`` alert → merge (increment event_count etc.)
+      - matching ``promoted`` alert whose investigation is not a closed FP →
+        merge into that alert and report ``attached`` so the caller links the
+        event to the existing investigation instead of creating a new one
+      - matching ``promoted`` alert on a closed-FP investigation → fall
+        through (the reopen check owns that path)
     Otherwise insert a new alert.
+
+    A transaction-scoped advisory lock on (tenant, signature) serializes
+    concurrent ingests of the same signature — the check-then-insert below
+    is racy without it, and a partial unique index alone cannot help because
+    promotion moves the row out of ``status='new'`` before commit.
     """
 
     sig = alert_signature(rule_id, asset_ids, ts)
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:t), hashtext(:s))"),
+        {"t": str(tenant_id), "s": sig},
+    )
     existing = (
         await db.execute(
             text(
@@ -119,6 +133,31 @@ async def upsert_alert(
             {"t": str(tenant_id), "s": sig},
         )
     ).mappings().first()
+
+    attached_investigation_id: UUID | None = None
+    if existing is None:
+        # No open alert — a duplicate of an already-promoted alert should
+        # become evidence on its investigation, not a brand-new case.
+        promoted = (
+            await db.execute(
+                text(
+                    "SELECT a.id, a.event_count, a.source_event_ids, "
+                    "       a.asset_ids, a.initial_iocs, a.investigation_id, "
+                    "       i.status AS investigation_status "
+                    "FROM alerts a "
+                    "JOIN investigations i ON i.id = a.investigation_id "
+                    "WHERE a.tenant_id = :t AND a.signature = :s "
+                    "  AND a.status = 'promoted' "
+                    "  AND a.investigation_id IS NOT NULL "
+                    "ORDER BY a.last_event_at DESC "
+                    "LIMIT 1"
+                ),
+                {"t": str(tenant_id), "s": sig},
+            )
+        ).mappings().first()
+        if promoted is not None and promoted["investigation_status"] != "auto_closed_fp":
+            existing = promoted
+            attached_investigation_id = UUID(str(promoted["investigation_id"]))
 
     if existing:
         event_ids = list(existing["source_event_ids"] or []) + [source_event_id]
@@ -145,7 +184,9 @@ async def upsert_alert(
         )
         return {
             "id": UUID(str(existing["id"])),
-            "merged": True,
+            "merged": attached_investigation_id is None,
+            "attached": attached_investigation_id is not None,
+            "investigation_id": attached_investigation_id,
             "event_count": (existing["event_count"] or 0) + 1,
         }
 
@@ -182,7 +223,7 @@ async def upsert_alert(
             "c": confidence,
         },
     )
-    return {"id": alert_id, "merged": False, "event_count": 1}
+    return {"id": alert_id, "merged": False, "attached": False, "event_count": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +373,82 @@ async def promote_alert_to_case(
     return investigation_id
 
 
+def _reopen_fields(
+    *,
+    rule_ids: list[str],
+    asset_ids: list[str],
+    initial_iocs: list[dict[str, Any]],
+    window_start: datetime,
+    reopen_window_days: int,
+) -> tuple[str, datetime]:
+    """Build (reopen_signature JSON, reopen_window_until) from alert facts.
+
+    Shared by every path that closes an investigation as a false positive —
+    rules-based auto-close, worker ``close_fp`` verdicts, and analyst
+    rejects — so all of them stay resurrectable by ``_check_and_reopen``.
+    """
+    ioc_fps = [
+        ioc_fingerprint(i["type"], i["value"])
+        for i in initial_iocs
+        if isinstance(i, dict) and i.get("type") and i.get("value")
+    ]
+    sig = {
+        "ioc_fingerprints": ioc_fps,
+        "asset_ids": asset_ids,
+        "rule_ids": rule_ids,
+        "time_window": {
+            "start": window_start.isoformat(),
+            "end": (window_start + timedelta(days=reopen_window_days)).isoformat(),
+        },
+    }
+    reopen_until = datetime.now(timezone.utc) + timedelta(days=reopen_window_days)
+    return canonical_json(sig), reopen_until
+
+
+async def build_reopen_fields_for_investigation(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    investigation_id: UUID,
+    reopen_window_days: int,
+) -> tuple[str, datetime]:
+    """Union rule/asset/IOC facts across every alert linked to an investigation.
+
+    Anchored at the earliest ``first_event_at``. Falls back to now() if the
+    investigation somehow has no linked alerts.
+    """
+    rows = (
+        await db.execute(
+            text(
+                "SELECT rule_id, asset_ids, initial_iocs, first_event_at "
+                "FROM alerts "
+                "WHERE tenant_id = :t AND investigation_id = :c "
+                "ORDER BY first_event_at"
+            ),
+            {"t": str(tenant_id), "c": str(investigation_id)},
+        )
+    ).mappings().all()
+
+    rule_ids: dict[str, None] = {}
+    asset_ids: dict[str, None] = {}
+    iocs: list[dict[str, Any]] = []
+    for r in rows:
+        if r["rule_id"]:
+            rule_ids.setdefault(r["rule_id"])
+        for a in list(r["asset_ids"] or []):
+            asset_ids.setdefault(a)
+        iocs.extend(list(r["initial_iocs"] or []))
+    window_start = rows[0]["first_event_at"] if rows else datetime.now(timezone.utc)
+
+    return _reopen_fields(
+        rule_ids=list(rule_ids),
+        asset_ids=list(asset_ids),
+        initial_iocs=iocs,
+        window_start=window_start,
+        reopen_window_days=reopen_window_days,
+    )
+
+
 async def auto_close_alert(
     db: AsyncSession,
     *,
@@ -358,23 +475,13 @@ async def auto_close_alert(
 
     investigation_id = uuid4()
     short_id = await next_short_id(db, tenant_id)
-    ioc_fps = [
-        ioc_fingerprint(i["type"], i["value"])
-        for i in list(alert["initial_iocs"] or [])
-        if isinstance(i, dict) and i.get("type") and i.get("value")
-    ]
-    reopen_sig = {
-        "ioc_fingerprints": ioc_fps,
-        "asset_ids": list(alert["asset_ids"] or []),
-        "rule_ids": [alert["rule_id"]] if alert["rule_id"] else [],
-        "time_window": {
-            "start": alert["first_event_at"].isoformat(),
-            "end": (
-                alert["first_event_at"] + timedelta(days=reopen_window_days)
-            ).isoformat(),
-        },
-    }
-    reopen_until = datetime.now(timezone.utc) + timedelta(days=reopen_window_days)
+    sig_json, reopen_until = _reopen_fields(
+        rule_ids=[alert["rule_id"]] if alert["rule_id"] else [],
+        asset_ids=list(alert["asset_ids"] or []),
+        initial_iocs=list(alert["initial_iocs"] or []),
+        window_start=alert["first_event_at"],
+        reopen_window_days=reopen_window_days,
+    )
 
     await db.execute(
         text(
@@ -398,7 +505,7 @@ async def auto_close_alert(
             "ts": alert["first_event_at"],
             "reason": reason,
             "reopen_until": reopen_until,
-            "sig": canonical_json(reopen_sig),
+            "sig": sig_json,
         },
     )
     await db.execute(
@@ -458,7 +565,7 @@ async def triage_event(
     )
     alert_id = alert_result["id"]
 
-    if description and not alert_result["merged"]:
+    if description and not alert_result["merged"] and not alert_result.get("attached"):
         # Persist the human-readable line into ai_assessment so the
         # downstream LangGraph runs-worker can show the actual rule/log
         # text to the supervisor instead of a hash. Overwrites the
@@ -474,6 +581,48 @@ async def triage_event(
     # Coalesced into existing → no new investigation action.
     if alert_result["merged"]:
         return {"alert_id": str(alert_id), "action": "merged"}
+
+    # Duplicate of an already-promoted alert → the event becomes evidence
+    # on the existing investigation. Never starts a run: if a run is live
+    # it will see the updated alert; if it is HIL-parked or budget-halted
+    # the gate stays authoritative; if it is terminal the investigation
+    # record simply accumulates the recurrence.
+    if alert_result.get("attached"):
+        attached_case_id = alert_result["investigation_id"]
+        await append_event(
+            db,
+            tenant_id=tenant_id,
+            investigation_id=attached_case_id,
+            run_id=None,
+            kind=EventKind.ALERT_INGESTED,
+            payload={
+                "alert_id": str(alert_id),
+                "coalesced": True,
+                "event_count": alert_result.get("event_count"),
+                "source_event_id": source_event_id,
+                "rule_id": rule_id,
+                "severity": severity,
+                "asset_ids": asset_ids,
+            },
+            idempotency_key=f"attach-{alert_id}-{source_event_id}",
+            producer="triage",
+        )
+        await log_audit(
+            db,
+            action="ir.investigation.alert_attached",
+            actor_principal="system",
+            actor_id="triage",
+            tenant_id=tenant_id,
+            resource_type="investigation",
+            resource_id=str(attached_case_id),
+            notes=f"duplicate signature event {source_event_id} attached",
+        )
+        return {
+            "alert_id": str(alert_id),
+            "investigation_id": str(attached_case_id),
+            "action": "attached",
+            "event_count": alert_result.get("event_count"),
+        }
 
     # 2. Check reopen signatures first — a matching event on an auto-closed
     #    investigation re-opens rather than creating a new one.
@@ -583,8 +732,14 @@ async def _check_and_reopen(
                 ),
                 {"id": str(investigation_id)},
             )
-            # Start a fresh run.
-            run_id = await start_run(db, tenant_id, investigation_id)
+            # Start a fresh run — unless a live one still exists (e.g. the
+            # investigation was analyst-rejected while its run was active,
+            # or is parked on HIL/budget). uq_investigation_runs_single_active
+            # forbids a second live run; the existing run simply continues
+            # with the reopened investigation's accumulated evidence.
+            run_id = await active_run_for_case(db, investigation_id)
+            if run_id is None:
+                run_id = await start_run(db, tenant_id, investigation_id)
             await append_event(
                 db,
                 tenant_id=tenant_id,
@@ -610,6 +765,7 @@ async def _check_and_reopen(
 __all__ = [
     "assess",
     "auto_close_alert",
+    "build_reopen_fields_for_investigation",
     "next_short_id",
     "promote_alert_to_case",
     "triage_event",
