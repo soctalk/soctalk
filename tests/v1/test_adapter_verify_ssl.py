@@ -128,8 +128,9 @@ async def test_ingest_loop_uses_resolved_verify(monkeypatch, raw, expected_verif
     with pytest.raises(_BreakLoop):
         await main._ingest_loop()
 
-    # Exactly one client — the Wazuh indexer client — is constructed with an
-    # explicit ``verify=``; the L1 api client uses httpx's default. That one
-    # must carry the resolved value, not a hard-coded False.
+    # Both clients carry an explicit ``verify=`` since SOCTALK_API_VERIFY_SSL
+    # landed (ec0df5c): the L1 api client resolves from SOCTALK_API_VERIFY_SSL
+    # (default True), the Wazuh indexer client from WAZUH_INDEXER_VERIFY_SSL.
+    # The indexer one must carry the resolved value, not a hard-coded False.
     verify_kwargs = [kw["verify"] for kw in created if "verify" in kw]
-    assert verify_kwargs == [expected_verify]
+    assert verify_kwargs == [True, expected_verify]
