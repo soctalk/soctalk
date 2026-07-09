@@ -327,6 +327,22 @@ async def complete_run(
         investigation_id = row["investigation_id"]
 
         if payload.status == "completed" and payload.disposition == "close_fp":
+            # Write the reopen signature/window alongside the close so an
+            # LLM-dismissed FP stays resurrectable by _check_and_reopen()
+            # when the same entities show up again — same contract as the
+            # rules-based auto_close_alert() path. Same transaction as the
+            # close update; the WHERE status='active' guard means we never
+            # stamp reopen fields onto an investigation someone else closed.
+            from soctalk.core.ir.policies import effective_policy
+            from soctalk.core.ir.triage import build_reopen_fields_for_investigation
+
+            policy = await effective_policy(db, tenant_id)
+            reopen_sig, reopen_until = await build_reopen_fields_for_investigation(
+                db,
+                tenant_id=tenant_id,
+                investigation_id=investigation_id,
+                reopen_window_days=policy.get("reopen_window_days", 30),
+            )
             r = await db.execute(
                 text(
                     """
@@ -334,6 +350,8 @@ async def complete_run(
                        SET status = 'auto_closed_fp',
                            closed_at = now(),
                            close_reason = COALESCE(:reason, close_reason),
+                           reopen_signature = CAST(:sig AS JSONB),
+                           reopen_window_until = :reopen_until,
                            updated_at = now()
                      WHERE id = :c
                        AND tenant_id = :t
@@ -342,6 +360,8 @@ async def complete_run(
                 ),
                 {
                     "reason": payload.verdict_summary,
+                    "sig": reopen_sig,
+                    "reopen_until": reopen_until,
                     "c": str(investigation_id),
                     "t": str(tenant_id),
                 },

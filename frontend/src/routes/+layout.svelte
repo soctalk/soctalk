@@ -71,8 +71,14 @@
 				await goto('/login');
 			}
 		} catch (e) {
-			// If auth/session fails, don't block rendering; API calls will surface errors.
-			if (import.meta.env.DEV) console.error('[Auth] session check failed:', e);
+			// Session check failed (API unreachable, auth misconfigured, or an
+			// old API without /api/auth/me). Without a user the dashboard would
+			// wait forever on a spinner — route to /login so the failure is
+			// visible and diagnosable instead of silent.
+			console.error('[Auth] session check failed:', e);
+			if (currentPath !== '/login') {
+				await goto('/login');
+			}
 		} finally {
 			authReady = true;
 		}

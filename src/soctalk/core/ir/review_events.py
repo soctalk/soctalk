@@ -248,24 +248,43 @@ async def record_human_decision_received(
         },
     )
 
-    # 3. On reject, close the case as analyst-determined FP.
+    # 3. On reject, close the case as analyst-determined FP — with a reopen
+    #    signature/window, same contract as the rules-based and worker
+    #    close_fp paths, so matching future events resurrect the case
+    #    instead of starting a context-free investigation.
     if decision == "reject":
-        params: dict[str, Any] = {
-            "reason": feedback,
-            "id": str(investigation_id),
-        }
-        sql = """
-            UPDATE investigations
-               SET status = 'auto_closed_fp',
-                   closed_at = now(),
-                   close_reason = COALESCE(:reason, close_reason),
-                   updated_at = now()
-             WHERE id = :id
-        """
-        if tenant_id is not None:
-            sql += " AND tenant_id = :t"
-            params["t"] = str(tenant_id)
-        await session.execute(text(sql), params)
+        from soctalk.core.ir.policies import effective_policy
+        from soctalk.core.ir.triage import build_reopen_fields_for_investigation
+
+        policy = await effective_policy(session, tenant_id)
+        reopen_sig, reopen_until = await build_reopen_fields_for_investigation(
+            session,
+            tenant_id=tenant_id,
+            investigation_id=investigation_id,
+            reopen_window_days=policy.get("reopen_window_days", 30),
+        )
+        await session.execute(
+            text(
+                """
+                UPDATE investigations
+                   SET status = 'auto_closed_fp',
+                       closed_at = now(),
+                       close_reason = COALESCE(:reason, close_reason),
+                       reopen_signature = CAST(:sig AS JSONB),
+                       reopen_window_until = :reopen_until,
+                       updated_at = now()
+                 WHERE id = :id
+                   AND tenant_id = :t
+                """
+            ),
+            {
+                "reason": feedback,
+                "sig": reopen_sig,
+                "reopen_until": reopen_until,
+                "id": str(investigation_id),
+                "t": str(tenant_id),
+            },
+        )
 
 
 async def record_human_review_expired(
