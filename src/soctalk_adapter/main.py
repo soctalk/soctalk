@@ -14,10 +14,18 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 
+from soctalk_wire import (
+    REDACTION_VERSION,
+    SCHEMA_VERSION,
+    TEMPLATE_VERSION,
+    redact_text,
+    template_hash,
+)
+
 logger = logging.getLogger("soctalk.adapter")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 
 def _read_token() -> str:
@@ -46,8 +54,12 @@ class _State:
         self.last_heartbeat_ok: datetime | None = None
         self.last_heartbeat_error: str | None = None
         self.last_alert_ts: str = _initial_alert_ts()
+        self.alerts_queried: int = 0
         self.alerts_forwarded: int = 0
+        self.alerts_duplicate: int = 0
         self.alerts_dropped_rate_limit: int = 0
+        self.batch_seq: int = 0
+        self.checkpoint_loaded: bool = False
         self.last_ingest_error: str | None = None
 
 
@@ -262,6 +274,61 @@ def _compose_title(rule_desc: str, agent_name: str | None, subject: str | None) 
     return base[:255]
 
 
+def _extract_entities(src: dict, agent: dict, agent_name: str | None) -> list[dict]:
+    """Typed, role-carrying entities from fields the Wazuh decoder already
+    parsed (issue #17 fix 1). ``source_field`` preserves provenance.
+
+    Wazuh puts decoded fields under ``data`` (data.srcuser, data.srcip,
+    data.dstuser, data.win.eventdata.*). We map the common ones; unknown
+    shapes are simply not emitted rather than guessed.
+    """
+    ents: list[dict] = []
+
+    def add(t: str, v, role: str | None, field: str) -> None:
+        if v is None:
+            return
+        s = str(v).strip()
+        if s:
+            ents.append({"type": t, "value": s[:512], "role": role, "source_field": field})
+
+    if isinstance(agent, dict) and agent.get("id"):
+        add("host", agent.get("name") or agent.get("id"), "target", "agent.name")
+    data = src.get("data") or {}
+    if isinstance(data, dict):
+        add("user", data.get("srcuser"), "actor", "data.srcuser")
+        add("user", data.get("dstuser"), "target", "data.dstuser")
+        add("user", data.get("user"), "actor", "data.user")
+        add("ip", data.get("srcip"), "src", "data.srcip")
+        add("ip", data.get("dstip"), "dst", "data.dstip")
+        add("port", data.get("srcport"), "src", "data.srcport")
+        add("port", data.get("dstport"), "dst", "data.dstport")
+        add("process", data.get("process") or data.get("command"), "actor", "data.process")
+    # dedupe on (type, value, role)
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for e in ents:
+        k = (e["type"], e["value"], e["role"])
+        if k not in seen:
+            seen.add(k)
+            out.append(e)
+    return out[:64]
+
+
+def _extract_mitre(rule: dict) -> dict:
+    """Pull MITRE ATT&CK refs from the rule (issue #17 fix 2)."""
+    mitre = rule.get("mitre") or {}
+    if not isinstance(mitre, dict):
+        return {}
+    def _cap(v):
+        return [str(x)[:32] for x in (v or [])][:16]
+    out = {
+        "ids": _cap(mitre.get("id")),
+        "tactics": _cap(mitre.get("tactic")),
+        "techniques": _cap(mitre.get("technique")),
+    }
+    return out if any(out.values()) else {}
+
+
 def _hit_to_event(hit: dict) -> dict | None:
     src = hit.get("_source") or {}
     source_id = src.get("id") or hit.get("_id")
@@ -277,25 +344,49 @@ def _hit_to_event(hit: dict) -> dict | None:
         asset_ids.append(agent["id"][:64])
     if agent_name:
         asset_ids.append(agent_name[:64])
-    description = (full_log or rule_desc).strip()[:1024]
-    title = _compose_title(rule_desc, agent_name, _extract_subject(full_log))
+
+    # IOC extraction reads the RAW text (must run before redaction).
+    iocs = _extract_iocs(f"{rule_desc} {full_log}")
+    entities = _extract_entities(src, agent, agent_name)
+    thash = template_hash(full_log)
+
+    # Redaction (issue #17 fix 9): strip secrets from every outbound text
+    # path AFTER IOC extraction, BEFORE anything leaves the tenant.
+    description = redact_text((full_log or rule_desc).strip()[:1024])
+    title = redact_text(
+        _compose_title(rule_desc, agent_name, _extract_subject(full_log))
+    )
+    rule_desc_red = redact_text(rule_desc[:512])
+    full_log_red = redact_text(full_log[:4096])
+
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     return {
         "source_event_id": str(source_id)[:128],
         "source": "wazuh",
         "rule_id": (str(rule.get("id"))[:64] if rule.get("id") else None),
         "severity": _severity_from_rule_level(rule.get("level")),
         "asset_ids": asset_ids[:8],
-        "initial_iocs": _extract_iocs(f"{rule_desc} {full_log}"),
+        "initial_iocs": iocs,
         "ts": src.get("@timestamp") or src.get("timestamp"),
+        "observed_at": now_iso,
         "description": description,
         "title": title,
+        # v2 evidence sidecar
+        "entities": entities,
+        "mitre": _extract_mitre(rule),
+        "rule_groups": [str(g)[:64] for g in (rule.get("groups") or [])][:16],
+        "decoder": (src.get("decoder") or {}).get("name"),
+        "full_log": full_log_red,
+        "template_hash": thash,
+        "template_version": TEMPLATE_VERSION,
+        "redaction_version": REDACTION_VERSION,
         "raw": {
-            "rule_description": rule_desc[:512],
+            "rule_description": rule_desc_red,
             "rule_groups": rule.get("groups") or [],
             "decoder_name": (src.get("decoder") or {}).get("name"),
             "location": src.get("location"),
             "manager_name": (src.get("manager") or {}).get("name"),
-            "full_log": full_log[:1024],
+            "full_log": full_log_red,
         },
     }
 
@@ -311,8 +402,13 @@ def _min_severity() -> int:
 
 async def _query_alerts(client: httpx.AsyncClient, since_ts: str, limit: int) -> list[dict]:
     user, pw = _wazuh_indexer_creds()
+    # Overlap query (issue #17 fix 6): ``gte`` instead of ``gt`` so events
+    # sharing the high-water timestamp are never skipped. Re-reads of
+    # already-ingested events are absorbed by the control plane's
+    # (tenant, source, source_event_id) idempotency constraint, which
+    # returns them as ``duplicate`` no-ops.
     filters: list[dict] = [
-        {"range": {"@timestamp": {"gt": since_ts}}},
+        {"range": {"@timestamp": {"gte": since_ts}}},
         {"range": {"rule.level": {"gte": _min_severity()}}},
     ]
     must_not: list[dict] = []
@@ -347,14 +443,69 @@ async def _query_alerts(client: httpx.AsyncClient, since_ts: str, limit: int) ->
     return list(data.get("hits", {}).get("hits", []))
 
 
+async def _load_checkpoint(
+    client: httpx.AsyncClient, api_url: str, tenant_id: str, token: str
+) -> None:
+    try:
+        resp = await client.get(
+            f"{api_url}/api/internal/adapter/checkpoint?source=wazuh",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        cp = resp.json()
+        if cp.get("cursor_ts"):
+            _state.last_alert_ts = cp["cursor_ts"]
+        _state.batch_seq = int(cp.get("batch_seq") or 0)
+        _state.checkpoint_loaded = True
+        logger.info("checkpoint_loaded cursor=%s batch_seq=%d",
+                    _state.last_alert_ts, _state.batch_seq)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("checkpoint_load_failed: %s (starting from local cursor)", e)
+
+
+async def _save_checkpoint(
+    client: httpx.AsyncClient, api_url: str, tenant_id: str, token: str, cursor_ts: str
+) -> None:
+    try:
+        resp = await client.put(
+            f"{api_url}/api/internal/adapter/checkpoint",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "tenant_id": tenant_id,
+                "source": "wazuh",
+                "cursor_ts": cursor_ts,
+                "batch_seq": _state.batch_seq,
+                "dropped_total": _state.alerts_dropped_rate_limit,
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("checkpoint_save_failed: %s", e)
+
+
 async def _heartbeat_once(client: httpx.AsyncClient) -> None:
     api_url = os.environ["SOCTALK_API_URL"].rstrip("/")
     tenant_id = os.environ["SOCTALK_TENANT_ID"]
     token = _read_token()
+    # Coverage metrics on the heartbeat (issue #17 fix 10, Alertmanager-style
+    # loss accounting): the control plane can tell a quiet tenant from a
+    # dropping one, and see ingest throughput without a separate channel.
+    metrics = {
+        "alerts_queried": _state.alerts_queried,
+        "alerts_forwarded": _state.alerts_forwarded,
+        "alerts_duplicate": _state.alerts_duplicate,
+        "alerts_dropped_rate_limit": _state.alerts_dropped_rate_limit,
+        "batch_seq": _state.batch_seq,
+        "last_alert_ts": _state.last_alert_ts,
+        "last_ingest_error": _state.last_ingest_error,
+    }
     resp = await client.post(
         f"{api_url}/api/internal/adapter/heartbeat",
         headers={"Authorization": f"Bearer {token}"},
-        json={"tenant_id": tenant_id, "version": VERSION, "health": "ok"},
+        json={"tenant_id": tenant_id, "version": VERSION, "health": "ok",
+              "metrics": metrics},
         timeout=10.0,
     )
     resp.raise_for_status()
@@ -395,9 +546,14 @@ async def _ingest_loop() -> None:
         httpx.AsyncClient(verify=verify_api_tls) as api_client,
         httpx.AsyncClient(verify=verify_indexer_tls) as wazuh_client,
     ):
+        # Durable checkpoint resume (issue #17 fix 6): pull the server-side
+        # cursor once at start so a pod restart continues instead of
+        # replaying from the in-memory initial cursor.
+        await _load_checkpoint(api_client, api_url, tenant_id, token)
         while True:
             try:
                 hits = await _query_alerts(wazuh_client, _state.last_alert_ts, batch_size)
+                _state.alerts_queried += len(hits)
                 if hits:
                     events: list[dict] = []
                     new_high = _state.last_alert_ts
@@ -431,20 +587,39 @@ async def _ingest_loop() -> None:
                         # while newer alerts queue behind them.
                         if allowed == 0 and new_high > _state.last_alert_ts:
                             _state.last_alert_ts = new_high
+                            # Persist the advanced cursor + drop count so a
+                            # restart doesn't re-fetch and re-drop the same
+                            # flood (loss recorded, not silently replayed).
+                            await _save_checkpoint(
+                                api_client, api_url, tenant_id, token, new_high
+                            )
                     if events:
+                        _state.batch_seq += 1
                         resp = await api_client.post(
                             f"{api_url}/api/internal/adapter/events",
                             headers={"Authorization": f"Bearer {token}"},
-                            json={"tenant_id": tenant_id, "events": events},
+                            json={
+                                "tenant_id": tenant_id,
+                                "events": events,
+                                "schema_version": SCHEMA_VERSION,
+                                "batch_seq": _state.batch_seq,
+                            },
                             timeout=30.0,
                         )
                         resp.raise_for_status()
-                        _state.alerts_forwarded += len(events)
+                        body = resp.json()
+                        dup = (body.get("action_counts") or {}).get("duplicate", 0)
+                        _state.alerts_duplicate += dup
+                        _state.alerts_forwarded += len(events) - dup
                         _state.last_alert_ts = new_high
                         _state.last_ingest_error = None
+                        await _save_checkpoint(
+                            api_client, api_url, tenant_id, token, new_high
+                        )
                         logger.info(
-                            "ingest_ok forwarded=%d total=%d highwater=%s",
-                            len(events),
+                            "ingest_ok forwarded=%d duplicate=%d total=%d highwater=%s",
+                            len(events) - dup,
+                            dup,
                             _state.alerts_forwarded,
                             new_high,
                         )
@@ -487,8 +662,12 @@ async def ready() -> dict:
         if _state.last_heartbeat_ok
         else None,
         "last_heartbeat_error": _state.last_heartbeat_error,
+        "alerts_queried": _state.alerts_queried,
         "alerts_forwarded": _state.alerts_forwarded,
+        "alerts_duplicate": _state.alerts_duplicate,
         "alerts_dropped_rate_limit": _state.alerts_dropped_rate_limit,
+        "batch_seq": _state.batch_seq,
+        "checkpoint_loaded": _state.checkpoint_loaded,
         "last_alert_ts": _state.last_alert_ts,
         "last_ingest_error": _state.last_ingest_error,
     }

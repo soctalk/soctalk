@@ -254,6 +254,11 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         "level": level,
         "rule_id": rule.get("id"),
         "rule_description": rule_desc,
+        # Rule semantics from the evidence store (issue #17 T6) so the
+        # supervisor context can surface technique-aware signal.
+        "mitre": alert.get("mitre") or {},
+        "rule_groups": alert.get("rule_groups") or [],
+        "entities": alert.get("entities") or [],
         "source": {
             "agent_id": asset_name,
             "agent_name": asset_name,

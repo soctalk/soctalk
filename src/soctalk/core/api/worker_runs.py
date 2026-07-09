@@ -172,12 +172,21 @@ async def claim_run(request: Request) -> ClaimedRun | None:
             await db.execute(
                 text(
                     """
-                    SELECT id, source, rule_id, severity, signature,
-                           source_event_ids, asset_ids, initial_iocs,
-                           ai_assessment
-                    FROM alerts
-                    WHERE investigation_id = :c
-                    ORDER BY first_event_at DESC
+                    SELECT a.id, a.source, a.rule_id, a.severity, a.signature,
+                           a.source_event_ids, a.asset_ids, a.initial_iocs,
+                           a.ai_assessment, a.description,
+                           se.mitre AS mitre, se.rule_groups AS rule_groups,
+                           se.entities AS entities
+                    FROM alerts a
+                    LEFT JOIN LATERAL (
+                        SELECT mitre, rule_groups, entities
+                        FROM alert_source_events
+                        WHERE alert_id = a.id
+                        ORDER BY ingested_at DESC
+                        LIMIT 1
+                    ) se ON true
+                    WHERE a.investigation_id = :c
+                    ORDER BY a.first_event_at DESC
                     LIMIT 1
                     """
                 ),
@@ -207,10 +216,17 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 "level": int(alert["severity"] or 0),
             },
             "signature": alert["signature"],
-            "description": alert["ai_assessment"],
+            # #17 fix 3: prefer the dedicated description column; fall back to
+            # ai_assessment for rows written before v1_0018.
+            "description": alert["description"] or alert["ai_assessment"],
             "source_event_ids": list(alert["source_event_ids"] or []),
             "asset_ids": list(alert["asset_ids"] or []),
             "initial_iocs": list(alert["initial_iocs"] or []),
+            # #17 fix 2/T6: rule semantics from the evidence store so the
+            # supervisor context can show MITRE / rule groups / entities.
+            "mitre": alert["mitre"] or {},
+            "rule_groups": list(alert["rule_groups"] or []),
+            "entities": list(alert["entities"] or []),
         }
 
     return ClaimedRun(
