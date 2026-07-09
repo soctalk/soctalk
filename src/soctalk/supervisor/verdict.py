@@ -251,7 +251,12 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
     if started_at:
         if isinstance(started_at, str):
             started_at = datetime.fromisoformat(started_at)
-        duration = datetime.now() - started_at
+        now = (
+            datetime.now(started_at.tzinfo)
+            if started_at.tzinfo is not None
+            else datetime.now()
+        )
+        duration = now - started_at
         duration_str = f"{duration.total_seconds():.0f} seconds"
     else:
         duration_str = "unknown"
