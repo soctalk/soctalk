@@ -1,0 +1,253 @@
+# Golden triage cases for the eval harness (soctalk.evals.triage).
+#
+# Each case fabricates the investigation state the supervisor / verdict
+# nodes actually consume, plus expectations:
+#   expect.routing_actions   — acceptable first supervisor action(s)
+#   expect.verdict_decisions — acceptable final decision(s)
+#   expect.confidence_min/max — tolerance band on verdict confidence
+# kind: routing | verdict | both
+#
+# Keep cases *behaviorally* unambiguous: an expectation should only encode
+# what a competent analyst would call obviously right. Genuinely ambiguous
+# scenarios list multiple acceptable outcomes.
+
+cases:
+  # ---------------------------------------------------------------- clear TPs
+  - id: ransomware-fileshare-tp
+    kind: verdict
+    description: Mass encryption on a file share, malicious C2 IP confirmed.
+    iteration_count: 4
+    investigation:
+      title: Possible ransomware activity on file share
+      alerts:
+        - severity: critical
+          level: 12
+          rule_description: "Mass file rename with entropy spike; smbd writing .locked extensions; outbound to rare IP"
+          source: {agent_name: fileserver-02}
+      enrichments:
+        - verdict: malicious
+          observable: {type: ip, value: 198.51.100.44}
+          analyzer: AbuseIPDB
+          confidence: 0.97
+      findings:
+        - severity: critical
+          description: "vssadmin delete shadows executed; 40k files renamed in 6 minutes"
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.9
+      action_reasoning: "Encryption behavior plus confirmed-malicious C2 IP"
+    expect:
+      verdict_decisions: [escalate]
+      confidence_min: 0.6
+
+  - id: bruteforce-then-login-tp
+    kind: verdict
+    description: SSH brute force followed by successful login from confirmed bad IP.
+    iteration_count: 3
+    investigation:
+      title: SSH brute force then successful login on bastion
+      alerts:
+        - severity: high
+          level: 10
+          rule_description: "40 failed SSH logins in 90s from single external IP followed by accepted password for user deploy"
+          source: {agent_name: bastion-01}
+      enrichments:
+        - verdict: malicious
+          observable: {type: ip, value: 203.0.113.99}
+          analyzer: AbuseIPDB
+          confidence: 0.95
+      findings: []
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.85
+      action_reasoning: "Successful auth after brute force from known-malicious source"
+    expect:
+      verdict_decisions: [escalate]
+      confidence_min: 0.55
+
+  - id: webshell-c2-tp
+    kind: verdict
+    description: Webshell execution with MISP-attributed C2 infrastructure.
+    iteration_count: 5
+    investigation:
+      title: Webshell on app server with C2 callback
+      alerts:
+        - severity: high
+          level: 11
+          rule_description: "www-data executed binary from /tmp followed by periodic beaconing to external IP"
+          source: {agent_name: app-03}
+      enrichments:
+        - verdict: malicious
+          observable: {type: ip, value: 192.0.2.77}
+          analyzer: VirusTotal
+          confidence: 0.9
+      findings:
+        - severity: high
+          description: "Beacon interval 60s +/- 2s to 192.0.2.77:443, consistent with C2"
+      misp_context:
+        matches:
+          - {value: 192.0.2.77, type: ip-dst, event_ids: ["3021"], to_ids: true}
+        threat_actors: [FIN-EXAMPLE]
+        campaigns: []
+        warninglist_hits: []
+        checked_iocs: [192.0.2.77]
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.9
+      action_reasoning: "Malicious verdicts plus MISP attribution"
+    expect:
+      verdict_decisions: [escalate]
+      confidence_min: 0.7
+
+  # ---------------------------------------------------------------- clear FPs
+  - id: internal-scanner-fp
+    kind: verdict
+    description: Web 404 burst from the org's own vulnerability scanner, benign enrichment, MISP warninglist hit.
+    iteration_count: 3
+    investigation:
+      title: Web attack pattern from internal scanner
+      alerts:
+        - severity: medium
+          level: 6
+          rule_description: "Burst of 404/403 responses from single internal source 10.10.5.20 (hostname: qualys-scanner-01) during scheduled scan window"
+          source: {agent_name: web-01}
+      enrichments:
+        - verdict: benign
+          observable: {type: ip, value: 10.10.5.20}
+          analyzer: AbuseIPDB
+          confidence: 0.9
+          details: {note: "private address space, zero abuse reports"}
+      findings: []
+      misp_context:
+        matches: []
+        threat_actors: []
+        campaigns: []
+        warninglist_hits: [{value: 10.10.5.20, list: "org-authorized-scanners"}]
+        checked_iocs: [10.10.5.20]
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.1
+      action_reasoning: "Known authorized scanner during scan window"
+    expect:
+      verdict_decisions: [close]
+      confidence_min: 0.5
+
+  - id: maintenance-window-fp
+    kind: verdict
+    description: Service account created a scheduled task during a documented change window; everything benign.
+    iteration_count: 2
+    investigation:
+      title: Scheduled task created by service account
+      alerts:
+        - severity: medium
+          level: 5
+          rule_description: "Scheduled task 'patch-reboot-window' created by CORP\\svc-sccm during approved change CHG-4411; binary path C:\\Program Files\\SCCM\\agent.exe (signed)"
+          source: {agent_name: win-app-11}
+      enrichments: []
+      findings:
+        - severity: low
+          description: "Task binary is vendor-signed SCCM agent; creation time matches approved change window"
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.1
+      action_reasoning: "Documented change activity by expected account"
+    expect:
+      verdict_decisions: [close]
+      confidence_min: 0.5
+
+  # ---------------------------------------------------------------- ambiguous
+  # KNOWN-SENSITIVE: encodes a conservative-SOC stance (don't close on a
+  # suspicious newly-registered domain without more info). claude-sonnet-4-6
+  # currently answers close@~0.6 — this case is the calibration probe; if
+  # more cases start failing alongside it, prompts/model have regressed.
+  - id: rare-outbound-ambiguous
+    kind: verdict
+    description: Single rare outbound connection, enrichment inconclusive — no strong evidence either way.
+    iteration_count: 4
+    investigation:
+      title: Rare outbound connection from workstation
+      alerts:
+        - severity: medium
+          level: 7
+          rule_description: "Workstation made a single outbound HTTPS connection to a domain registered 12 days ago; no payload visibility"
+          source: {agent_name: ws-0142}
+      enrichments:
+        - verdict: suspicious
+          observable: {type: domain, value: cdn-metrics-sync.example}
+          analyzer: VirusTotal
+          confidence: 0.4
+          details: {note: "2/90 vendors flag; newly registered"}
+      findings: []
+    supervisor_assessment:
+      next_action: VERDICT
+      tp_confidence: 0.5
+      action_reasoning: "Inconclusive enrichment after full pipeline"
+    expect:
+      verdict_decisions: [needs_more_info, escalate]
+      confidence_min: 0.0
+
+  # ---------------------------------------------------------------- routing
+  - id: routing-pending-observables
+    kind: routing
+    description: Fresh alert with un-enriched observables — first move must be ENRICH.
+    iteration_count: 0
+    investigation:
+      title: Suspicious login burst
+      alerts:
+        - severity: 9
+          rule_description: "Multiple failed logins followed by success from external IP"
+          source: {agent_name: bastion-01}
+      enrichments: []
+      findings: []
+    pending_observables:
+      - {type: ip, value: 203.0.113.7}
+    expect:
+      routing_actions: [ENRICH]
+
+  - id: routing-enriched-needs-verdict
+    kind: routing
+    description: Everything enriched and contextualized, high confidence — go to VERDICT (CLOSE also defensible for a benign picture).
+    iteration_count: 6
+    investigation:
+      title: Authentication anomaly investigation
+      alerts:
+        - severity: 9
+          rule_description: "SSH brute force followed by successful login"
+          source: {agent_name: bastion-01}
+      enrichments:
+        - verdict: malicious
+          observable: {type: ip, value: 203.0.113.99}
+          analyzer: AbuseIPDB
+          confidence: 0.95
+      findings:
+        - severity: high
+          description: "Login session spawned reverse shell to same IP"
+      misp_context:
+        matches: [{value: 203.0.113.99, type: ip-dst, event_ids: ["8812"], to_ids: true}]
+        threat_actors: []
+        campaigns: []
+        warninglist_hits: []
+        checked_iocs: [203.0.113.99]
+    pending_observables: []
+    expect:
+      routing_actions: [VERDICT]
+
+  - id: routing-malicious-needs-context
+    kind: routing
+    description: Malicious enrichment in hand but no MISP context yet — CONTEXTUALIZE or INVESTIGATE are both sound; VERDICT acceptable for a decisive router.
+    iteration_count: 2
+    investigation:
+      title: Malware hash detected
+      alerts:
+        - severity: 10
+          rule_description: "Known-bad SHA256 written to disk by browser process"
+          source: {agent_name: ws-0201}
+      enrichments:
+        - verdict: malicious
+          observable: {type: hash_sha256, value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+          analyzer: VirusTotal
+          confidence: 0.98
+      findings: []
+    pending_observables: []
+    expect:
+      routing_actions: [CONTEXTUALIZE, INVESTIGATE, VERDICT]
