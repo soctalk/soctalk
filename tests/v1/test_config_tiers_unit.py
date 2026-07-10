@@ -90,6 +90,20 @@ def test_single_provider_leaves_tiers_empty(clean_env):
     assert cfg.tiers == {}
 
 
+def test_chat_sampling_defaults_and_env_override(clean_env):
+    # Chat sampling lifted from hardcoded literals into config (#10).
+    default = clean_env(ANTHROPIC_API_KEY="ak")
+    assert default.chat_temperature == 0.2
+    assert default.chat_max_tokens == 2048
+    tuned = clean_env(
+        ANTHROPIC_API_KEY="ak",
+        SOCTALK_CHAT_TEMPERATURE="0.5",
+        SOCTALK_CHAT_MAX_TOKENS="4096",
+    )
+    assert tuned.chat_temperature == 0.5
+    assert tuned.chat_max_tokens == 4096
+
+
 def test_model_only_tier_var_creates_no_override(clean_env):
     # A bare per-tier MODEL (no provider/base_url/engine) must not materialize a
     # tier — otherwise it would relax the mutual-exclusion guard for a plain

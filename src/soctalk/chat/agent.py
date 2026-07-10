@@ -19,9 +19,9 @@ Loop shape:
      message.
    - If tool call: emit ``tool_call``; dispatch; emit ``tool_result``;
      append to history; re-invoke.
-   - If structured ``proposed_action`` (the model formats it as JSON
-     inside a delimited block): emit ``proposed_action``, persist as
-     ``role='action'`` chat_messages row.
+   - If a ``propose_action`` tool call (schema-enforced structured
+     output, issue #10): validate + emit ``proposed_action``, persist
+     as a ``role='action'`` chat_messages row.
 6. After end-of-turn, emit ``usage`` and ``done``.
 
 Mid-stream concerns:
@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
@@ -93,9 +92,9 @@ def _find_tool(name: str, pool: list[ChatTool]) -> ChatTool | None:
     return None
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
+from soctalk.inference import InferenceTier, resolve_tier
 from soctalk.llm import create_chat_model
 from soctalk.supervisor.verdict import _classify_llm_error
-
 
 logger = structlog.get_logger()
 
@@ -107,12 +106,81 @@ DEFAULT_KEEP_FULL_TURNS = 2  # last N user+assistant turn pairs
 MAX_TOOL_ITERATIONS = 6  # safety net for runaway tool loops
 
 
-# Pattern the model uses to emit a structured proposed action inside
-# its prose. JSON between ``<action>`` … ``</action>`` markers so the
-# normal text stream can intersperse explanation around it.
-_ACTION_BLOCK_RE = re.compile(
-    r"<action>\s*(\{.*?\})\s*</action>", re.DOTALL | re.IGNORECASE
-)
+# The model proposes a review action by CALLING this tool (issue #10) — a
+# schema-enforced structured output, the same mechanism triage uses, replacing
+# the old free-text ``<action>{json}</action>`` block the loop regex-parsed. The
+# tool never executes anything: it surfaces a confirm button; ``actions.
+# dispatch_confirm`` runs the call server-side only when the analyst confirms.
+_PROPOSE_ACTION_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "propose_action",
+        "description": (
+            "Propose a review action for the analyst to confirm. This surfaces a "
+            "confirmation button in the UI; it does NOT execute until the analyst "
+            "clicks Confirm. Use the exact target.id returned by a prior tool call — "
+            "never invent IDs. Never include URLs."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": sorted(actions.ALLOWED_ACTIONS),
+                    "description": "The review action verb.",
+                },
+                "target": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["pending_review", "investigation"]},
+                        "id": {"type": "string", "description": "UUID from a tool result."},
+                        "title": {"type": "string"},
+                    },
+                    "required": ["kind", "id"],
+                },
+                "reason": {"type": "string", "description": "One-sentence justification."},
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Supporting facts drawn from tool results.",
+                },
+                "confidence": {"type": "number", "description": "Confidence in [0,1]."},
+                "feedback": {"type": "string", "description": "Optional note stored with the decision."},
+            },
+            "required": ["action", "target", "reason"],
+        },
+    },
+}
+
+
+def _handle_propose_action(targs: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """Map a ``propose_action`` tool call to a proposed-action payload.
+
+    Returns ``(payload, ack)`` — ``payload`` is None when the args fail
+    validation, and ``ack`` is the ToolMessage content fed back to the model so
+    it learns the outcome (surfaced, or rejected-with-reason so it can retry).
+    Validation lives in ``actions.build_proposed_action`` (unchanged) — the
+    model is never trusted to point at endpoints.
+    """
+    target = targs.get("target") or {}
+    try:
+        payload = actions.build_proposed_action(
+            action=targs.get("action"),
+            target_kind=target.get("kind"),
+            target_id=target.get("id"),
+            target_title=target.get("title"),
+            reason=targs.get("reason") or "",
+            evidence=targs.get("evidence") or [],
+            confidence=targs.get("confidence"),
+            feedback=targs.get("feedback"),
+        )
+        return payload, "Action surfaced to the analyst for confirmation."
+    except (ValueError, KeyError, TypeError) as e:
+        logger.warning("chat_propose_action_invalid err=%s", str(e))
+        return None, (
+            f"propose_action rejected: {e}. Fix the arguments and call it again, "
+            "or continue without proposing an action."
+        )
 
 
 @dataclass(slots=True)
@@ -587,20 +655,29 @@ async def run_turn(
     if last_user_text != ctx.user_text:
         messages.append(HumanMessage(content=ctx.user_text))
 
-    # 3. Set up the model with tools.
+    # 3. Set up the model with tools. Resolve the CHAT tier (issue #10/#4) so
+    # chat inherits per-tier provider/base_url/engine + scoped credentials, and
+    # its sampling comes from config rather than hardcoded literals. The
+    # per-conversation model (ctx.model_name) is preserved as the tier override.
     app_config = get_config()
+    resolved = resolve_tier(
+        app_config.llm, InferenceTier.CHAT, model_override=ctx.model_name
+    )
     llm = create_chat_model(
-        app_config.llm,
-        model=ctx.model_name,
-        temperature=0.2,
-        max_tokens=2048,
+        resolved.llm_config,
+        model=resolved.model,
+        temperature=app_config.llm.chat_temperature,
+        max_tokens=app_config.llm.chat_max_tokens,
     )
     # Snapshot the active toolset for this turn — read-only DB tools
-    # plus whatever MCP servers (Wazuh, Cortex, …) are currently bound.
+    # plus whatever MCP servers (Wazuh, Cortex, …) are currently bound,
+    # plus the propose_action tool the model calls to surface a review action.
     # Fleet roll-ups are filtered out for tenant-scope conversations.
     active_pool = _active_tools(ctx.scope)
     try:
-        llm = llm.bind_tools(_tool_specs_for_binding(active_pool))
+        llm = llm.bind_tools(
+            _tool_specs_for_binding(active_pool) + [_PROPOSE_ACTION_TOOL]
+        )
     except (AttributeError, TypeError):
         # Some providers don't support bind_tools; the loop still
         # works as a chat-only agent without tool calls.
@@ -614,6 +691,10 @@ async def run_turn(
     total_turn_dollars = 0.0
     iterations = 0
     stop_reason = "end_turn"
+    # Hoisted above the loop: the model calls propose_action on one iteration
+    # and finishes on a later one, so this must survive across iterations to be
+    # persisted after the turn. Last proposal wins.
+    action_payload: dict[str, Any] | None = None
 
     try:
         while iterations < MAX_TOOL_ITERATIONS:
@@ -640,8 +721,7 @@ async def run_turn(
             # Anthropic-via-LangChain returns ``response.content`` as
             # *either* a plain string (text-only turn) or a list of
             # content blocks (text + tool_use mixed). Flatten to a
-            # single string so the action-block regex + delta stream
-            # work uniformly.
+            # single string so the delta stream works uniformly.
             raw_content = response.content
             if isinstance(raw_content, list):
                 response_text = "".join(
@@ -657,48 +737,17 @@ async def run_turn(
             # next iteration even if tool calls.
             messages.append(response)
 
-            # Check for a structured proposed_action block embedded in
-            # the prose. Multiple blocks per turn are unusual but we
-            # tolerate; only the first one is persisted in Phase 1.
-            action_payload: dict[str, Any] | None = None
-            for m in _ACTION_BLOCK_RE.finditer(response_text):
-                try:
-                    raw = json.loads(m.group(1))
-                    payload = actions.build_proposed_action(
-                        action=raw.get("action"),
-                        target_kind=(raw.get("target") or {}).get("kind"),
-                        target_id=(raw.get("target") or {}).get("id"),
-                        target_title=(raw.get("target") or {}).get("title"),
-                        reason=raw.get("reason") or "",
-                        evidence=raw.get("evidence") or [],
-                        confidence=raw.get("confidence"),
-                        feedback=raw.get("feedback"),
-                    )
-                    action_payload = payload
-                    break
-                except (ValueError, KeyError, json.JSONDecodeError) as e:
-                    logger.warning(
-                        "chat_action_parse_failed err=%s block=%s",
-                        str(e),
-                        m.group(1)[:100],
-                    )
-                    continue
-
-            # Strip the action block from the text we stream to the
-            # user so they see the analyst-friendly paragraph, not
-            # the JSON.
-            display_text = _ACTION_BLOCK_RE.sub("", response_text).strip()
-
             # Stream the text content. (No real token streaming since
             # langchain-anthropic's ainvoke returns the full message;
             # we surface it as one delta. For real streaming we'd use
-            # astream — Phase 1 ships ainvoke for simplicity.)
+            # astream — Phase 1 ships ainvoke for simplicity.) Action
+            # proposals no longer live in the prose — they arrive as
+            # propose_action tool calls (below), so the text is streamed
+            # verbatim with no block-stripping.
+            display_text = response_text.strip()
             if display_text:
                 assistant_text_buf += display_text
                 yield sse.delta(display_text)
-
-            if action_payload is not None:
-                yield sse.proposed_action(action_payload)
 
             if not tool_calls:
                 # Model done with tools; exit the loop after streaming.
@@ -712,6 +761,17 @@ async def run_turn(
                 targs = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None) or {}
                 call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
                 call_id = call_id or str(uuid4())
+
+                # propose_action is a structured proposal, not a data tool:
+                # validate + surface the confirm button, ack back to the model,
+                # and skip the normal dispatch/persist path.
+                if tname == "propose_action":
+                    payload, ack = _handle_propose_action(targs or {})
+                    if payload is not None:
+                        action_payload = payload
+                        yield sse.proposed_action(payload)
+                    messages.append(ToolMessage(content=ack, tool_call_id=call_id))
+                    continue
 
                 tool = _find_tool(tname or "", active_pool)
                 yield sse.tool_call(call_id, tname or "", targs or {})
