@@ -58,6 +58,11 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # observation relationships into the memory graph. Off by default (new
     # per-alert write volume); enable per-tenant.
     "entity_graph_enabled": False,
+    # Learned correlation scorer (issue #30): REVIEW-ONLY suggestions for
+    # attaches the deterministic predicate missed. Never auto-attaches; off
+    # by default and only enabled per-tenant after the offline spike gate
+    # (soctalk.evals.correlation) proves precision.
+    "correlation_scorer_enabled": False,
     # Visibility
     # ``customer_safe_promotion`` controls how a freshly-promoted investigation
     # gets its initial visibility:
