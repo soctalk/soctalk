@@ -193,8 +193,12 @@ spec:
     # Outbound LLM calls. Port derived from the configured LLM base URL so
     # self-hosted OpenAI-compatible endpoints on non-standard ports
     # (Ollama :11434, vLLM :8000, LiteLLM, …) work; defaults to 443 (https).
+    {{- /* Per-tier backends (issue #12) on distinct ports add to this port-union. */}}
     - ports:
         - { port: {{ .Values.networkPolicies.llmEgressPort | default 443 }}, protocol: TCP }
+        {{- range .Values.networkPolicies.extraLlmEgressPorts }}
+        - { port: {{ . }}, protocol: TCP }
+        {{- end }}
 ---
 {{/*
 Wazuh agent ingress allow: see wazuh-ingress for the MSSP-edge SNI proxy pattern.

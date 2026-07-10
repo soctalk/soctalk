@@ -63,12 +63,63 @@ spec:
             */}}
             {{- $provRaw := .Values.llm.provider | default "anthropic" }}
             {{- $prov := ternary "openai" $provRaw (eq $provRaw "openai-compatible") }}
+            {{- $tiers := .Values.llm.tiers | default dict }}
+            {{- $tierKeys := .Values.llm.tierKeys | default dict }}
             - name: SOCTALK_LLM_PROVIDER
               value: {{ $prov | quote }}
+            {{- /*
+              Per-tier LLM backends (issue #12). When a tier block is present the
+              worker gets the full SOCTALK_<TIER>_* env (provider is required so
+              #4's resolver materializes the tier and the mutual-exclusion guard
+              relaxes); its own key rides in tenant-llm-key/<tier>_api_key. When a
+              tier is absent, the legacy single-provider *_MODEL line is emitted
+              instead — one source per env name, byte-identical to the pre-#12
+              render for single-provider tenants.
+            */}}
+            {{- if $tiers.fast }}
+            - name: SOCTALK_FAST_PROVIDER
+              value: {{ $tiers.fast.provider | quote }}
+            - name: SOCTALK_FAST_MODEL
+              value: {{ $tiers.fast.model | quote }}
+            - name: SOCTALK_FAST_BASE_URL
+              value: {{ $tiers.fast.baseUrl | quote }}
+            {{- if $tiers.fast.engine }}
+            - name: SOCTALK_FAST_ENGINE
+              value: {{ $tiers.fast.engine | quote }}
+            {{- end }}
+            {{- if hasKey $tierKeys "fast" }}
+            - name: SOCTALK_FAST_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.apiKeyRef.name | quote }}
+                  key: fast_api_key
+            {{- end }}
+            {{- else }}
             - name: SOCTALK_FAST_MODEL
               value: {{ .Values.runsWorker.fastModel | default .Values.llm.model | quote }}
+            {{- end }}
+            {{- if $tiers.reasoning }}
+            - name: SOCTALK_REASONING_PROVIDER
+              value: {{ $tiers.reasoning.provider | quote }}
+            - name: SOCTALK_REASONING_MODEL
+              value: {{ $tiers.reasoning.model | quote }}
+            - name: SOCTALK_REASONING_BASE_URL
+              value: {{ $tiers.reasoning.baseUrl | quote }}
+            {{- if $tiers.reasoning.engine }}
+            - name: SOCTALK_REASONING_ENGINE
+              value: {{ $tiers.reasoning.engine | quote }}
+            {{- end }}
+            {{- if hasKey $tierKeys "reasoning" }}
+            - name: SOCTALK_REASONING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.apiKeyRef.name | quote }}
+                  key: reasoning_api_key
+            {{- end }}
+            {{- else }}
             - name: SOCTALK_REASONING_MODEL
               value: {{ .Values.runsWorker.reasoningModel | default .Values.llm.model | quote }}
+            {{- end }}
             {{- /*
                 Base-URL handling — only emit the provider-specific
                 env var when the operator-configured ``llm.baseUrl``
