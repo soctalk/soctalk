@@ -24,7 +24,6 @@ from soctalk.llm import (
 )
 from soctalk.models.state import SupervisorDecision
 
-
 # ---------------------------------------------------------------------------
 # classify_llm_error
 # ---------------------------------------------------------------------------
@@ -71,6 +70,20 @@ def test_create_chat_model_bounds_timeout_and_retries():
     m = create_chat_model(cfg, model="claude-sonnet-4-6", temperature=0, max_tokens=64)
     assert m.default_request_timeout == 45.0
     assert m.max_retries == 1
+
+
+def test_create_chat_model_openai_passes_scoped_api_key():
+    # The OpenAI branch must pass the configured key explicitly (not rely on
+    # ambient OPENAI_API_KEY) so per-tier scoped api_key overlays (#32) reach
+    # the client — regression for a key that was validated but never forwarded.
+    cfg = LLMConfig(
+        provider="openai",
+        openai_api_key="sk-scoped-xyz",
+        fast_model="gpt-4o",
+        reasoning_model="gpt-4o",
+    )
+    m = create_chat_model(cfg, model="gpt-4o", temperature=0, max_tokens=64)
+    assert m.openai_api_key.get_secret_value() == "sk-scoped-xyz"
 
 
 # ---------------------------------------------------------------------------
