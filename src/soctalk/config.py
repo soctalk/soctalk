@@ -61,6 +61,76 @@ class Config(BaseModel):
     log_format: str = "json"
 
 
+# Per-tier LLM env prefixes (issue #4). Each tier can override provider /
+# base_url / engine / model / api_key / decoding mode independently, so the
+# high-volume router loop can ride a cheap self-hosted (OpenAI-compatible)
+# endpoint while the reasoning verdict stays on a frontier model. The existing
+# single-provider vars remain the defaults for any tier left unset.
+_TIER_ENV_PREFIXES: dict[str, str] = {
+    "router": "SOCTALK_FAST",       # high-volume supervisor/router loop
+    "reasoning": "SOCTALK_REASONING",
+    "chat": "SOCTALK_CHAT",
+    "extraction": "SOCTALK_EXTRACTION",
+}
+_TIER_ENV_FIELDS: dict[str, str] = {
+    "PROVIDER": "provider",
+    "MODEL": "model",
+    "BASE_URL": "base_url",
+    "API_KEY": "api_key",
+    "ENGINE": "engine",
+    "DECODING_MODE": "default_decoding_mode",
+}
+# A tier entry is materialized only when one of these "routing-defining" fields
+# is set — a bare ``SOCTALK_FAST_MODEL`` (the historical single-provider var)
+# must NOT create a tier override, so existing deployments keep the strict
+# single-provider behaviour and the mutual-exclusion guard.
+_TIER_ROUTING_FIELDS = ("provider", "base_url", "engine")
+
+
+def _load_tier_configs() -> dict[str, dict]:
+    """Build the per-tier overlay for ``LLMConfig.tiers`` from env (issue #4).
+
+    Returns a ``{tier: {field: value}}`` map the InferenceRequest resolver
+    consumes. Only tiers that declare a provider/base_url/engine appear —
+    a model-only setting flows through the legacy ``*_MODEL`` fields instead,
+    so single-provider deployments produce an empty map (no behaviour change).
+    """
+    valid_providers = {"anthropic", "openai"}
+    tiers: dict[str, dict] = {}
+    for tier, prefix in _TIER_ENV_PREFIXES.items():
+        entry: dict[str, str] = {}
+        for suffix, field in _TIER_ENV_FIELDS.items():
+            val = (os.getenv(f"{prefix}_{suffix}") or "").strip()
+            if val:
+                entry[field] = val
+        if not any(entry.get(f) for f in _TIER_ROUTING_FIELDS):
+            continue
+        if "provider" in entry and entry["provider"] not in valid_providers:
+            raise ValueError(
+                f"Invalid {prefix}_PROVIDER={entry['provider']!r}. Expected 'anthropic' or 'openai'."
+            )
+        if "engine" in entry:
+            from soctalk.inference import ProviderEngine
+            try:
+                ProviderEngine(entry["engine"])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid {prefix}_ENGINE={entry['engine']!r}. "
+                    f"Expected one of {[m.value for m in ProviderEngine]}."
+                ) from e
+        if "default_decoding_mode" in entry:
+            from soctalk.inference import DecodingMode
+            try:
+                DecodingMode(entry["default_decoding_mode"])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid {prefix}_DECODING_MODE={entry['default_decoding_mode']!r}. "
+                    f"Expected one of {[m.value for m in DecodingMode]}."
+                ) from e
+        tiers[tier] = entry
+    return tiers
+
+
 def load_config(env_file: Optional[Path] = None) -> Config:
     """Load configuration from environment variables.
 
@@ -179,20 +249,38 @@ def load_config(env_file: Optional[Path] = None) -> Config:
             f"Invalid SOCTALK_LLM_PROVIDER={provider_preference!r}. Expected 'anthropic' or 'openai'."
         )
 
-    if anthropic_api_key and openai_api_key:
+    # Per-tier provider overlay (issue #4). When present, the deployment has
+    # opted into mixed-provider triage (e.g. self-hosted router + frontier
+    # verdict), so both API keys may legitimately be set — the resolver scopes
+    # each call to a single provider. Absent overrides keep the strict
+    # single-provider guard.
+    tier_configs = _load_tier_configs()
+
+    if anthropic_api_key and openai_api_key and not tier_configs:
         raise ValueError(
             "Both ANTHROPIC_API_KEY and OPENAI_API_KEY are set. "
-            "SocTalk supports either Anthropic or an OpenAI-compatible provider (mutually exclusive). "
+            "SocTalk supports either Anthropic or an OpenAI-compatible provider (mutually exclusive) "
+            "unless per-tier providers are configured (SOCTALK_<TIER>_PROVIDER). "
             "Unset one of the keys."
         )
 
-    provider = provider_preference or ("openai" if openai_api_key else "anthropic")
-
-    # Auto-correct provider if a key is present for the other provider.
-    if provider == "anthropic" and not anthropic_api_key and openai_api_key:
-        provider = "openai"
-    if provider == "openai" and not openai_api_key and anthropic_api_key:
+    if provider_preference:
+        provider = provider_preference
+    elif anthropic_api_key and openai_api_key:
+        # Mixed mode with no explicit default — keep the historical default
+        # (anthropic) as the global/fallback provider rather than silently
+        # flipping on key presence.
         provider = "anthropic"
+    else:
+        provider = "openai" if openai_api_key else "anthropic"
+
+    # Auto-correct provider if only the other provider's key is present
+    # (single-provider convenience; skipped when both keys are set).
+    if not (anthropic_api_key and openai_api_key):
+        if provider == "anthropic" and not anthropic_api_key and openai_api_key:
+            provider = "openai"
+        if provider == "openai" and not openai_api_key and anthropic_api_key:
+            provider = "anthropic"
 
     if provider == "anthropic" and not anthropic_api_key:
         raise ValueError(
@@ -209,6 +297,7 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
         reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
         chat_model=os.getenv("SOCTALK_CHAT_MODEL", ""),
+        tiers=tier_configs,
         anthropic_api_key=anthropic_api_key,
         anthropic_base_url=_optional_env("ANTHROPIC_BASE_URL"),
         openai_api_key=openai_api_key,
