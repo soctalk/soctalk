@@ -329,3 +329,30 @@ async def test_reason_then_extract_reasoning_unconstrained_only_extract_carries_
     assert res.parsed.next_action == "VERDICT"
     assert tracked == [reasoning, extract_raw]
     assert res.text == "Here is my step-by-step analysis..."
+    # Returned usage sums BOTH calls (reasoning 10/20 + extraction 30/5).
+    assert res.usage.input_tokens == 40
+    assert res.usage.output_tokens == 25
+
+
+async def test_dispatch_honors_tier_default_decoding_mode(patch_seams):
+    # A tier that configures default_decoding_mode must have it take effect even
+    # when the request leaves decoding_mode=AUTO. json_schema_strict on an
+    # anthropic tier downgrades to tool_use (still a constrained structured call).
+    raw = AIMessage(content="", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+    fake = _FakeLLM(structured=[{"raw": raw, "parsed": _decision(), "parsing_error": None}])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"default_decoding_mode": "json_schema_strict"}})
+
+    res = await ainvoke_request(_req(), cfg=cfg)  # req.decoding_mode stays AUTO
+    assert res.parsed.next_action == "ENRICH"
+    assert res.resolved.decoding_mode == DecodingMode.TOOL_USE  # json_schema on anthropic -> tool_use
+
+
+async def test_dispatch_rejects_guided_modes_until_issue_13(patch_seams):
+    # A vLLM tier resolves AUTO+schema to guided_json, which has no served-engine
+    # shaping yet — the dispatcher must refuse loudly, not silently run it.
+    fake = _FakeLLM(structured=[])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"engine": "vllm", "base_url": "http://vllm:8000/v1"}})
+    with pytest.raises(NotImplementedError):
+        await ainvoke_request(_req(), cfg=cfg)

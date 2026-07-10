@@ -319,10 +319,24 @@ async def ainvoke_request(
     every raw response through budget.track once.
     """
     resolved = resolve_tier(cfg, req.tier, model_override=req.model_override)
+    # An explicit per-request mode wins; otherwise fall back to the tier's
+    # configured default_decoding_mode (carried on resolved) before AUTO.
+    requested_mode = req.decoding_mode
+    if requested_mode == DecodingMode.AUTO and resolved.decoding_mode != DecodingMode.AUTO:
+        requested_mode = resolved.decoding_mode
     mode = resolve_decoding_mode(
-        req.decoding_mode, engine=resolved.engine, provider=resolved.provider,
+        requested_mode, engine=resolved.engine, provider=resolved.provider,
         has_schema=req.output_schema is not None, has_grammar=req.grammar is not None,
     )
+    # Guided decoding needs the served-engine request shaping that only lands
+    # with #13; until then refuse loudly rather than silently degrade a guided
+    # request to unconstrained (a schema-less grammar request would otherwise
+    # slip through the "output_schema is None" unconstrained branch below).
+    if mode in (DecodingMode.GUIDED_JSON, DecodingMode.GUIDED_GRAMMAR):
+        raise NotImplementedError(
+            f"{mode.value} decoding requires the served-engine request shaping "
+            "from issue #13 (vLLM/SGLang guided decoding is not yet wired through)."
+        )
 
     llm = create_chat_model(
         resolved.llm_config,
@@ -347,11 +361,15 @@ async def ainvoke_request(
         parsed, raw, err, attempts = await _invoke_structured(
             llm, req.output_schema, extract_msgs, req,
         )
+        # usage covers BOTH calls (budget.track already saw each); the returned
+        # field must not undercount the reasoning tokens.
+        ru, eu = _usage_of(reasoning), _usage_of(raw)
         return InferenceResult(
             parsed=parsed, raw_message=raw,
             text=getattr(reasoning, "content", None),
             tool_calls=getattr(raw, "tool_calls", []) or [],
-            usage=_usage_of(raw),
+            usage=UsageDelta(ru.input_tokens + eu.input_tokens,
+                             ru.output_tokens + eu.output_tokens),
             resolved=replace(resolved, decoding_mode=mode), attempts=attempts + 1,
             parsing_error=err,
         )
@@ -370,10 +388,10 @@ async def ainvoke_request(
             resolved=replace(resolved, decoding_mode=mode), attempts=1,
         )
 
-    # Constrained (tool_use / json_schema / guided_json/grammar all go through
-    # with_structured_output; the engine-specific request shaping is the
-    # provider wrapper's job — the mode is recorded on ``resolved`` for the
-    # #13 tier config to key on).
+    # Constrained frontier decoding (tool_use / json_schema_strict) — both go
+    # through with_structured_output, which selects the provider mechanism.
+    # The resolved mode is recorded on ``resolved`` for observability; guided
+    # served-engine modes are rejected above until #13 wires their shaping.
     parsed, raw, err, attempts = await _invoke_structured(
         llm, req.output_schema, messages, req,
     )

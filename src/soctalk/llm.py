@@ -217,6 +217,10 @@ def create_chat_model(
 
         openai_kwargs: dict[str, Any] = {
             "model": model,
+            # Pass the configured key explicitly (mirrors the Anthropic branch)
+            # so per-tier scoped api_key overlays (issue #32 resolve_tier) reach
+            # the client instead of silently falling back to ambient OPENAI_API_KEY.
+            "api_key": llm_config.openai_api_key,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "timeout": llm_config.timeout_seconds,
@@ -238,6 +242,7 @@ def create_chat_model(
                 os.environ["OPENAI_ORGANIZATION"] = llm_config.openai_organization
             return ChatOpenAI(
                 model=model,
+                api_key=llm_config.openai_api_key,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 **kwargs,
