@@ -37,17 +37,33 @@ logger = structlog.get_logger()
 
 
 async def start_run(
-    db: AsyncSession, tenant_id: UUID, investigation_id: UUID
+    db: AsyncSession,
+    tenant_id: UUID,
+    investigation_id: UUID,
+    settle_seconds: float = 0.0,
 ) -> UUID:
-    """Create an active run for an investigation. Fails if one already exists."""
+    """Create an active run for an investigation. Fails if one already exists.
+
+    ``settle_seconds`` delays claimability (issue #28 settle window) so a
+    burst of correlated events accumulates onto the investigation before the
+    first LLM look. Pass 0 (default) for immediate claim — used for the
+    high-severity bypass and for reopens.
+    """
 
     run_id = uuid4()
     await db.execute(
         text(
-            "INSERT INTO investigation_runs (id, tenant_id, investigation_id, status) "
-            "VALUES (:id, :t, :c, 'active')"
+            "INSERT INTO investigation_runs "
+            "  (id, tenant_id, investigation_id, status, not_before) "
+            "VALUES (:id, :t, :c, 'active', "
+            "        now() + make_interval(secs => :settle))"
         ),
-        {"id": str(run_id), "t": str(tenant_id), "c": str(investigation_id)},
+        {
+            "id": str(run_id),
+            "t": str(tenant_id),
+            "c": str(investigation_id),
+            "settle": max(0.0, float(settle_seconds)),
+        },
     )
     return run_id
 

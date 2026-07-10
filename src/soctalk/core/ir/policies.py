@@ -37,6 +37,13 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # Alert triage
     "alert_severity_threshold": 3,  # >= 3 creates an investigation by default
     "coalesce_window_minutes": 5,
+    # Settle window (issue #28): a promoted investigation's run is not
+    # claimable for this many seconds, so correlated events landing right
+    # after promotion attach before the first LLM look. 0 disables (default
+    # until correlation attach lands and multi-alert investigations exist).
+    # Alerts at/above settle_bypass_severity claim immediately.
+    "settle_window_seconds": 0,
+    "settle_bypass_severity": 12,
     # Visibility
     # ``customer_safe_promotion`` controls how a freshly-promoted investigation
     # gets its initial visibility:
