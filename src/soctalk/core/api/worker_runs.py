@@ -72,7 +72,11 @@ class ClaimedRun(BaseModel):
     dollars_budget: float = 0.0
     lease_id: UUID
     lease_expires_at: datetime
+    # ``alert`` is the primary (highest-severity) alert — kept for backward
+    # compat. ``alerts`` is the full correlated set (issue #26): one run
+    # reasons over every alert #27 grouped onto the investigation.
     alert: dict[str, Any]
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HeartbeatPayload(BaseModel):
@@ -191,14 +195,13 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                         LIMIT 1
                     ) se ON true
                     WHERE a.investigation_id = :c
-                    ORDER BY a.first_event_at DESC
-                    LIMIT 1
+                    ORDER BY a.severity DESC, a.first_event_at DESC
                     """
                 ),
                 {"c": str(row["investigation_id"])},
             )
-        ).mappings().first()
-        if alert is None:
+        ).mappings().all()
+        if not alert:
             return ClaimedRun(
                 run_id=row["id"],
                 investigation_id=row["investigation_id"],
@@ -214,25 +217,24 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 },
             )
 
-        alert_payload = {
-            "id": str(alert["id"]),
-            "rule": {
-                "id": alert["rule_id"] or "?",
-                "level": int(alert["severity"] or 0),
-            },
-            "signature": alert["signature"],
-            # #17 fix 3: prefer the dedicated description column; fall back to
-            # ai_assessment for rows written before v1_0018.
-            "description": alert["description"] or alert["ai_assessment"],
-            "source_event_ids": list(alert["source_event_ids"] or []),
-            "asset_ids": list(alert["asset_ids"] or []),
-            "initial_iocs": list(alert["initial_iocs"] or []),
-            # #17 fix 2/T6: rule semantics from the evidence store so the
-            # supervisor context can show MITRE / rule groups / entities.
-            "mitre": alert["mitre"] or {},
-            "rule_groups": list(alert["rule_groups"] or []),
-            "entities": list(alert["entities"] or []),
-        }
+        alert_payloads = [
+            {
+                "id": str(a["id"]),
+                "rule": {"id": a["rule_id"] or "?", "level": int(a["severity"] or 0)},
+                "signature": a["signature"],
+                # #17 fix 3: prefer the dedicated description column; fall back
+                # to ai_assessment for rows written before v1_0018.
+                "description": a["description"] or a["ai_assessment"],
+                "source_event_ids": list(a["source_event_ids"] or []),
+                "asset_ids": list(a["asset_ids"] or []),
+                "initial_iocs": list(a["initial_iocs"] or []),
+                # #17 fix 2/T6: rule semantics from the evidence store.
+                "mitre": a["mitre"] or {},
+                "rule_groups": list(a["rule_groups"] or []),
+                "entities": list(a["entities"] or []),
+            }
+            for a in alert
+        ]
 
     return ClaimedRun(
         run_id=row["id"],
@@ -243,7 +245,8 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         dollars_budget=float(row["dollars_budget"] or 0.0),
         lease_id=lease_id,
         lease_expires_at=lease_expires,
-        alert=alert_payload,
+        alert=alert_payloads[0],
+        alerts=alert_payloads,
     )
 
 

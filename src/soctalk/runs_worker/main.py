@@ -203,70 +203,75 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
     ``signature``, ``asset_ids``, ``initial_iocs``); we project that into
     the dict shape the supervisor's prompt-builder expects.
     """
-    alert = claim["alert"]
-    rule = alert.get("rule") or {}
-    level = int(rule.get("level") or 0)
-    asset_ids = list(alert.get("asset_ids") or [])
-    iocs_in = [
-        i
-        for i in (alert.get("initial_iocs") or [])
-        if isinstance(i, dict) and i.get("value")
-    ]
-    observables = [
-        {
-            "type": i.get("type", "unknown"),
-            "value": i.get("value", ""),
-            "source": f"alert:{alert.get('id', '')}",
-        }
-        for i in iocs_in
-    ]
-    pending_observables = [
-        {**o, "source": "wazuh"} for o in observables
-    ]
-
     from datetime import datetime, timezone
     import re as _re
 
-    rule_desc = (
-        alert.get("description")
-        or alert.get("signature")
-        or rule.get("id")
-        or "unknown rule"
-    )
-    raw_log = str(alert.get("description") or "")
+    def _project(alert: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
+        rule = alert.get("rule") or {}
+        level = int(rule.get("level") or 0)
+        asset_ids = list(alert.get("asset_ids") or [])
+        iocs_in = [
+            i for i in (alert.get("initial_iocs") or [])
+            if isinstance(i, dict) and i.get("value")
+        ]
+        obs = [
+            {"type": i.get("type", "unknown"), "value": i.get("value", ""),
+             "source": f"alert:{alert.get('id', '')}"}
+            for i in iocs_in
+        ]
+        rule_desc = (
+            alert.get("description") or alert.get("signature")
+            or rule.get("id") or "unknown rule"
+        )
+        raw_log = str(alert.get("description") or "")
+        asset_name = asset_ids[1] if len(asset_ids) > 1 else (
+            asset_ids[0] if asset_ids else "unknown"
+        )
+        mm = _re.search(r"\bon\s+([A-Z][A-Z0-9-]{2,32})[:\s]", raw_log + " " + rule_desc)
+        if mm:
+            asset_name = mm.group(1)
+        return (
+            {
+                "id": str(alert.get("id", claim["run_id"])),
+                "severity": _wazuh_level_to_severity(level),
+                "level": level,
+                "rule_id": rule.get("id"),
+                "rule_description": rule_desc,
+                "mitre": alert.get("mitre") or {},
+                "rule_groups": alert.get("rule_groups") or [],
+                "entities": alert.get("entities") or [],
+                "source": {"agent_id": asset_name, "agent_name": asset_name},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "raw_data": alert,
+                "observables": obs,
+            },
+            obs,
+        )
 
-    # Pull the targeted asset name out of "...on <ASSET>: <desc>" if
-    # present (TP alerts encode it there); otherwise fall back to the
-    # Wazuh agent name. The agent that *generated* the alert and the
-    # asset under attack are not always the same in EDR-style flows.
-    asset_name = asset_ids[1] if len(asset_ids) > 1 else (
-        asset_ids[0] if asset_ids else "unknown"
-    )
-    m = _re.search(
-        r"\bon\s+([A-Z][A-Z0-9-]{2,32})[:\s]", raw_log + " " + rule_desc
-    )
-    if m:
-        asset_name = m.group(1)
+    # Multi-alert (issue #26): reason over every correlated alert #27
+    # grouped onto the investigation, not just the primary. Cap to bound
+    # prompt size; the claim already orders by severity desc so the cap
+    # keeps the most severe. Observables deduped across alerts.
+    raw_alerts = claim.get("alerts") or [claim["alert"]]
+    max_alerts = int(os.environ.get("SOCTALK_MAX_ALERTS_PER_RUN", "20"))
+    raw_alerts = raw_alerts[:max_alerts]
+    alert = claim["alert"]  # primary (highest-severity) — kept for compat below
 
-    supervisor_alert = {
-        "id": str(alert.get("id", claim["run_id"])),
-        "severity": _wazuh_level_to_severity(level),
-        "level": level,
-        "rule_id": rule.get("id"),
-        "rule_description": rule_desc,
-        # Rule semantics from the evidence store (issue #17 T6) so the
-        # supervisor context can surface technique-aware signal.
-        "mitre": alert.get("mitre") or {},
-        "rule_groups": alert.get("rule_groups") or [],
-        "entities": alert.get("entities") or [],
-        "source": {
-            "agent_id": asset_name,
-            "agent_name": asset_name,
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "raw_data": alert,
-        "observables": observables,
-    }
+    supervisor_alerts: list[dict[str, Any]] = []
+    seen_obs: set[tuple[str, str]] = set()
+    observables: list[dict] = []
+    for a in raw_alerts:
+        sa, obs = _project(a)
+        supervisor_alerts.append(sa)
+        for o in obs:
+            k = (o["type"], o["value"])
+            if k not in seen_obs:
+                seen_obs.add(k)
+                observables.append(o)
+
+    level = max((sa["level"] for sa in supervisor_alerts), default=0)
+    supervisor_alert = supervisor_alerts[0]
+    pending_observables = [{**o, "source": "wazuh"} for o in observables]
 
     # Demo-mode TI seeding: when L2 is deployed without cortex/MISP
     # (chart components.cortex.enabled=false), there's no enrichment
@@ -330,7 +335,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         "investigation_id": claim["run_id"],
         "investigation": {
             "id": claim["run_id"],
-            "alerts": [supervisor_alert],
+            "alerts": supervisor_alerts,
             "enrichments": enrichments,
             "findings": findings,
             "observables": observables,

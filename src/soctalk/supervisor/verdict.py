@@ -186,9 +186,13 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
     findings = investigation.get("findings", [])
     supervisor_decision = state.get("supervisor_decision", {})
 
-    # Format alerts
+    # Format alerts. Cap the render (issue #26 correlation can put many
+    # alerts on one investigation) so a large correlated group doesn't blow
+    # up the verdict prompt; alerts arrive severity-ordered so the cap keeps
+    # the most severe, with an explicit overflow marker.
+    _VERDICT_ALERT_CAP = 10
     alerts_lines = []
-    for alert in alerts:
+    for alert in alerts[:_VERDICT_ALERT_CAP]:
         severity = alert.get("severity", "unknown")
         desc = alert.get("rule_description", "No description")
         agent = alert.get("source", {}).get("agent_name", "unknown")
@@ -199,6 +203,12 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
         alerts_lines.append(f"**Description:** {desc}")
         alerts_lines.append(f"**Agent:** {agent}")
         alerts_lines.append(f"**Time:** {timestamp}")
+        alerts_lines.append("")
+    if len(alerts) > _VERDICT_ALERT_CAP:
+        alerts_lines.append(
+            f"... and {len(alerts) - _VERDICT_ALERT_CAP} more correlated alerts "
+            f"(showing the {_VERDICT_ALERT_CAP} most severe)"
+        )
         alerts_lines.append("")
 
     # Format enrichments
