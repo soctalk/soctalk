@@ -1,3 +1,5 @@
+# Local dev/test harness only — NOT a deployment method. SocTalk deploys on
+# k3s + Helm (see install.sh / the soctalk-system + soctalk-tenant charts).
 services:
   postgres:
     image: postgres:16-alpine
