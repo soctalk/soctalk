@@ -132,6 +132,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                     FROM investigation_runs
                     WHERE tenant_id = :t
                       AND status = 'active'
+                      AND not_before <= now()
                       AND (claimed_at IS NULL
                            OR lease_expires_at < now())
                     ORDER BY started_at ASC

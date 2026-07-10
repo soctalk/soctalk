@@ -266,8 +266,14 @@ async def promote_alert_to_case(
     tenant_id: UUID,
     alert_id: UUID,
     title: str | None = None,
+    settle_seconds: float = 0.0,
 ) -> UUID:
-    """Create an investigation from an alert, emit alert_ingested, start a run."""
+    """Create an investigation from an alert, emit alert_ingested, start a run.
+
+    ``settle_seconds`` delays the run's claimability (issue #28 settle
+    window) so correlated events landing right after this promotion attach
+    to the investigation before the first LLM look.
+    """
 
     alert = (
         await db.execute(
@@ -368,8 +374,8 @@ async def promote_alert_to_case(
         {"c": str(investigation_id), "id": str(alert_id)},
     )
 
-    # Start a run for the investigation.
-    run_id = await start_run(db, tenant_id, investigation_id)
+    # Start a run for the investigation (delayed by the settle window).
+    run_id = await start_run(db, tenant_id, investigation_id, settle_seconds=settle_seconds)
 
     # Emit alert_ingested event so the reducer seeds the hypothesis.
     await append_event(
@@ -764,9 +770,17 @@ async def triage_event(
             "action": "auto_closed",
         }
 
-    # All other bands: create an investigation.
+    # All other bands: create an investigation. Apply the settle window
+    # (issue #28) unless the alert is high-severity, which claims
+    # immediately — we don't trade latency for batching on critical alerts.
+    settle_seconds = (
+        0.0
+        if severity >= policy.get("settle_bypass_severity", 12)
+        else float(policy.get("settle_window_seconds", 0))
+    )
     investigation_id = await promote_alert_to_case(
-        db, tenant_id=tenant_id, alert_id=alert_id, title=title
+        db, tenant_id=tenant_id, alert_id=alert_id, title=title,
+        settle_seconds=settle_seconds,
     )
     return {
         "alert_id": str(alert_id),
