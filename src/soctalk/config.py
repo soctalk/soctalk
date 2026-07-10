@@ -39,6 +39,10 @@ class LLMConfig(BaseModel):
     openai_organization: Optional[str] = None
     temperature: float = 0.0
     max_tokens: int = 4096
+    # Chat-agent sampling (issue #10) — lifted out of the hardcoded literals in
+    # chat/agent.py so the chat tier's params live alongside the triage params.
+    chat_temperature: float = 0.2
+    chat_max_tokens: int = 2048
     # Transport bounds passed to the provider SDK (single retry layer).
     timeout_seconds: float = 120.0
     max_retries: int = 2
@@ -297,6 +301,8 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
         reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
         chat_model=os.getenv("SOCTALK_CHAT_MODEL", ""),
+        chat_temperature=float(os.getenv("SOCTALK_CHAT_TEMPERATURE", "0.2")),
+        chat_max_tokens=int(os.getenv("SOCTALK_CHAT_MAX_TOKENS", "2048")),
         tiers=tier_configs,
         anthropic_api_key=anthropic_api_key,
         anthropic_base_url=_optional_env("ANTHROPIC_BASE_URL"),
