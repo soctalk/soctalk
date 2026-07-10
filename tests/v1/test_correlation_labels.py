@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.labels import (
+    cancel_investigation,
     confirm_grouping,
     detach_alert,
     merge_investigations,
@@ -131,6 +132,7 @@ async def test_merge_cancels_other_investigations_run(
     """Review finding #4: merging away an investigation cancels its live run
     so no worker claims an orphaned run."""
     from uuid import uuid4
+
     from soctalk.core.ir.runtime import start_run
 
     tenant_a, _ = seed_two_tenants
@@ -170,3 +172,63 @@ async def test_detach_starts_a_run(mssp_session: AsyncSession, seed_two_tenants)
         {"c": out["new_investigation_id"]},
     )).scalar_one()
     assert runs == 1, "detached alert's new investigation must have a run"
+
+
+async def test_cancel_investigation_terminates_run_and_sets_status(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Issue #16: cancel is a terminal transition — status -> 'cancelled',
+    the live run is failed so no worker claims it, and a STATUS_CHANGED
+    event is recorded on the timeline."""
+    tenant_a, _ = seed_two_tenants
+    r = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("cx1", "hC", "5710"))
+    await mssp_session.commit()
+    inv = r["investigation_id"]
+
+    new_status = await cancel_investigation(
+        mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=inv,
+        reason="analyst closed it", actor="user:tester",
+    )
+    await mssp_session.commit()
+    assert new_status == "cancelled"
+
+    row = (await mssp_session.execute(
+        text("SELECT status, close_reason, closed_at FROM investigations WHERE id = :c"),
+        {"c": inv},
+    )).mappings().one()
+    assert row["status"] == "cancelled"
+    assert row["close_reason"] == "analyst closed it"
+    assert row["closed_at"] is not None
+
+    live = (await mssp_session.execute(
+        text("SELECT count(*) FROM investigation_runs WHERE investigation_id = :c "
+             "AND status IN ('active','paused','waiting_on_gate','halted_budget')"),
+        {"c": inv},
+    )).scalar_one()
+    assert live == 0, "cancelled investigation must have no claimable run"
+
+    events = (await mssp_session.execute(
+        text("SELECT count(*) FROM investigation_events "
+             "WHERE investigation_id = :c AND kind = 'status_changed'"),
+        {"c": inv},
+    )).scalar_one()
+    assert events >= 1, "cancel must append a STATUS_CHANGED event"
+
+
+async def test_cancel_investigation_rejects_terminal(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Cancelling an already-terminal investigation raises ValueError (the
+    endpoint maps this to HTTP 409)."""
+    tenant_a, _ = seed_two_tenants
+    r = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("cx2", "hC2", "5710"))
+    await mssp_session.commit()
+    inv = r["investigation_id"]
+
+    await cancel_investigation(mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=inv)
+    await mssp_session.commit()
+
+    with pytest.raises(ValueError):
+        await cancel_investigation(
+            mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=inv
+        )

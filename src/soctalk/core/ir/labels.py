@@ -25,6 +25,83 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.observability.audit import log_audit
 
+# Statuses from which an investigation can no longer transition.
+TERMINAL_STATUSES = (
+    "closed",
+    "auto_closed_fp",
+    "closed_fp",
+    "closed_tp",
+    "cancelled",
+)
+
+
+async def cancel_investigation(
+    db: AsyncSession, *, tenant_id: UUID, investigation_id: UUID,
+    reason: str | None = None, actor: str = "analyst",
+) -> str:
+    """Analyst cancels an investigation — a terminal transition.
+
+    Sets status to ``cancelled``, terminates the live run so no worker
+    claims an orphan (the claim query also guards on investigation status),
+    and appends a ``STATUS_CHANGED`` event for the timeline.
+
+    Assumes the caller has established the correct tenant scope (the
+    BYPASSRLS MSSP session, or an app session inside ``tenant_context``) —
+    same contract as :func:`merge_investigations`.
+
+    Raises ``LookupError`` if the investigation is absent in scope, and
+    ``ValueError`` if it is already in a terminal state.
+    """
+    from soctalk.core.ir.events import EventKind, append_event
+    from soctalk.core.ir.runtime import consume_new_events
+
+    current = (
+        await db.execute(
+            text(
+                "SELECT status FROM investigations "
+                "WHERE id = :id AND tenant_id = :t"
+            ),
+            {"id": str(investigation_id), "t": str(tenant_id)},
+        )
+    ).scalar_one_or_none()
+    if current is None:
+        raise LookupError("investigation not found")
+    if current in TERMINAL_STATUSES:
+        raise ValueError(f"already {current}")
+
+    await db.execute(
+        text(
+            "UPDATE investigations SET status = 'cancelled', closed_at = now(), "
+            "close_reason = COALESCE(:reason, close_reason, 'cancelled by analyst'), "
+            "updated_at = now() WHERE id = :id AND tenant_id = :t"
+        ),
+        {"reason": reason, "id": str(investigation_id), "t": str(tenant_id)},
+    )
+    await db.execute(
+        text(
+            "UPDATE investigation_runs SET status = 'failed', ended_at = now(), "
+            "last_error = 'investigation cancelled' "
+            "WHERE tenant_id = :t AND investigation_id = :id "
+            "  AND status IN ('active','paused','waiting_on_gate','halted_budget')"
+        ),
+        {"t": str(tenant_id), "id": str(investigation_id)},
+    )
+    await append_event(
+        db, tenant_id=tenant_id, investigation_id=investigation_id, run_id=None,
+        kind=EventKind.STATUS_CHANGED,
+        payload={"status": "cancelled", "reason": reason, "actor": actor},
+        producer=actor,
+    )
+    # Advance the projection past the event we just wrote.
+    await consume_new_events(db, tenant_id, investigation_id)
+    await log_audit(
+        db, action="ir.investigation.cancel", actor_principal="analyst",
+        actor_id=actor, tenant_id=tenant_id,
+        resource_type="investigation", resource_id=str(investigation_id),
+        notes=reason,
+    )
+    return "cancelled"
+
 
 async def _record_label(
     db: AsyncSession, *, tenant_id: UUID, label: str,

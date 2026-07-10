@@ -171,34 +171,6 @@
 		}
 	}
 
-	async function handlePause() {
-		if (!investigationId) return;
-		actionLoading = true;
-		try {
-			const result = await api.investigations.pause(investigationId);
-			await Promise.all([refreshInvestigation(), loadEvents()]);
-			addToast({ type: 'success', message: result.message });
-		} catch (e) {
-			addToast({ type: 'error', message: e instanceof Error ? e.message : 'Failed to pause' });
-		} finally {
-			actionLoading = false;
-		}
-	}
-
-	async function handleResume() {
-		if (!investigationId) return;
-		actionLoading = true;
-		try {
-			const result = await api.investigations.resume(investigationId);
-			await Promise.all([refreshInvestigation(), loadEvents()]);
-			addToast({ type: 'success', message: result.message });
-		} catch (e) {
-			addToast({ type: 'error', message: e instanceof Error ? e.message : 'Failed to resume' });
-		} finally {
-			actionLoading = false;
-		}
-	}
-
 	async function handleCancel() {
 		if (!investigationId) return;
 		actionLoading = true;
@@ -353,42 +325,12 @@
 		</div>
 
 		<!-- Action Buttons -->
+		<!-- Cancel is the only lifecycle action wired to the backend. Pause/resume
+		     were removed (issue #16): the runs worker has no pause semantics, so
+		     those buttons would 404 or lie about backend state. Cancel is shown
+		     for any non-terminal investigation. -->
 		<div class="flex gap-2">
-			{#if investigation.status === 'in_progress'}
-					<button
-						class="btn variant-soft-warning"
-						disabled={actionLoading}
-						on:click={handlePause}
-					>
-						{#if actionLoading}
-							<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
-							Pause
-						{:else}
-							<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-							</svg>
-							Pause
-					{/if}
-				</button>
-			{:else if investigation.status === 'paused'}
-					<button
-						class="btn variant-soft-success"
-						disabled={actionLoading}
-						on:click={handleResume}
-					>
-						{#if actionLoading}
-							<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
-							Resume
-						{:else}
-							<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-							</svg>
-							Resume
-					{/if}
-				</button>
-			{/if}
-			{#if ['pending', 'in_progress', 'paused'].includes(investigation.status)}
+			{#if !['closed', 'auto_closed_fp', 'closed_fp', 'closed_tp', 'cancelled'].includes(investigation.status)}
 				<button
 					class="btn variant-soft-error"
 					disabled={actionLoading}
