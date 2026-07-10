@@ -25,6 +25,13 @@ class LLMConfig(BaseModel):
     provider: Literal["anthropic", "openai"] = "anthropic"
     fast_model: str = "claude-sonnet-4-6"
     reasoning_model: str = "claude-sonnet-4-6"
+    chat_model: str = ""
+    # Per-tier overlay for the InferenceRequest resolver (issue #32). Keyed by
+    # InferenceTier value ('router'|'reasoning'|'chat'|'extraction'); each value
+    # may set provider/engine/model/base_url/api_key/default_decoding_mode. Empty
+    # means every tier falls back to the legacy fast_model/reasoning_model
+    # defaults — the multi-provider chart (#4) populates this.
+    tiers: dict[str, dict] = {}
     anthropic_api_key: str = ""
     anthropic_base_url: Optional[str] = None
     openai_api_key: str = ""
@@ -201,6 +208,7 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         provider=provider,  # type: ignore[arg-type]
         fast_model=os.getenv("SOCTALK_FAST_MODEL", "claude-sonnet-4-6"),
         reasoning_model=os.getenv("SOCTALK_REASONING_MODEL", "claude-sonnet-4-6"),
+        chat_model=os.getenv("SOCTALK_CHAT_MODEL", ""),
         anthropic_api_key=anthropic_api_key,
         anthropic_base_url=_optional_env("ANTHROPIC_BASE_URL"),
         openai_api_key=openai_api_key,
