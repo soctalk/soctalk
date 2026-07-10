@@ -207,9 +207,7 @@
     },
     "process": {
       "natural_key": [
-        "host",
-        "pid",
-        "started_at"
+        "value"
       ],
       "temporal_class": "observation",
       "retention_class": "entity",

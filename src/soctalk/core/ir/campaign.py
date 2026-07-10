@@ -173,9 +173,10 @@ async def upsert_topology_edge(
     db: AsyncSession, *, tenant_id: UUID, src_host: str, dst_host: str,
     port: int | None, adjacency: str, occurred_at,
 ) -> None:
-    """Record/refresh an adjacency edge. Observed beats potential (an
-    observed edge upgrades a potential one). Supersede-on-absence handled
-    by a separate sync sweep, not delete."""
+    """Record/refresh an adjacency edge. Observed beats potential — an
+    observed sighting upgrades a prior potential edge and bumps last_seen,
+    rather than appending a duplicate row (review finding #5). Uniqueness is
+    on the live (non-superseded) edge per (tenant, src, dst, port)."""
     await db.execute(
         text(
             """
@@ -184,6 +185,15 @@ async def upsert_topology_edge(
                first_seen, last_seen)
             VALUES (:id, :t, :s, :d, :p, :adj,
                     CAST(:occ AS timestamptz), CAST(:occ AS timestamptz))
+            ON CONFLICT (tenant_id, src_host, dst_host, COALESCE(port, -1))
+                WHERE superseded_at IS NULL
+            DO UPDATE SET
+                last_seen = GREATEST(topology_edges.last_seen, EXCLUDED.last_seen),
+                -- observed is a one-way upgrade; never downgrade to potential.
+                adjacency = CASE
+                    WHEN topology_edges.adjacency = 'observed'
+                         OR EXCLUDED.adjacency = 'observed' THEN 'observed'
+                    ELSE EXCLUDED.adjacency END
             """
         ),
         {"id": str(uuid4()), "t": str(tenant_id), "s": src_host.lower(),

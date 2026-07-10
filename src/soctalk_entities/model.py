@@ -180,7 +180,12 @@ TYPE_REGISTRY: dict[EntityType, TypeSpec] = {
     EntityType.URL: _spec(EntityType.URL, ("value",)),
     EntityType.HASH: _spec(EntityType.HASH, ("value",)),
     EntityType.FILE: _spec(EntityType.FILE, ("value",)),
-    EntityType.PROCESS: _spec(EntityType.PROCESS, ("host", "pid", "started_at"),
+    # v1 process identity is value-based (the wire carries only the process
+    # name/command, not pid+start-time). Keying on the aspirational
+    # (host, pid, started_at) tuple would collapse every process to one id
+    # since those fields aren't populated yet (review finding #3). Upgrade to
+    # session-identity when the wire carries pid/started_at.
+    EntityType.PROCESS: _spec(EntityType.PROCESS, ("value",),
                               roles=(Role.ACTOR, Role.PARENT, Role.TARGET)),
     EntityType.PORT: _spec(EntityType.PORT, ("value",), roles=(Role.SRC, Role.DST)),
     EntityType.AGENT: _spec(EntityType.AGENT, ("value",)),

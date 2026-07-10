@@ -110,3 +110,44 @@ async def test_no_template_no_memoization(
     )
     await mssp_session.commit()
     assert result["action"] == "promoted"
+
+
+async def test_correlation_beats_memoization_for_live_incident(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Review finding #1: an alert whose shape is a memoized FP but which
+    shares an entity with a LIVE active investigation must CORRELATE, not be
+    memoized-closed (suppressing live-incident evidence)."""
+    tenant_a, _ = seed_two_tenants
+    await set_tenant_policy(mssp_session, tenant_a.tenant_id, "entity_correlation_enabled", True)
+    await set_tenant_policy(mssp_session, tenant_a.tenant_id, "verdict_memoization_enabled", True)
+    # Cache an FP verdict for a shape.
+    k = shape_key(source="wazuh", decoder="pam", template_hash="tmpl-x", template_version="1")
+    await record_verdict(mssp_session, tenant_id=tenant_a.tenant_id, key=k,
+                         decision="close", confidence=0.95, template_hash="tmpl-x")
+    await mssp_session.commit()
+
+    # A live active investigation exists on host 'hot-1'.
+    r1 = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="5710", severity=9, asset_ids=["hot-1"],
+        initial_iocs=[], source_event_id="live-1", ts=datetime.now(timezone.utc),
+        description="first", evidence={"entities": [{"type": "host", "value": "hot-1", "role": "target"}],
+                                       "mitre": {}, "schema_version": 2},
+    )
+    await mssp_session.commit()
+    assert r1["action"] == "promoted"
+
+    # A new alert with the memoized-FP shape BUT on the same live host.
+    r2 = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="9999", severity=9, asset_ids=["hot-1"],
+        initial_iocs=[], source_event_id="live-2", ts=datetime.now(timezone.utc),
+        description="benign-shape but live host",
+        evidence={"entities": [{"type": "host", "value": "hot-1", "role": "target"}],
+                  "decoder": "pam", "template_hash": "tmpl-x", "template_version": "1",
+                  "mitre": {}, "schema_version": 2},
+    )
+    await mssp_session.commit()
+    assert r2["action"] == "correlated", "must correlate to the live incident, not memoized-close"
+    assert r2["investigation_id"] == r1["investigation_id"]

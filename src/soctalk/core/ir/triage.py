@@ -716,6 +716,14 @@ async def triage_event(
             idempotency_key=f"attach-{alert_id}-{source_event_id}",
             producer="triage",
         )
+        # Follow-up flag (review #2): a live run snapshotted before this
+        # recurrence — mark for a follow-up run at completion.
+        if await active_run_for_case(db, attached_case_id) is not None:
+            await db.execute(
+                text("UPDATE investigations SET has_new_evidence = true "
+                     "WHERE id = :c AND tenant_id = :t"),
+                {"c": str(attached_case_id), "t": str(tenant_id)},
+            )
         await log_audit(
             db,
             action="ir.investigation.alert_attached",
@@ -762,11 +770,88 @@ async def triage_event(
     #    veto a high-confidence-FP auto-close (issue #17 T6).
     assessment, confidence = assess(severity, rule_id, mitre=evidence.get("mitre"))
     policy = await effective_policy(db, tenant_id)
+    keys = extract_keys(
+        entities=evidence.get("entities"),
+        initial_iocs=initial_iocs,
+        rule_id=rule_id,
+    )
 
-    # 3a. Verdict memoization (issue #29): if this exact alert shape was
-    #     recently LLM-verdicted as a high-confidence FP, close it by
-    #     reference instead of spinning a run. Never memoizes across
-    #     tenants; the close still audits + stays reopenable.
+    # 3. Entity-overlap correlation (issue #27): a real alert that shares a
+    #    high-strength, non-hub typed entity with an ACTIVE investigation
+    #    attaches to it — inserted-and-linked. This runs BEFORE memoized-close
+    #    and auto-close (review finding #1): an alert whose shape is normally
+    #    benign but which shares an entity with a LIVE incident right now must
+    #    correlate, not be suppressed. If the target has a live run, flag it
+    #    for a follow-up run (the run already snapshotted its alerts).
+    if policy.get("entity_correlation_enabled", False):
+        correlated_id = await find_correlated_investigation(
+            db, tenant_id=tenant_id, keys=keys
+        )
+        if correlated_id is not None:
+            await db.execute(
+                text(
+                    "UPDATE alerts SET status = 'promoted', investigation_id = :c "
+                    "WHERE id = :id"
+                ),
+                {"c": str(correlated_id), "id": str(alert_id)},
+            )
+            await record_keys(
+                db, tenant_id=tenant_id, alert_id=alert_id,
+                investigation_id=correlated_id, keys=keys, occurred_at=ts,
+            )
+            await append_event(
+                db,
+                tenant_id=tenant_id,
+                investigation_id=correlated_id,
+                run_id=None,
+                kind=EventKind.ALERT_INGESTED,
+                payload={
+                    "alert_id": str(alert_id),
+                    "correlated": True,
+                    "source_event_id": source_event_id,
+                    "rule_id": rule_id,
+                    "severity": severity,
+                    "asset_ids": asset_ids,
+                },
+                idempotency_key=f"corr-{alert_id}-{source_event_id}",
+                producer="triage",
+            )
+            # Follow-up run (review finding #2): if a run is already live on
+            # this investigation it snapshotted its alerts before this one
+            # arrived, so flag the investigation — complete_run starts a
+            # fresh run when the current one finishes if evidence arrived.
+            if await active_run_for_case(db, correlated_id) is not None:
+                await db.execute(
+                    text("UPDATE investigations SET has_new_evidence = true "
+                         "WHERE id = :c AND tenant_id = :t"),
+                    {"c": str(correlated_id), "t": str(tenant_id)},
+                )
+            await log_audit(
+                db,
+                action="ir.investigation.alert_correlated",
+                actor_principal="system",
+                actor_id="triage",
+                tenant_id=tenant_id,
+                resource_type="investigation",
+                resource_id=str(correlated_id),
+                notes=f"entity-overlap attach of alert {alert_id}",
+            )
+            if policy.get("entity_graph_enabled", False):
+                await land_alert_entities(
+                    db, tenant_id=tenant_id, alert_id=alert_id,
+                    investigation_id=correlated_id,
+                    entities=evidence.get("entities"), mitre=evidence.get("mitre"),
+                    occurred_at=ts, source_event_id=source_event_id,
+                )
+            return {
+                "alert_id": str(alert_id),
+                "investigation_id": str(correlated_id),
+                "action": "correlated",
+            }
+
+    # 3a. Verdict memoization (issue #29): a recurring high-confidence-FP
+    #     shape closes by reference — AFTER the entity-correlation check so it
+    #     can never suppress an alert that belongs to a live incident.
     if policy.get("verdict_memoization_enabled", False):
         mkey = memo_shape_key(
             source=source,
@@ -811,75 +896,6 @@ async def triage_event(
             "investigation_id": str(investigation_id),
             "action": "auto_closed",
         }
-
-    # 4. Entity-overlap correlation (issue #27): a real (non-FP) alert that
-    #    shares a high-strength, non-hub typed entity with an ACTIVE
-    #    investigation attaches to it — inserted-and-linked (this fresh alert
-    #    row joins the existing investigation) rather than spawning a new
-    #    one. Runs AFTER auto-close so FPs never get pulled in, and AFTER
-    #    reopen so a live investigation is preferred over resurrecting a
-    #    closed FP. No new run: the settle window / follow-up mechanism owns
-    #    mid-run recurrence.
-    keys = extract_keys(
-        entities=evidence.get("entities"),
-        initial_iocs=initial_iocs,
-        rule_id=rule_id,
-    )
-    if policy.get("entity_correlation_enabled", False):
-        correlated_id = await find_correlated_investigation(
-            db, tenant_id=tenant_id, keys=keys
-        )
-        if correlated_id is not None:
-            await db.execute(
-                text(
-                    "UPDATE alerts SET status = 'promoted', investigation_id = :c "
-                    "WHERE id = :id"
-                ),
-                {"c": str(correlated_id), "id": str(alert_id)},
-            )
-            await record_keys(
-                db, tenant_id=tenant_id, alert_id=alert_id,
-                investigation_id=correlated_id, keys=keys, occurred_at=ts,
-            )
-            await append_event(
-                db,
-                tenant_id=tenant_id,
-                investigation_id=correlated_id,
-                run_id=None,
-                kind=EventKind.ALERT_INGESTED,
-                payload={
-                    "alert_id": str(alert_id),
-                    "correlated": True,
-                    "source_event_id": source_event_id,
-                    "rule_id": rule_id,
-                    "severity": severity,
-                    "asset_ids": asset_ids,
-                },
-                idempotency_key=f"corr-{alert_id}-{source_event_id}",
-                producer="triage",
-            )
-            await log_audit(
-                db,
-                action="ir.investigation.alert_correlated",
-                actor_principal="system",
-                actor_id="triage",
-                tenant_id=tenant_id,
-                resource_type="investigation",
-                resource_id=str(correlated_id),
-                notes=f"entity-overlap attach of alert {alert_id}",
-            )
-            if policy.get("entity_graph_enabled", False):
-                await land_alert_entities(
-                    db, tenant_id=tenant_id, alert_id=alert_id,
-                    investigation_id=correlated_id,
-                    entities=evidence.get("entities"), mitre=evidence.get("mitre"),
-                    occurred_at=ts, source_event_id=source_event_id,
-                )
-            return {
-                "alert_id": str(alert_id),
-                "investigation_id": str(correlated_id),
-                "action": "correlated",
-            }
 
     # 5. All other bands: create an investigation. Apply the settle window
     # (issue #28) unless the alert is high-severity, which claims

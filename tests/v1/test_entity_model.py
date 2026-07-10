@@ -138,3 +138,11 @@ async def test_entity_upsert_merges_first_last_seen(
     )).mappings().one()
     assert row["first_seen"] == t_early
     assert row["last_seen"] == t_late
+
+
+def test_process_identity_no_longer_collapses():
+    """Review finding #3: distinct process values must get distinct ids
+    (was collapsing to one because pid/started_at were never populated)."""
+    a = entity_id(EntityType.PROCESS, "/usr/bin/sshd")
+    b = entity_id(EntityType.PROCESS, "/tmp/evil")
+    assert a != b
