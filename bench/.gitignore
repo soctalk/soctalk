@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Benchmark run outputs are artifacts, not source.
+smoke-results.json
+*-results.json
+results.json
