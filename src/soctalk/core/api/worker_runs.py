@@ -32,6 +32,52 @@ router = APIRouter(prefix="/api/internal/worker", tags=["internal-worker"])
 LEASE_TTL_SECONDS = 60
 
 
+async def _record_verdict_memo(
+    db, tenant_id, investigation_id, *, decision: str, confidence: float
+) -> None:
+    """Cache the run's verdict keyed on the investigation's alert shape
+    (issue #29). Pulls the shape from the primary alert's latest source
+    event; no-op if there's no template to key on."""
+    from soctalk.core.ir.memoization import record_verdict, shape_key
+
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT a.source AS source, se.decoder AS decoder,
+                       se.template_hash AS template_hash,
+                       se.template_version AS template_version
+                FROM alerts a
+                LEFT JOIN LATERAL (
+                    SELECT decoder, template_hash, template_version
+                    FROM alert_source_events
+                    WHERE alert_id = a.id
+                    ORDER BY (template_hash IS NOT NULL) DESC, ingested_at DESC
+                    LIMIT 1
+                ) se ON true
+                WHERE a.investigation_id = :c
+                ORDER BY a.severity DESC, a.first_event_at DESC
+                LIMIT 1
+                """
+            ),
+            {"c": str(investigation_id)},
+        )
+    ).mappings().first()
+    if row is None:
+        return
+    key = shape_key(
+        source=row["source"], decoder=row["decoder"],
+        template_hash=row["template_hash"], template_version=row["template_version"],
+    )
+    if key is None:
+        return
+    await record_verdict(
+        db, tenant_id=tenant_id, key=key, decision=decision,
+        confidence=confidence, template_hash=row["template_hash"],
+    )
+
+
+
 # Tenant daily spend cap helpers moved to ``soctalk.core.cost`` so the
 # chat handler can enforce the same ceiling. Re-export for back-compat.
 from soctalk.core.cost import (  # noqa: E402
@@ -412,6 +458,21 @@ async def complete_run(
                 enrichments=payload.enrichments,
             )
             case_changed = True
+
+        # Verdict memoization write (issue #29): cache this run's verdict
+        # keyed on the investigation's alert shape, so a future recurrence
+        # of the same shape can be closed by reference. Only meaningful when
+        # the run produced a disposition + confidence.
+        if (
+            payload.status == "completed"
+            and payload.disposition in ("close_fp", "escalate")
+            and payload.verdict_confidence is not None
+        ):
+            await _record_verdict_memo(
+                db, tenant_id, investigation_id,
+                decision="close" if payload.disposition == "close_fp" else "escalate",
+                confidence=float(payload.verdict_confidence),
+            )
     logger.info(
         "case_run_completed",
         run_id=str(run_id),

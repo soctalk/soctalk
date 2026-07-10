@@ -42,6 +42,11 @@ from soctalk.core.ir.correlation import (
     find_correlated_investigation,
     record_keys,
 )
+from soctalk.core.ir.memoization import (
+    bump_hit as bump_memo_hit,
+    lookup_memoized_close,
+    shape_key as memo_shape_key,
+)
 from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.observability.audit import log_audit
@@ -756,6 +761,37 @@ async def triage_event(
     #    veto a high-confidence-FP auto-close (issue #17 T6).
     assessment, confidence = assess(severity, rule_id, mitre=evidence.get("mitre"))
     policy = await effective_policy(db, tenant_id)
+
+    # 3a. Verdict memoization (issue #29): if this exact alert shape was
+    #     recently LLM-verdicted as a high-confidence FP, close it by
+    #     reference instead of spinning a run. Never memoizes across
+    #     tenants; the close still audits + stays reopenable.
+    if policy.get("verdict_memoization_enabled", False):
+        mkey = memo_shape_key(
+            source=source,
+            decoder=evidence.get("decoder"),
+            template_hash=evidence.get("template_hash"),
+            template_version=evidence.get("template_version"),
+        )
+        if mkey is not None:
+            memo = await lookup_memoized_close(db, tenant_id=tenant_id, key=mkey)
+            if memo is not None:
+                investigation_id = await auto_close_alert(
+                    db,
+                    tenant_id=tenant_id,
+                    alert_id=alert_id,
+                    reason=(
+                        f"memoized-fp: prior verdict close "
+                        f"confidence={memo['confidence']:.2f}"
+                    ),
+                    reopen_window_days=policy.get("reopen_window_days", 30),
+                )
+                await bump_memo_hit(db, tenant_id=tenant_id, key=mkey)
+                return {
+                    "alert_id": str(alert_id),
+                    "investigation_id": str(investigation_id),
+                    "action": "memoized_close",
+                }
 
     if (
         assessment == "high_conf_fp"
