@@ -54,6 +54,10 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # LLM run. Off by default until validated (a stale memo suppresses a
     # real alert). Reopen (#15) still applies to memoized closes.
     "verdict_memoization_enabled": False,
+    # Canonical entity graph (issue #24): land each alert's typed entities +
+    # observation relationships into the memory graph. Off by default (new
+    # per-alert write volume); enable per-tenant.
+    "entity_graph_enabled": False,
     # Visibility
     # ``customer_safe_promotion`` controls how a freshly-promoted investigation
     # gets its initial visibility:

@@ -47,6 +47,7 @@ from soctalk.core.ir.memoization import (
     lookup_memoized_close,
     shape_key as memo_shape_key,
 )
+from soctalk.core.ir.graph import land_alert_entities
 from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.observability.audit import log_audit
@@ -867,6 +868,13 @@ async def triage_event(
                 resource_id=str(correlated_id),
                 notes=f"entity-overlap attach of alert {alert_id}",
             )
+            if policy.get("entity_graph_enabled", False):
+                await land_alert_entities(
+                    db, tenant_id=tenant_id, alert_id=alert_id,
+                    investigation_id=correlated_id,
+                    entities=evidence.get("entities"), mitre=evidence.get("mitre"),
+                    occurred_at=ts, source_event_id=source_event_id,
+                )
             return {
                 "alert_id": str(alert_id),
                 "investigation_id": str(correlated_id),
@@ -889,6 +897,13 @@ async def triage_event(
         db, tenant_id=tenant_id, alert_id=alert_id,
         investigation_id=investigation_id, keys=keys, occurred_at=ts,
     )
+    if policy.get("entity_graph_enabled", False):
+        await land_alert_entities(
+            db, tenant_id=tenant_id, alert_id=alert_id,
+            investigation_id=investigation_id,
+            entities=evidence.get("entities"), mitre=evidence.get("mitre"),
+            occurred_at=ts, source_event_id=source_event_id,
+        )
     return {
         "alert_id": str(alert_id),
         "investigation_id": str(investigation_id),

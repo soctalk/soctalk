@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SocTalk canonical entity/event model",
+  "model_version": "1",
+  "fingerprint": "2272a6ba4045fa13",
+  "$defs": {
+    "entity_type": {
+      "enum": [
+        "host",
+        "user",
+        "ip",
+        "domain",
+        "url",
+        "hash",
+        "file",
+        "process",
+        "port",
+        "agent",
+        "rule",
+        "alert",
+        "artifact",
+        "technique",
+        "tactic"
+      ]
+    },
+    "role": {
+      "enum": [
+        "actor",
+        "target",
+        "src",
+        "dst",
+        "parent",
+        "observer"
+      ]
+    },
+    "relation_verb": {
+      "enum": [
+        "touched",
+        "connected_to",
+        "authenticated_to",
+        "executed",
+        "spawned",
+        "accessed",
+        "resolved_to",
+        "has_ip",
+        "listens_on",
+        "member_of",
+        "runs_service",
+        "same_as",
+        "maps_to_technique",
+        "correlated_with"
+      ]
+    },
+    "relation_class": {
+      "enum": [
+        "observed",
+        "derived"
+      ]
+    },
+    "source_reliability": {
+      "enum": [
+        "analyst",
+        "telemetry",
+        "extraction",
+        "model",
+        "unknown"
+      ]
+    },
+    "confidence": {
+      "type": "object",
+      "properties": {
+        "reliability": {
+          "$ref": "#/$defs/source_reliability"
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "evaluated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "reliability"
+      ]
+    },
+    "entity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "type": {
+          "$ref": "#/$defs/entity_type"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "value"
+      ]
+    }
+  },
+  "type_registry": {
+    "host": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "customer_visible",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "user": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "ip": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "src",
+        "dst",
+        "actor",
+        "target"
+      ]
+    },
+    "domain": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "url": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "hash": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "file": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "process": {
+      "natural_key": [
+        "host",
+        "pid",
+        "started_at"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "parent",
+        "target"
+      ]
+    },
+    "port": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "src",
+        "dst"
+      ]
+    },
+    "agent": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "rule": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "observer"
+      ]
+    },
+    "alert": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "evidence",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "observer"
+      ]
+    },
+    "artifact": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "mssp_only",
+      "allowed_roles": [
+        "actor",
+        "target",
+        "src",
+        "dst"
+      ]
+    },
+    "technique": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "customer_visible",
+      "allowed_roles": []
+    },
+    "tactic": {
+      "natural_key": [
+        "value"
+      ],
+      "temporal_class": "observation",
+      "retention_class": "entity",
+      "default_audience": "customer_visible",
+      "allowed_roles": []
+    }
+  }
+}
