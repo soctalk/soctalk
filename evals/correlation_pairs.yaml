@@ -1,0 +1,51 @@
+# Golden labeled same/different-incident pairs for the correlation scorer
+# spike gate (soctalk.evals.correlation). Each pair is two alerts' typed-key
+# sets + a manual label (same_incident: true/false). The gate computes the
+# scorer's entity_jaccard on each pair and sweeps a threshold, reporting
+# precision/recall — the false-attach precision an unlabeled replay CANNOT
+# measure (the riskiest number, per the issue).
+#
+# key format: [key_type, key_value, strength]
+
+pairs:
+  # ---- same incident (should correlate) ----
+  - id: same-host-two-stages
+    same_incident: true
+    a: [[host, web-01, strong], [rule, "5710", weak]]
+    b: [[host, web-01, strong], [rule, "92657", weak]]
+
+  - id: same-host-and-hash
+    same_incident: true
+    a: [[host, db-02, strong], [hash, abc123, strong]]
+    b: [[host, db-02, strong], [ip, "203.0.113.9", conditional]]
+
+  - id: shared-malware-hash-across-hosts
+    same_incident: true
+    a: [[host, ws-1, strong], [hash, deadbeef, strong]]
+    b: [[host, ws-2, strong], [hash, deadbeef, strong]]
+
+  - id: shared-c2-ip
+    same_incident: true
+    a: [[host, app-1, strong], [ip, "198.51.100.7", conditional]]
+    b: [[host, app-2, strong], [ip, "198.51.100.7", conditional]]
+
+  # ---- different incident (must NOT correlate) ----
+  - id: different-hosts-only-common-rule
+    same_incident: false
+    a: [[host, host-a, strong], [rule, "5710", weak]]
+    b: [[host, host-b, strong], [rule, "5710", weak]]
+
+  - id: different-hosts-shared-corporate-proxy
+    same_incident: false
+    a: [[host, host-c, strong], [ip, "10.0.0.1", conditional]]
+    b: [[host, host-d, strong], [ip, "10.0.0.1", conditional]]
+
+  - id: totally-unrelated
+    same_incident: false
+    a: [[host, alpha, strong], [rule, "1001", weak]]
+    b: [[host, beta, strong], [rule, "2002", weak]]
+
+  - id: same-user-different-everything
+    same_incident: false
+    a: [[user, svc-backup, weak], [host, backup-1, strong]]
+    b: [[user, svc-backup, weak], [host, mail-1, strong]]

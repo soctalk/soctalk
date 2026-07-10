@@ -48,6 +48,7 @@ from soctalk.core.ir.memoization import (
     shape_key as memo_shape_key,
 )
 from soctalk.core.ir.graph import land_alert_entities
+from soctalk.core.ir.scorer import suggest_for_alert as suggest_correlation
 from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.observability.audit import log_audit
@@ -896,6 +897,21 @@ async def triage_event(
             "investigation_id": str(investigation_id),
             "action": "auto_closed",
         }
+
+    # 4a. Learned scorer (issue #30) — REVIEW-ONLY. The deterministic
+    #     entity-attach above didn't fire; if the scorer is enabled, record a
+    #     suggestion for any active investigation it thinks this alert belongs
+    #     to. It NEVER attaches — an analyst reviews the suggestion, and the
+    #     scorer only earns enforcement after the offline spike gate proves
+    #     its precision (soctalk.evals.correlation).
+    if policy.get("correlation_scorer_enabled", False):
+        try:
+            await suggest_correlation(
+                db, tenant_id=tenant_id, alert_id=alert_id,
+                alert_keys=keys, alert_ts=ts, rule_id=rule_id,
+            )
+        except Exception as e:  # noqa: BLE001 — a scorer miss must never block ingest
+            logger.warning("correlation_scorer_failed", error=str(e))
 
     # 5. All other bands: create an investigation. Apply the settle window
     # (issue #28) unless the alert is high-severity, which claims
