@@ -11,7 +11,14 @@ from langchain_core.messages import HumanMessage
 
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
-from soctalk.llm import ainvoke_structured, classify_llm_error, create_chat_model, make_system_message
+from soctalk.inference import (
+    InferenceAccounting,
+    InferenceRequest,
+    InferenceTier,
+    SamplingParams,
+    ainvoke_request,
+)
+from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
@@ -292,27 +299,22 @@ async def _get_supervisor_decision(
 ) -> SupervisorDecision:
     """Get a schema-enforced decision from the router LLM.
 
-    Structured output (tool-use on Anthropic, json_schema on OpenAI)
-    replaces the old free-text-JSON parsing: an invalid ``next_action``
-    or malformed response is retried once with the validation error fed
-    back, then fails the run loudly via SchemaValidationError.
+    Issued as an ``InferenceRequest`` on the ROUTER tier through the single
+    ``ainvoke_request`` seam (#32): structured output (tool-use on Anthropic,
+    json_schema on OpenAI) replaces the old free-text-JSON parsing — an invalid
+    ``next_action`` or malformed response is retried once with the validation
+    error fed back, then fails the run loudly via SchemaValidationError. Every
+    raw response is funnelled through budget.track by the dispatcher.
     """
-    llm = create_chat_model(
-        config.llm,
-        model=config.llm.fast_model,
-        temperature=config.llm.temperature,
-        max_tokens=1024,
+    req = InferenceRequest(
+        tier=InferenceTier.ROUTER,
+        metadata=InferenceAccounting(producer="supervisor.router", budget_state=state),
+        output_schema=SupervisorDecision,
+        system=SUPERVISOR_SYSTEM_PROMPT,
+        messages=[HumanMessage(
+            content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)
+        )],
+        sampling=SamplingParams(temperature=config.llm.temperature, max_tokens=1024),
     )
-
-    messages = [
-        make_system_message(SUPERVISOR_SYSTEM_PROMPT, config.llm),
-        HumanMessage(content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)),
-    ]
-
-    def _track(raw: Any) -> None:
-        if state is not None:
-            token_budget.track(state, raw)
-
-    return await ainvoke_structured(
-        llm, SupervisorDecision, messages, on_response=_track
-    )
+    res = await ainvoke_request(req, cfg=config.llm)
+    return res.parsed

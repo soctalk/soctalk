@@ -9,8 +9,13 @@ import structlog
 from langchain_core.messages import HumanMessage
 
 from soctalk.config import get_config
-from soctalk.graph import budget as token_budget
-from soctalk.llm import ainvoke_structured, create_chat_model, make_system_message
+from soctalk.inference import (
+    InferenceAccounting,
+    InferenceRequest,
+    InferenceTier,
+    SamplingParams,
+    ainvoke_request,
+)
 from soctalk.llm import classify_llm_error as _classify_llm_error
 from soctalk.models.enums import Phase, VerdictDecision
 from soctalk.models.verdict import Verdict, VerdictDraft
@@ -301,29 +306,20 @@ async def _get_verdict(
     Returns:
         Verdict object.
     """
-    # Use reasoning model (more capable)
-    llm = create_chat_model(
-        config.llm,
-        model=config.llm.reasoning_model,
-        temperature=0.1,  # Low temperature for more consistent reasoning
-        max_tokens=2048,
+    # Reasoning tier (more capable) via the single ainvoke_request seam (#32).
+    req = InferenceRequest(
+        tier=InferenceTier.REASONING,
+        metadata=InferenceAccounting(producer="supervisor.verdict", budget_state=state),
+        output_schema=VerdictDraft,
+        system=VERDICT_SYSTEM_PROMPT,
+        messages=[HumanMessage(content=VERDICT_USER_PROMPT_TEMPLATE.format(**context))],
+        sampling=SamplingParams(temperature=0.1, max_tokens=2048),
     )
-
-    messages = [
-        make_system_message(VERDICT_SYSTEM_PROMPT, config.llm),
-        HumanMessage(content=VERDICT_USER_PROMPT_TEMPLATE.format(**context)),
-    ]
-
-    def _track(raw: Any) -> None:
-        if state is not None:
-            token_budget.track(state, raw)
-
-    draft = await ainvoke_structured(
-        llm, VerdictDraft, messages, on_response=_track
-    )
+    res = await ainvoke_request(req, cfg=config.llm)
+    draft = res.parsed
     return Verdict(
         **draft.model_dump(),
-        reasoning_model=config.llm.reasoning_model,
+        reasoning_model=res.resolved.model,
     )
 
 
