@@ -19,12 +19,12 @@ Sonnet, 5x for Opus, etc., and Opus is ~10x Sonnet). The historical
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
 
 import structlog
-
 
 logger = structlog.get_logger()
 
@@ -66,8 +66,101 @@ _MODEL_PRICES_PER_MTOK: dict[str, dict[str, float]] = {
 
 # Fall-back price applied when the model name isn't in the table. Picked
 # to be on the high side — an unknown model is more likely to be a
-# premium tier than a free one, and we prefer to halt early.
+# premium tier than a free one, and we prefer to halt early. This
+# fail-expensive default is correct for hosted APIs but actively wrong
+# for a self-hosted endpoint (marginal cost ~0), which is why the
+# fallback is overridable per deployment (SOCTALK_UNKNOWN_MODEL_COST).
 _UNKNOWN_MODEL_FALLBACK = {"input": 15.0, "output": 75.0}
+_ZERO_COST = {"input": 0.0, "output": 0.0}
+
+
+def _parse_price_map(raw: str | None) -> dict[str, dict[str, float]]:
+    """Parse a ``{"model-prefix": {"input": x, "output": y}}`` JSON map.
+
+    Keys are normalized model-family prefixes (same shape as the built-in
+    table); malformed entries are skipped, not fatal.
+    """
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        logger.warning("budget_price_override_parse_failed")
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, dict) and "input" in v and "output" in v:
+                try:
+                    out[str(k)] = {"input": float(v["input"]), "output": float(v["output"])}
+                except (ValueError, TypeError):
+                    continue
+    return out
+
+
+# Cache the parsed overlay keyed on the raw env string so ``track`` doesn't
+# re-parse JSON every call, while still reflecting env changes (tests, reloads).
+_price_cache: tuple[str | None, dict[str, dict[str, float]]] | None = None
+
+
+def _effective_prices() -> dict[str, dict[str, float]]:
+    """The built-in price table overlaid with ``SOCTALK_MODEL_PRICES``.
+
+    An overlay entry adds a self-hosted / newly-released model (or a
+    ``{"input": 0, "output": 0}`` zero-cost entry for local inference) or
+    corrects a stale built-in rate — without editing code.
+    """
+    global _price_cache
+    raw = os.getenv("SOCTALK_MODEL_PRICES")
+    if _price_cache is not None and _price_cache[0] == raw:
+        return _price_cache[1]
+    overrides = _parse_price_map(raw)
+    merged = _MODEL_PRICES_PER_MTOK if not overrides else {**_MODEL_PRICES_PER_MTOK, **overrides}
+    _price_cache = (raw, merged)
+    return merged
+
+
+def _unknown_model_cost() -> tuple[dict[str, float], bool]:
+    """Resolve the fallback price for an unpriced model.
+
+    Returns ``(price, explicit)`` — ``explicit`` is True when the deployment
+    configured ``SOCTALK_UNKNOWN_MODEL_COST`` (``zero``/``free``/``0`` for
+    local-only, or a ``{"input": x, "output": y}`` JSON), so callers can stay
+    quiet about an intentional choice and only warn on the fail-expensive
+    default.
+    """
+    raw = (os.getenv("SOCTALK_UNKNOWN_MODEL_COST") or "").strip()
+    if not raw:
+        return _UNKNOWN_MODEL_FALLBACK, False
+    if raw.lower() in ("0", "zero", "free"):
+        return _ZERO_COST, True
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "input" in data and "output" in data:
+            return {"input": float(data["input"]), "output": float(data["output"])}, True
+    except (ValueError, TypeError):
+        pass
+    logger.warning("budget_unknown_cost_parse_failed", value=raw)
+    return _UNKNOWN_MODEL_FALLBACK, False
+
+
+# Warn once per unpriced model so the fail-expensive fallback is visible
+# instead of silently halting runs, without spamming the log every call.
+_warned_unpriced: set[str] = set()
+
+
+def _warn_unpriced_once(model: str | None, price: dict[str, float]) -> None:
+    key = model or "<none>"
+    if key in _warned_unpriced:
+        return
+    _warned_unpriced.add(key)
+    logger.warning(
+        "budget_unpriced_model_fallback",
+        model=model,
+        input_price_per_mtok=price["input"],
+        output_price_per_mtok=price["output"],
+        hint="add it to SOCTALK_MODEL_PRICES, or set SOCTALK_UNKNOWN_MODEL_COST=zero for local inference",
+    )
 
 
 _VERSION_SUFFIX_RE = re.compile(
@@ -81,7 +174,7 @@ _VERSION_SUFFIX_RE = re.compile(
 )
 
 
-def _normalize_model(model: str | None) -> str:
+def _normalize_model(model: str | None, prices: dict[str, dict[str, float]] | None = None) -> str:
     """Strip date / latest suffixes so versioned model IDs hit the table.
 
     Examples:
@@ -91,22 +184,24 @@ def _normalize_model(model: str | None) -> str:
       ``gpt-4o-mini-2024-07-18``        → ``gpt-4o-mini``
       ``gpt-4-32k``                     → ``gpt-4-32k`` (unchanged — different SKU)
 
-    If the stripped result doesn't exactly match a price-table key, the
-    caller falls through to ``_UNKNOWN_MODEL_FALLBACK`` (the Opus rate).
-    This is deliberately fail-closed: a model variant we don't recognize
-    gets the conservative price so the dollar cap halts early rather
-    than billing a $30/MTok model at $3 because of a fuzzy prefix.
+    Matches against ``prices`` (the effective table incl. any overlay) so a
+    ``SOCTALK_MODEL_PRICES`` entry for a self-hosted model is honoured too.
+    If the stripped result doesn't exactly match a key, the caller falls
+    through to the configured unknown-model fallback. Fail-closed by default:
+    an unrecognized variant gets the conservative price so the dollar cap
+    halts early rather than billing a $30/MTok model at $3 on a fuzzy prefix.
     """
     if not model:
         return ""
+    table = prices if prices is not None else _MODEL_PRICES_PER_MTOK
     stripped = _VERSION_SUFFIX_RE.sub("", model, count=1)
-    if stripped in _MODEL_PRICES_PER_MTOK:
+    if stripped in table:
         return stripped
     # No suffix match — try the raw name in case the caller passed a
     # base ID already.
-    if model in _MODEL_PRICES_PER_MTOK:
+    if model in table:
         return model
-    return model  # cost lookup will fall back to _UNKNOWN_MODEL_FALLBACK
+    return model  # cost lookup will fall back to the unknown-model rate
 
 
 def _token_budget_default() -> int:
@@ -204,8 +299,16 @@ def _cost_dollars(
     at ~10% of the input rate, cache writes at 125% (Anthropic pricing
     model) — without this split, cached runs would be overcharged ~10x on
     exactly the tokens caching exists to make cheap."""
-    normalized = _normalize_model(model)
-    price = _MODEL_PRICES_PER_MTOK.get(normalized, _UNKNOWN_MODEL_FALLBACK)
+    prices = _effective_prices()
+    normalized = _normalize_model(model, prices)
+    price = prices.get(normalized)
+    if price is None:
+        # Unpriced model: apply the configured fallback and, when that's the
+        # fail-expensive default (not an explicit deployment choice), surface
+        # it once so mispricing is visible rather than a silent early halt.
+        price, explicit = _unknown_model_cost()
+        if not explicit:
+            _warn_unpriced_once(model, price)
     cache_read_tokens = min(max(cache_read_tokens, 0), input_tokens)
     cache_creation_tokens = min(
         max(cache_creation_tokens, 0), input_tokens - cache_read_tokens
