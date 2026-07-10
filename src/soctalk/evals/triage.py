@@ -147,10 +147,19 @@ def summarize(results: list[TrialResult]) -> dict[str, Any]:
     for kind in ("routing", "verdict"):
         subset = [r for r in results if r.kind == kind]
         if subset:
+            # A trial whose `got` starts with ERROR: crashed rather than
+            # returning a value — most often a schema-validation failure on a
+            # model that can't hold the output contract. Break those out so a
+            # backend-compatibility run can tell "wrong answer" (model reasoned
+            # badly) from "invalid output" (model can't produce the schema).
+            errors = [r for r in subset if r.got.startswith("ERROR:")]
+            schema_errors = [r for r in subset if r.got == "ERROR:SchemaValidationError"]
             out[kind] = {
                 "total": len(subset),
                 "passed": sum(r.passed for r in subset),
                 "accuracy": sum(r.passed for r in subset) / len(subset),
+                "errors": len(errors),
+                "schema_errors": len(schema_errors),
             }
     return out
 
@@ -205,22 +214,27 @@ async def run_evals(
     return list(await asyncio.gather(*tasks))
 
 
-def print_scorecard(results: list[TrialResult]) -> dict[str, Any]:
+def print_scorecard(results: list[TrialResult], stream: Any = None) -> dict[str, Any]:
+    stream = stream if stream is not None else sys.stdout
     summary = summarize(results)
-    print()
-    print("=" * 72)
-    print("TRIAGE EVAL SCORECARD")
-    print("=" * 72)
+    p = lambda *a: print(*a, file=stream)  # noqa: E731
+    p()
+    p("=" * 72)
+    p("TRIAGE EVAL SCORECARD")
+    p("=" * 72)
     for r in sorted(results, key=lambda r: (r.kind, r.case_id)):
         mark = "PASS" if r.passed else "FAIL"
         line = f"[{mark}] {r.kind:8s} {r.case_id:32s} got={r.got}"
         if not r.passed:
             line += f"  expected={r.expected} {r.detail}"
-        print(line)
-    print("-" * 72)
+        p(line)
+    p("-" * 72)
     for kind, s in summary.items():
-        print(f"{kind:8s} accuracy: {s['passed']}/{s['total']} = {s['accuracy']:.0%}")
-    print("=" * 72)
+        extra = ""
+        if s.get("errors"):
+            extra = f"  ({s['schema_errors']} schema / {s['errors']} total errors)"
+        p(f"{kind:8s} accuracy: {s['passed']}/{s['total']} = {s['accuracy']:.0%}{extra}")
+    p("=" * 72)
     return summary
 
 
@@ -230,6 +244,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--case", default=None, help="Run a single case id.")
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON {summary, trials} to stdout; the human "
+             "scorecard goes to stderr. For benchmark/CI consumption.",
+    )
+    parser.add_argument(
+        "--label", default=None,
+        help="Optional label (e.g. the model name) carried through in --json output.",
+    )
     args = parser.parse_args(argv)
 
     cases = load_cases(args.golden)
@@ -240,7 +263,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     results = asyncio.run(run_evals(cases, trials=args.trials, concurrency=args.concurrency))
-    summary = print_scorecard(results)
+    if args.json:
+        # Human scorecard to stderr so stdout is clean JSON.
+        summary = print_scorecard(results, stream=sys.stderr)
+        import json
+        from dataclasses import asdict
+        json.dump(
+            {"label": args.label, "summary": summary, "trials": [asdict(r) for r in results]},
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+    else:
+        summary = print_scorecard(results)
 
     routing_threshold = float(os.getenv("SOCTALK_EVAL_ROUTING_THRESHOLD", "0.8"))
     verdict_threshold = float(os.getenv("SOCTALK_EVAL_VERDICT_THRESHOLD", "0.8"))
