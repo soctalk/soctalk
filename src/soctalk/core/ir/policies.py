@@ -44,6 +44,11 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # Alerts at/above settle_bypass_severity claim immediately.
     "settle_window_seconds": 0,
     "settle_bypass_severity": 12,
+    # Entity-overlap correlation (issue #27): a real alert sharing a
+    # high-strength typed entity with an active investigation attaches to
+    # it instead of creating a new one. Off by default until validated on
+    # tenant data (a bad match predicate over-groups).
+    "entity_correlation_enabled": False,
     # Visibility
     # ``customer_safe_promotion`` controls how a freshly-promoted investigation
     # gets its initial visibility:
