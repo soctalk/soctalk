@@ -174,3 +174,41 @@ def test_invalid_tier_decoding_mode_rejected(clean_env):
             SOCTALK_FAST_BASE_URL="x",
             ANTHROPIC_API_KEY="a",
         )
+
+
+def test_served_engine_without_base_url_rejected(clean_env):
+    # A vllm/sglang tier without a base_url would dial api.openai.com — reject
+    # loudly at config time (SOCTALK_FAST_PROVIDER makes it a real tier entry).
+    with pytest.raises(ValueError, match="requires SOCTALK_FAST_BASE_URL"):
+        clean_env(SOCTALK_FAST_ENGINE="vllm", SOCTALK_FAST_PROVIDER="openai",
+                  ANTHROPIC_API_KEY="a")
+
+
+def test_served_engine_with_base_url_ok(clean_env):
+    cfg = clean_env(SOCTALK_FAST_ENGINE="sglang", SOCTALK_FAST_PROVIDER="openai",
+                    SOCTALK_FAST_BASE_URL="http://sglang:8000/v1", ANTHROPIC_API_KEY="a")
+    assert cfg.tiers["router"]["engine"] == "sglang"
+
+
+def test_served_engine_accepts_global_openai_base_url(clean_env):
+    # A served tier can reuse the global OPENAI_BASE_URL the resolver inherits —
+    # no per-tier base_url required (Codex #4 review).
+    cfg = clean_env(SOCTALK_FAST_ENGINE="vllm", OPENAI_BASE_URL="http://vllm:8000/v1",
+                    ANTHROPIC_API_KEY="a")
+    assert cfg.tiers["router"]["engine"] == "vllm"
+
+
+def test_base_url_only_tier_does_not_relax_guard(clean_env):
+    # A base_url-only override rides the global provider — it is NOT mixed-
+    # provider intent, so both keys must still be rejected (Codex #4 review).
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        clean_env(ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o",
+                  SOCTALK_FAST_BASE_URL="http://gw/v1")
+
+
+def test_served_engine_tier_relaxes_guard(clean_env):
+    # A served engine routes to the OpenAI client — genuine mixed intent, both
+    # keys allowed.
+    cfg = clean_env(ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o",
+                    SOCTALK_FAST_ENGINE="vllm", SOCTALK_FAST_BASE_URL="http://vllm/v1")
+    assert cfg.tiers["router"]["engine"] == "vllm"

@@ -82,6 +82,24 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     return out
 
 
+def _llm_secret_data(api_key: str, llm_tiers: dict | None) -> dict[str, str]:
+    """Build the tenant-llm-key Secret data map (issue #12).
+
+    ``api_key`` (primary) plus ``<tier>_api_key`` for each per-tier backend that
+    carries its OWN credential — the chart's 35-runs-worker mounts
+    SOCTALK_<TIER>_API_KEY from these. Same-provider tiers reuse ``api_key`` and
+    contribute no own key. Note: ``put_secret`` patches/merges, so a removed tier
+    leaves a now-unused stale key until the deferred rotation follow-up adds
+    full-replace (harmless — the worker env no longer references it).
+    """
+    data = {"api_key": api_key}
+    for tier, block in (llm_tiers or {}).items():
+        tier_key = (block or {}).get("api_key_plain")
+        if tier_key:
+            data[f"{tier}_api_key"] = tier_key
+    return data
+
+
 class ProvisionError(RuntimeError):
     """Raised when a provisioning step fails irrecoverably.
 
@@ -475,10 +493,12 @@ class TenantController:
         # Re-sync the LLM key Secret before the chart re-renders (issue #12): a
         # PATCH that adds/changes a per-tier backend must write the tier's
         # ``<tier>_api_key`` into tenant-llm-key, else the re-rendered worker
-        # references a Secret key that doesn't exist yet and CrashLoops. Idempotent
-        # (put_secret create-or-patch); a no-op for single-provider tenants beyond
-        # rewriting the same api_key.
-        steps.append(("sync_llm_key", self._copy_llm_key_to_tenant_ns))
+        # references a Secret key that doesn't exist yet and CrashLoops.
+        # Guarded on llm_tiers so single-provider reconciles don't gain a new
+        # hard LLM-key dependency (_copy_llm_key raises when no key resolves) —
+        # their key is already in place and unchanged by a non-LLM reconcile.
+        if ctx.integration.llm_tiers:
+            steps.append(("sync_llm_key", self._copy_llm_key_to_tenant_ns))
         steps.append(("helm_apply_tenant", self._step_helm_apply_tenant))
         steps.append(("wait_workloads", self._step_wait_workloads))
 
@@ -1470,23 +1490,10 @@ class TenantController:
                     ctx.integration.llm_provider = "openai-compatible"
                     _flip_models("openai-compatible")
                     await self.session.flush()
-        # Per-tier credentials for a hybrid tenant (issue #12): a tier with its
-        # own key rides in the SAME Secret under ``<tier>_api_key`` — the chart's
-        # 35-runs-worker mounts SOCTALK_<TIER>_API_KEY from these. Same-provider
-        # tiers reuse ``api_key`` and carry no own key. (put_secret patches/merges
-        # the data map, so a removed tier leaves a now-unused stale key here until
-        # the deferred rotation follow-up adds full-replace — harmless: the worker
-        # env no longer references it.)
-        secret_data = {"api_key": api_key}
-        for tier, block in (getattr(ctx.integration, "llm_tiers", None) or {}).items():
-            tier_key = (block or {}).get("api_key_plain")
-            if tier_key:
-                secret_data[f"{tier}_api_key"] = tier_key
-
         await self.k8s.put_secret(
             ctx.namespace,
             "tenant-llm-key",
-            data=secret_data,
+            data=_llm_secret_data(api_key, getattr(ctx.integration, "llm_tiers", None)),
             labels={
                 "soctalk.io/tenant-id": str(ctx.tenant.id),
                 "soctalk.io/secret-purpose": "llm",

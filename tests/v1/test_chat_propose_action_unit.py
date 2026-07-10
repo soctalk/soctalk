@@ -11,8 +11,14 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from langchain_core.messages import AIMessage, SystemMessage
+
 from soctalk.chat.actions import ALLOWED_ACTIONS
-from soctalk.chat.agent import _PROPOSE_ACTION_TOOL, _handle_propose_action
+from soctalk.chat.agent import (
+    _PROPOSE_ACTION_TOOL,
+    _build_messages,
+    _handle_propose_action,
+)
 
 
 def _valid_args(**over):
@@ -91,3 +97,33 @@ def test_handle_strips_url_shaped_fields_via_builder():
     payload, _ = _handle_propose_action(_valid_args())
     assert "endpoint" not in payload
     assert "url" not in payload
+
+
+def test_handle_non_dict_target_rejected_not_raised():
+    # A non-dict target must not raise AttributeError out of the handler (it
+    # would abort the turn before the ToolMessage ack). Graceful reject instead.
+    payload, ack = _handle_propose_action(_valid_args(target="not-a-dict"))
+    assert payload is None
+    assert "rejected" in ack.lower()
+
+
+# --------------------------------------------------------- history replay
+
+
+def test_prior_action_replayed_as_aimessage_not_system():
+    # A persisted role='action' row must replay as an AIMessage — a non-leading
+    # SystemMessage is rejected by langchain-anthropic and would break every
+    # turn after the first proposed action.
+    history = [
+        {"role": "user", "content": {"text": "hi"}},
+        {"role": "assistant", "content": {"text": "hello"}},
+        {"role": "action", "content": {"action": "approve_review",
+                                        "target": {"id": "abc"}}},
+        {"role": "user", "content": {"text": "next"}},
+    ]
+    msgs = _build_messages(history, system_prompt="SYS")
+    # Exactly one SystemMessage and it leads.
+    assert isinstance(msgs[0], SystemMessage)
+    assert sum(isinstance(m, SystemMessage) for m in msgs) == 1
+    # The prior action rode in as an AIMessage.
+    assert any(isinstance(m, AIMessage) and "prior_action" in m.content for m in msgs)

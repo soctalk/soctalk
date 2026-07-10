@@ -12,6 +12,8 @@ from uuid import uuid4
 
 import pytest
 
+from soctalk.core.api.llm_config import _cross_provider_tiers_without_key
+from soctalk.core.provisioning.controller import _llm_secret_data
 from soctalk.core.provisioning.render import render_tenant_values
 from soctalk.core.tenancy.models import (
     BrandingConfig,
@@ -114,6 +116,35 @@ def test_hybrid_render_l1_controller_path_omits_plaintext():
     # Tier key present (so the worker env references it) but plaintext withheld
     # — the controller mirrors the real key into the Secret.
     assert v["llm"]["tierKeys"]["fast"] == ""
+
+
+def test_llm_secret_data_includes_tier_own_keys():
+    # The controller mirrors primary + per-tier own keys into one Secret.
+    data = _llm_secret_data("ak-primary", {
+        "fast": {"api_key_plain": "sk-served"},
+        "reasoning": {},  # reuses primary, no own key
+    })
+    assert data == {"api_key": "ak-primary", "fast_api_key": "sk-served"}
+
+
+def test_llm_secret_data_single_provider():
+    assert _llm_secret_data("ak", None) == {"api_key": "ak"}
+
+
+def test_cross_provider_tier_without_key_flagged():
+    # anthropic primary + an openai fast tier with no own key can't authenticate.
+    offending = _cross_provider_tiers_without_key(
+        "anthropic", {"fast": {"provider": "openai-compatible"}})
+    assert offending == ["fast"]
+    # Same-provider tier (anthropic) reusing the primary key is fine.
+    assert _cross_provider_tiers_without_key(
+        "anthropic", {"reasoning": {"provider": "anthropic"}}) == []
+    # Cross-provider tier WITH its own key is fine.
+    assert _cross_provider_tiers_without_key(
+        "anthropic", {"fast": {"provider": "openai", "api_key_plain": "sk"}}) == []
+    # openai/openai-compatible collapse to one runtime provider.
+    assert _cross_provider_tiers_without_key(
+        "openai-compatible", {"fast": {"provider": "openai"}}) == []
 
 
 def test_hybrid_same_port_no_extra_egress():
