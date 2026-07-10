@@ -20,28 +20,34 @@ now a *connect-and-broaden* effort, not a build.
 - Multi-alert delivery to the graph: MISSING (claim is LIMIT 1, worker_runs.py) — this is the gap
   that means correlation currently groups investigations but NOT reasoning, so the cost win is unrealized.
 
-## Sequenced plan (order flipped from v2 — substrate is mostly done)
+## Sequenced plan (REVISED after adversarial review)
 
-1. **Multi-alert claim delivery + compaction (#11).** Highest leverage, smallest surface.
-   Claim returns all alerts linked to the investigation (not LIMIT 1); _build_state maps all;
-   supervisor/verdict context render N alerts with token-aware top-k + overflow markers (#11).
-   Turns the already-shipped attach from "DB grouping" into "one run reasons over N correlated alerts".
-2. **Entity-overlap attach predicate.** After the same-signature check misses, a second lookup
-   against a derived entity index (typed entities + IOC fingerprints, rarity-weighted, per-key-type
-   window) attaches to an active investigation sharing a high-strength entity. Reuses the entire
-   shipped attach sink (append_event, audit, run-state matrix). Derived index rebuildable from
-   alert_source_events.entities — not a new source of truth.
-3. **Settle window.** not_before on investigation_runs + claim predicate (Alertmanager group_wait):
-   a burst accumulates before the first claim. Severity>=12 bypasses. The only genuinely-new
-   deterministic piece.
-4. **Verdict memoization + template-novelty suppression.** signature/template_hash -> prior structured
-   verdict reuse (close recurring benign without an LLM call); novel templates fast-pathed to enrichment,
-   known-benign templates suppressed (auto Dispatch-snooze). Cheap, both unblocked by #3/#17.
-5. **Learned correlation layer (async, review-only).** Now with real features: typed-entity Jaccard,
-   embeddings canonicalized from rule_groups/decoder/MITRE/entity-types, rarity from typed-entity
-   frequency, tier-0 adjudicator on structured evidence with cache-warm prefix. Gated by HIL
-   merge/detach labels (new actions) + structured verdicts. Deterministic entity match stays the only
-   auto-attach; scorer suggests until labeled precision earns enforcement.
+Correction: v3's original ordering put multi-alert delivery first as "the cost win."
+Wrong — today's attach COALESCES into the existing promoted alert row (n_alerts stays 1);
+it does not add alerts to an investigation. Multi-alert investigations don't exist until
+entity-overlap attach (the keystone) inserts-and-links new alert rows. Riskiest assumption
+corrected: the shipped same-signature attach sink does NOT generalize to correlation attach.
+
+1. **Settle window (#28)** — independent, low-risk, first. not_before on investigation_runs +
+   claim predicate (Alertmanager group_wait); severity>=12 bypass. Follow-up-run half
+   (group_interval): a live run does NOT see later attaches (state snapshot before ainvoke,
+   main.py:427) — attached alerts set new_evidence, a follow-up run is queued at terminal.
+   Fixes the incorrect triage.py:677 comment.
+2. **Entity-overlap attach (#27, KEYSTONE) + multi-alert delivery (#26)** together. #27 is bigger
+   than v3 admitted — split into: (a) projected entity index table `alert_entity_keys` (JSONB
+   entities has no queryable index), (b) rarity/hub-key stats (bucketed, not JSONB-at-ingest),
+   (c) insert-and-link attach semantics (NOT merge-into-prior-alert) with explicit precedence vs
+   closed-FP reopen, (d) group cap; entities stay out of alert_signature/_reopen_fields. #26 then
+   delivers all alerts to one run with #11 compaction (verdict render is currently UNCAPPED,
+   verdict.py:191; HIL alert_count hardcoded to 1, review_events.py:153).
+3. **Verdict memoization + template-novelty (#29).** Dedicated tenant-scoped verdict-cache table
+   keyed on stable shape (source, decoder, template_hash, template_version) — NOT alert_signature
+   (has a 5-min bucket). Prior high-conf-FP structured verdict (#3) reused without an LLM call;
+   novel templates full-triaged, known-benign suppressed (auto Dispatch-snooze).
+4. **Learned layer (#30, async review-only).** Real features via #17. BUT start the HIL
+   merge/detach label actions during #27 so labels accumulate. Deterministic match stays the only
+   auto-attach; scorer suggests until labeled precision earns enforcement. Spike with MANUALLY
+   labeled pairs gates any production scorer. pgvector = new op surface.
 
 ## New correlation signals #17 unlocked (beyond v2's key matching)
 
