@@ -49,6 +49,11 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # it instead of creating a new one. Off by default until validated on
     # tenant data (a bad match predicate over-groups).
     "entity_correlation_enabled": False,
+    # Verdict memoization (issue #29): a recurring alert shape previously
+    # LLM-verdicted as a high-confidence FP closes by reference without an
+    # LLM run. Off by default until validated (a stale memo suppresses a
+    # real alert). Reopen (#15) still applies to memoized closes.
+    "verdict_memoization_enabled": False,
     # Visibility
     # ``customer_safe_promotion`` controls how a freshly-promoted investigation
     # gets its initial visibility:
