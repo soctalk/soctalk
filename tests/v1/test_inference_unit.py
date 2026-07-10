@@ -24,7 +24,9 @@ from soctalk.inference import (
     InferenceTier,
     ProviderEngine,
     SamplingParams,
+    ToolSpec,
     ainvoke_request,
+    guided_request_kwargs,
     resolve_decoding_mode,
     resolve_tier,
 )
@@ -181,6 +183,7 @@ class _FakeLLM:
         self.plain_calls: list[Any] = []
         self.structured_schema = None
         self.bound_tools: list[Any] = []
+        self.bound_kwargs: dict[str, Any] = {}
 
     def with_structured_output(self, schema, include_raw=False):
         assert include_raw is True, "must keep raw for usage tracking"
@@ -193,6 +196,11 @@ class _FakeLLM:
 
     def bind_tools(self, tools):
         self.bound_tools.extend(tools)
+        return self
+
+    def bind(self, **kwargs):
+        # Served-engine guided decoding binds response_format / extra_body.
+        self.bound_kwargs = kwargs
         return self
 
 
@@ -348,11 +356,160 @@ async def test_dispatch_honors_tier_default_decoding_mode(patch_seams):
     assert res.resolved.decoding_mode == DecodingMode.TOOL_USE  # json_schema on anthropic -> tool_use
 
 
-async def test_dispatch_rejects_guided_modes_until_issue_13(patch_seams):
-    # A vLLM tier resolves AUTO+schema to guided_json, which has no served-engine
-    # shaping yet — the dispatcher must refuse loudly, not silently run it.
-    fake = _FakeLLM(structured=[])
+# ------------------------------------------ served-engine guided-decoding shaping
+
+
+def test_guided_request_kwargs_sglang_json_vs_ebnf_are_distinct():
+    # The core of native mode: a JSON-schema constraint and an EBNF grammar
+    # constraint must produce DIFFERENT, correct SGLang wire payloads —
+    # response_format json_schema vs extra_body ebnf.
+    schema = SupervisorDecision.model_json_schema()
+    j = guided_request_kwargs(
+        DecodingMode.GUIDED_JSON, ProviderEngine.SGLANG,
+        schema=schema, schema_name="SupervisorDecision",
+    )
+    assert j["response_format"]["type"] == "json_schema"
+    assert j["response_format"]["json_schema"]["name"] == "SupervisorDecision"
+    assert j["response_format"]["json_schema"]["schema"] == schema
+    assert "extra_body" not in j
+
+    g = guided_request_kwargs(
+        DecodingMode.GUIDED_GRAMMAR, ProviderEngine.SGLANG,
+        grammar='root ::= "yes" | "no"',
+    )
+    assert g == {"extra_body": {"ebnf": 'root ::= "yes" | "no"'}}
+    assert "response_format" not in g
+
+    assert j != g, "EBNF and JSON-schema constraints must be shaped differently"
+
+
+def test_guided_request_kwargs_vllm_uses_nested_structured_outputs():
+    schema = {"type": "object"}
+    assert guided_request_kwargs(
+        DecodingMode.GUIDED_JSON, ProviderEngine.VLLM, schema=schema,
+    ) == {"extra_body": {"structured_outputs": {"json": schema}}}
+    assert guided_request_kwargs(
+        DecodingMode.GUIDED_GRAMMAR, ProviderEngine.VLLM, grammar="X",
+    ) == {"extra_body": {"structured_outputs": {"grammar": "X"}}}
+
+
+def test_guided_request_kwargs_rejects_frontier_and_missing_inputs():
+    with pytest.raises(ValueError):
+        guided_request_kwargs(DecodingMode.GUIDED_JSON, ProviderEngine.FRONTIER, schema={})
+    with pytest.raises(ValueError):
+        guided_request_kwargs(DecodingMode.GUIDED_JSON, ProviderEngine.SGLANG, schema=None)
+    with pytest.raises(ValueError):
+        guided_request_kwargs(DecodingMode.GUIDED_GRAMMAR, ProviderEngine.SGLANG, grammar=None)
+
+
+async def test_dispatch_sglang_guided_json_binds_response_format_and_parses(patch_seams):
+    # An SGLang tier + schema resolves AUTO -> GUIDED_JSON: the dispatcher binds
+    # response_format json_schema and parses the engine's guaranteed-valid JSON
+    # content into the pydantic model (no validation retry needed).
+    payload = _decision(next_action="VERDICT").model_dump_json()
+    raw = AIMessage(content=payload,
+                    usage_metadata={"input_tokens": 3, "output_tokens": 4, "total_tokens": 7})
+    fake = _FakeLLM(plain=[raw])
+    tracked = patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"engine": "sglang", "base_url": "http://sglang:30000/v1"}})
+
+    res = await ainvoke_request(_req(), cfg=cfg)
+
+    assert res.resolved.decoding_mode == DecodingMode.GUIDED_JSON
+    assert fake.bound_kwargs["response_format"]["type"] == "json_schema"
+    assert fake.bound_kwargs["response_format"]["json_schema"]["strict"] is True
+    assert "extra_body" not in fake.bound_kwargs
+    assert res.parsed.next_action == "VERDICT"
+    assert res.attempts == 1
+    assert tracked == [raw], "guided response funnelled through budget.track once"
+
+
+async def test_dispatch_vllm_guided_json_binds_structured_outputs(patch_seams):
+    # vLLM tier + schema -> GUIDED_JSON via the nested structured_outputs extra_body.
+    payload = _decision(next_action="ENRICH").model_dump_json()
+    raw = AIMessage(content=payload,
+                    usage_metadata={"input_tokens": 3, "output_tokens": 4, "total_tokens": 7})
+    fake = _FakeLLM(plain=[raw])
     patch_seams(fake)
     cfg = _cfg(tiers={"router": {"engine": "vllm", "base_url": "http://vllm:8000/v1"}})
-    with pytest.raises(NotImplementedError):
+
+    res = await ainvoke_request(_req(), cfg=cfg)
+
+    assert res.resolved.decoding_mode == DecodingMode.GUIDED_JSON
+    assert fake.bound_kwargs == {"extra_body": {"structured_outputs": {
+        "json": SupervisorDecision.model_json_schema()}}}
+    assert res.parsed.next_action == "ENRICH"
+
+
+async def test_dispatch_guided_json_parse_failure_is_loud(patch_seams):
+    # The engine is supposed to guarantee valid JSON; if content doesn't parse,
+    # raise SchemaValidationError (parity with the frontier path) rather than
+    # returning a silent parsed=None a caller would treat as a real decision.
+    raw = AIMessage(content="this is not json",
+                    usage_metadata={"input_tokens": 1, "output_tokens": 3, "total_tokens": 4})
+    fake = _FakeLLM(plain=[raw])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"engine": "sglang", "base_url": "http://sglang:30000/v1"}})
+    with pytest.raises(SchemaValidationError):
         await ainvoke_request(_req(), cfg=cfg)
+
+
+async def test_dispatch_guided_rejects_tools(patch_seams):
+    # tools + guided is silently tools-dropping (and SGLang forbids the combo) —
+    # must refuse loudly.
+    fake = _FakeLLM(plain=[])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"engine": "sglang", "base_url": "http://sglang:30000/v1"}})
+    req = _req(tools=[ToolSpec(tool=object())])
+    with pytest.raises(ValueError):
+        await ainvoke_request(req, cfg=cfg)
+
+
+async def test_dispatch_guided_rejects_non_openai_provider(patch_seams):
+    # An explicit anthropic provider on an sglang-engine tier must not route
+    # SGLang shaping through ChatAnthropic.
+    fake = _FakeLLM(plain=[])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {
+        "provider": "anthropic", "engine": "sglang", "base_url": "http://sglang:30000/v1",
+    }})
+    with pytest.raises(ValueError):
+        await ainvoke_request(_req(), cfg=cfg)
+
+
+def test_resolve_decoding_rejects_schema_and_grammar_together():
+    with pytest.raises(ValueError):
+        resolve_decoding_mode(
+            DecodingMode.AUTO, engine=ProviderEngine.SGLANG, provider="openai",
+            has_schema=True, has_grammar=True,
+        )
+
+
+async def test_dispatch_rejects_schema_and_grammar_together(patch_seams):
+    fake = _FakeLLM(plain=[])
+    patch_seams(fake)
+    cfg = _cfg(tiers={"router": {"engine": "sglang", "base_url": "http://sglang:30000/v1"}})
+    req = _req(grammar='root ::= "a"')  # output_schema=SupervisorDecision is also set
+    with pytest.raises(ValueError):
+        await ainvoke_request(req, cfg=cfg)
+
+
+async def test_dispatch_sglang_guided_grammar_binds_ebnf_and_returns_text(patch_seams):
+    # An SGLang tier + grammar (no schema) resolves AUTO -> GUIDED_GRAMMAR: the
+    # dispatcher binds extra_body ebnf and returns the grammar-conforming raw
+    # text (no schema parse).
+    raw = AIMessage(content="yes",
+                    usage_metadata={"input_tokens": 2, "output_tokens": 1, "total_tokens": 3})
+    fake = _FakeLLM(plain=[raw])
+    tracked = patch_seams(fake)
+    grammar = 'root ::= "yes" | "no"'
+    cfg = _cfg(tiers={"reasoning": {"engine": "sglang", "base_url": "http://sglang:30000/v1"}})
+    req = _req(tier=InferenceTier.REASONING, output_schema=None, grammar=grammar)
+
+    res = await ainvoke_request(req, cfg=cfg)
+
+    assert res.resolved.decoding_mode == DecodingMode.GUIDED_GRAMMAR
+    assert fake.bound_kwargs == {"extra_body": {"ebnf": grammar}}
+    assert res.text == "yes"
+    assert res.parsed is None
+    assert tracked == [raw]
