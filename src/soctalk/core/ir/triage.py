@@ -37,6 +37,11 @@ from soctalk.core.ir.events import (
     canonical_json,
     ioc_fingerprint,
 )
+from soctalk.core.ir.correlation import (
+    extract_keys,
+    find_correlated_investigation,
+    record_keys,
+)
 from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.observability.audit import log_audit
@@ -681,10 +686,10 @@ async def triage_event(
         return {"alert_id": str(alert_id), "action": "merged"}
 
     # Duplicate of an already-promoted alert → the event becomes evidence
-    # on the existing investigation. Never starts a run: if a run is live
-    # it will see the updated alert; if it is HIL-parked or budget-halted
-    # the gate stays authoritative; if it is terminal the investigation
-    # record simply accumulates the recurrence.
+    # on the existing investigation's alert row. Never starts a run. Note:
+    # a LIVE run does NOT see this update — the worker snapshots graph
+    # state once before invocation — so mid-run recurrence is picked up by
+    # the follow-up-run mechanism, not by mutating the running graph.
     if alert_result.get("attached"):
         attached_case_id = alert_result["investigation_id"]
         await append_event(
@@ -770,7 +775,69 @@ async def triage_event(
             "action": "auto_closed",
         }
 
-    # All other bands: create an investigation. Apply the settle window
+    # 4. Entity-overlap correlation (issue #27): a real (non-FP) alert that
+    #    shares a high-strength, non-hub typed entity with an ACTIVE
+    #    investigation attaches to it — inserted-and-linked (this fresh alert
+    #    row joins the existing investigation) rather than spawning a new
+    #    one. Runs AFTER auto-close so FPs never get pulled in, and AFTER
+    #    reopen so a live investigation is preferred over resurrecting a
+    #    closed FP. No new run: the settle window / follow-up mechanism owns
+    #    mid-run recurrence.
+    keys = extract_keys(
+        entities=evidence.get("entities"),
+        initial_iocs=initial_iocs,
+        rule_id=rule_id,
+    )
+    if policy.get("entity_correlation_enabled", False):
+        correlated_id = await find_correlated_investigation(
+            db, tenant_id=tenant_id, keys=keys
+        )
+        if correlated_id is not None:
+            await db.execute(
+                text(
+                    "UPDATE alerts SET status = 'promoted', investigation_id = :c "
+                    "WHERE id = :id"
+                ),
+                {"c": str(correlated_id), "id": str(alert_id)},
+            )
+            await record_keys(
+                db, tenant_id=tenant_id, alert_id=alert_id,
+                investigation_id=correlated_id, keys=keys, occurred_at=ts,
+            )
+            await append_event(
+                db,
+                tenant_id=tenant_id,
+                investigation_id=correlated_id,
+                run_id=None,
+                kind=EventKind.ALERT_INGESTED,
+                payload={
+                    "alert_id": str(alert_id),
+                    "correlated": True,
+                    "source_event_id": source_event_id,
+                    "rule_id": rule_id,
+                    "severity": severity,
+                    "asset_ids": asset_ids,
+                },
+                idempotency_key=f"corr-{alert_id}-{source_event_id}",
+                producer="triage",
+            )
+            await log_audit(
+                db,
+                action="ir.investigation.alert_correlated",
+                actor_principal="system",
+                actor_id="triage",
+                tenant_id=tenant_id,
+                resource_type="investigation",
+                resource_id=str(correlated_id),
+                notes=f"entity-overlap attach of alert {alert_id}",
+            )
+            return {
+                "alert_id": str(alert_id),
+                "investigation_id": str(correlated_id),
+                "action": "correlated",
+            }
+
+    # 5. All other bands: create an investigation. Apply the settle window
     # (issue #28) unless the alert is high-severity, which claims
     # immediately — we don't trade latency for batching on critical alerts.
     settle_seconds = (
@@ -781,6 +848,10 @@ async def triage_event(
     investigation_id = await promote_alert_to_case(
         db, tenant_id=tenant_id, alert_id=alert_id, title=title,
         settle_seconds=settle_seconds,
+    )
+    await record_keys(
+        db, tenant_id=tenant_id, alert_id=alert_id,
+        investigation_id=investigation_id, keys=keys, occurred_at=ts,
     )
     return {
         "alert_id": str(alert_id),
