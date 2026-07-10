@@ -75,6 +75,16 @@ async def merge_investigations(
              "updated_at = now() WHERE id = :other AND tenant_id = :t"),
         {"keep": str(keep_id), "other": str(other_id), "t": str(tenant_id)},
     )
+    # Cancel the merged-away investigation's live run so no worker claims it
+    # (review finding #4) — the claim query also now guards on investigation
+    # status, but terminate the run explicitly for a clean lifecycle.
+    await db.execute(
+        text("UPDATE investigation_runs SET status = 'failed', ended_at = now(), "
+             "last_error = 'investigation merged' "
+             "WHERE tenant_id = :t AND investigation_id = :other "
+             "  AND status IN ('active','paused','waiting_on_gate','halted_budget')"),
+        {"t": str(tenant_id), "other": str(other_id)},
+    )
     await _record_label(
         db, tenant_id=tenant_id, label="merge",
         investigation_id=keep_id, other_investigation_id=other_id,
@@ -126,6 +136,11 @@ async def detach_alert(
              "WHERE tenant_id = :t AND alert_id = :a"),
         {"new": str(new_inv), "t": str(tenant_id), "a": str(alert_id)},
     )
+    # Start a run so the detached alert actually gets triaged (review #4 —
+    # a fresh investigation with no run would never be looked at).
+    from soctalk.core.ir.runtime import start_run
+
+    await start_run(db, tenant_id, new_inv)
     await _record_label(
         db, tenant_id=tenant_id, label="detach",
         investigation_id=old_inv, alert_id=alert_id,

@@ -123,3 +123,50 @@ async def test_confirm_records_positive_label(
         {"t": str(tenant_a.tenant_id)},
     )).scalar_one()
     assert n == 1
+
+
+async def test_merge_cancels_other_investigations_run(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Review finding #4: merging away an investigation cancels its live run
+    so no worker claims an orphaned run."""
+    from uuid import uuid4
+    from soctalk.core.ir.runtime import start_run
+
+    tenant_a, _ = seed_two_tenants
+    r1 = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("mc1", "hK1", "5710"))
+    r2 = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("mc2", "hK2", "5710"))
+    await mssp_session.commit()
+    keep, other = r1["investigation_id"], r2["investigation_id"]
+
+    await merge_investigations(mssp_session, tenant_id=tenant_a.tenant_id,
+                               keep_id=keep, other_id=other, reviewer="a")
+    await mssp_session.commit()
+    # other's run is terminal (not claimable).
+    live = (await mssp_session.execute(
+        text("SELECT count(*) FROM investigation_runs "
+             "WHERE investigation_id = :c AND status = 'active'"), {"c": other},
+    )).scalar_one()
+    assert live == 0, "merged-away investigation must have no live run"
+
+
+async def test_detach_starts_a_run(mssp_session: AsyncSession, seed_two_tenants):
+    """Review finding #4: a detached alert lands on a fresh investigation
+    WITH a run so it actually gets triaged."""
+    tenant_a, _ = seed_two_tenants
+    await set_tenant_policy(mssp_session, tenant_a.tenant_id, "entity_correlation_enabled", True)
+    await mssp_session.commit()
+    r1 = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("dt1", "hD", "5710"))
+    await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **_ev("dt2", "hD", "92657"))
+    await mssp_session.commit()
+    alert_id = (await mssp_session.execute(
+        text("SELECT id FROM alerts WHERE investigation_id = :c "
+             "ORDER BY first_event_at DESC LIMIT 1"), {"c": r1["investigation_id"]},
+    )).scalar_one()
+    out = await detach_alert(mssp_session, tenant_id=tenant_a.tenant_id, alert_id=alert_id)
+    await mssp_session.commit()
+    runs = (await mssp_session.execute(
+        text("SELECT count(*) FROM investigation_runs WHERE investigation_id = :c"),
+        {"c": out["new_investigation_id"]},
+    )).scalar_one()
+    assert runs == 1, "detached alert's new investigation must have a run"

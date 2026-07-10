@@ -50,20 +50,31 @@ def _reuse_confidence_floor() -> float:
         return 0.9
 
 
+def _reuse_ttl_days() -> int:
+    """A memo older than this is stale and not reused (review finding #1):
+    'recently verdicted' must actually mean recently, or an ancient FP
+    verdict suppresses a newly-malicious recurrence of the same shape."""
+    try:
+        return max(1, int(os.getenv("SOCTALK_MEMOIZE_TTL_DAYS", "30")))
+    except ValueError:
+        return 30
+
+
 async def lookup_memoized_close(
     db: AsyncSession, *, tenant_id: UUID, key: str
 ) -> dict[str, Any] | None:
     """Return a reusable FP-close verdict for this shape, or None.
 
-    Only returns a row whose cached decision is a high-confidence close.
+    Only returns a high-confidence ``close`` verdict recorded within the TTL.
     """
     row = (
         await db.execute(
             text(
                 "SELECT decision, confidence FROM verdict_cache "
-                "WHERE tenant_id = :t AND shape_key = :k"
+                "WHERE tenant_id = :t AND shape_key = :k "
+                "  AND last_verdict_at > now() - make_interval(days => :ttl)"
             ),
-            {"t": str(tenant_id), "k": key},
+            {"t": str(tenant_id), "k": key, "ttl": _reuse_ttl_days()},
         )
     ).mappings().first()
     if row is None:

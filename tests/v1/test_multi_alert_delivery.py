@@ -117,3 +117,33 @@ async def test_hil_alert_count_reflects_grouping(
         {"c": inv},
     )).scalar_one()
     assert cnt == 2, "HIL alert_count must reflect the correlated group, not 1"
+
+
+async def test_followup_flag_set_when_correlating_to_live_run(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Review finding #2: correlating an alert onto an investigation that has
+    a live run sets has_new_evidence, so complete_run can start a follow-up."""
+    tenant_a, _ = seed_two_tenants
+    await set_tenant_policy(mssp_session, tenant_a.tenant_id, "entity_correlation_enabled", True)
+    await mssp_session.commit()
+
+    def ev(seid, rule):
+        return dict(source="wazuh", rule_id=rule, severity=9, asset_ids=["fl-1"],
+                    initial_iocs=[], source_event_id=seid, ts=datetime.now(timezone.utc),
+                    description="x",
+                    evidence={"entities": [{"type": "host", "value": "fl-1", "role": "target"}],
+                              "mitre": {}, "schema_version": 2})
+
+    r1 = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **ev("f1", "5710"))
+    await mssp_session.commit()
+    inv = r1["investigation_id"]
+    # The promote created an active run. A correlated alert now arrives.
+    r2 = await triage_event(mssp_session, tenant_id=tenant_a.tenant_id, **ev("f2", "92657"))
+    await mssp_session.commit()
+    assert r2["action"] == "correlated"
+
+    flag = (await mssp_session.execute(
+        text("SELECT has_new_evidence FROM investigations WHERE id = :c"), {"c": inv},
+    )).scalar_one()
+    assert flag is True, "correlating onto a live-run investigation must flag follow-up"

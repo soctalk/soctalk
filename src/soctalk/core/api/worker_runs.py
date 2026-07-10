@@ -177,16 +177,22 @@ async def claim_run(request: Request) -> ClaimedRun | None:
             await db.execute(
                 text(
                     """
-                    SELECT id, investigation_id, tokens_used, tokens_budget,
-                           dollars_used, dollars_budget
-                    FROM investigation_runs
-                    WHERE tenant_id = :t
-                      AND status = 'active'
-                      AND not_before <= now()
-                      AND (claimed_at IS NULL
-                           OR lease_expires_at < now())
-                    ORDER BY started_at ASC
-                    FOR UPDATE SKIP LOCKED
+                    SELECT r.id, r.investigation_id, r.tokens_used, r.tokens_budget,
+                           r.dollars_used, r.dollars_budget
+                    FROM investigation_runs r
+                    JOIN investigations i ON i.id = r.investigation_id
+                                         AND i.tenant_id = r.tenant_id
+                    WHERE r.tenant_id = :t
+                      AND r.status = 'active'
+                      AND r.not_before <= now()
+                      AND (r.claimed_at IS NULL
+                           OR r.lease_expires_at < now())
+                      -- Don't claim a run whose investigation was closed out
+                      -- from under it (e.g. merged away by an analyst,
+                      -- review finding #4).
+                      AND i.status = 'active'
+                    ORDER BY r.started_at ASC
+                    FOR UPDATE OF r SKIP LOCKED
                     LIMIT 1
                     """
                 ),
@@ -473,6 +479,29 @@ async def complete_run(
                 decision="close" if payload.disposition == "close_fp" else "escalate",
                 confidence=float(payload.verdict_confidence),
             )
+
+        # Follow-up run (review finding #2): if alerts correlated onto this
+        # investigation WHILE the run was executing, they were invisible to
+        # the snapshot the graph reasoned over. If the investigation is still
+        # active (this run didn't close it) and evidence arrived, start a
+        # fresh run over the now-complete alert set and clear the flag. The
+        # just-completed run is terminal, so the single-active-run index
+        # permits the new one.
+        if payload.status == "completed":
+            from soctalk.core.ir.runtime import start_run
+
+            fu = (await db.execute(
+                text("SELECT has_new_evidence, status FROM investigations "
+                     "WHERE id = :c AND tenant_id = :t"),
+                {"c": str(investigation_id), "t": str(tenant_id)},
+            )).mappings().first()
+            if fu and fu["has_new_evidence"] and fu["status"] == "active":
+                await db.execute(
+                    text("UPDATE investigations SET has_new_evidence = false "
+                         "WHERE id = :c AND tenant_id = :t"),
+                    {"c": str(investigation_id), "t": str(tenant_id)},
+                )
+                await start_run(db, tenant_id, investigation_id)
     logger.info(
         "case_run_completed",
         run_id=str(run_id),
