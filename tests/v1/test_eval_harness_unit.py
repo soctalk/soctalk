@@ -78,5 +78,7 @@ def test_summarize_accuracy():
         score_verdict(case, "close", 0.8),
     ]
     s = summarize(results)
-    assert s["routing"] == {"total": 2, "passed": 1, "accuracy": 0.5}
+    assert s["routing"] == {
+        "total": 2, "passed": 1, "accuracy": 0.5, "errors": 0, "schema_errors": 0,
+    }
     assert s["verdict"]["accuracy"] == 1.0
