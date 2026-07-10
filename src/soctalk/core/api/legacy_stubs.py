@@ -184,40 +184,7 @@ async def review_pending(
                     await s.execute(list_sql, {"off": offset, "lim": page_size})
                 ).mappings().all()
 
-    def _iso(value: Any) -> str | None:
-        if value is None:
-            return None
-        if hasattr(value, "isoformat"):
-            return value.isoformat()
-        return str(value)
-
-    items = [
-        _PendingReviewItem(
-            id=r["id"],
-            investigation_id=r["investigation_id"],
-            status=r["status"],
-            title=r["title"],
-            description=r["description"],
-            max_severity=r["max_severity"],
-            alert_count=int(r["alert_count"] or 0),
-            malicious_count=int(r["malicious_count"] or 0),
-            suspicious_count=int(r["suspicious_count"] or 0),
-            clean_count=int(r["clean_count"] or 0),
-            findings=list(r["findings"] or []),
-            enrichments=dict(r["enrichments"] or {}),
-            misp_context=(dict(r["misp_context"]) if r["misp_context"] else None),
-            ai_decision=r["ai_decision"],
-            ai_confidence=(
-                float(r["ai_confidence"]) if r["ai_confidence"] is not None else None
-            ),
-            ai_assessment=r["ai_assessment"],
-            ai_recommendation=r["ai_recommendation"],
-            timeout_seconds=int(r["timeout_seconds"] or 3600),
-            created_at=_iso(r["created_at"]) or "",
-            expires_at=_iso(r["expires_at"]),
-        )
-        for r in rows
-    ]
+    items = [_pending_review_item(r) for r in rows]
     return _PendingReviewList(
         items=items,
         total=int(total or 0),
@@ -227,14 +194,101 @@ async def review_pending(
     )
 
 
+_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
+
+
+def _pending_review_item(r: "Any") -> _PendingReviewItem:
+    """Map a full ``pending_reviews`` row to the wire shape. Shared by the
+    list and single-fetch endpoints so both stay in lockstep."""
+
+    def _iso(value: Any) -> str | None:
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
+    return _PendingReviewItem(
+        id=r["id"],
+        investigation_id=r["investigation_id"],
+        status=r["status"],
+        title=r["title"],
+        description=r["description"],
+        max_severity=r["max_severity"],
+        alert_count=int(r["alert_count"] or 0),
+        malicious_count=int(r["malicious_count"] or 0),
+        suspicious_count=int(r["suspicious_count"] or 0),
+        clean_count=int(r["clean_count"] or 0),
+        findings=list(r["findings"] or []),
+        enrichments=dict(r["enrichments"] or {}),
+        misp_context=(dict(r["misp_context"]) if r["misp_context"] else None),
+        ai_decision=r["ai_decision"],
+        ai_confidence=(
+            float(r["ai_confidence"]) if r["ai_confidence"] is not None else None
+        ),
+        ai_assessment=r["ai_assessment"],
+        ai_recommendation=r["ai_recommendation"],
+        timeout_seconds=int(r["timeout_seconds"] or 3600),
+        created_at=_iso(r["created_at"]) or "",
+        expires_at=_iso(r["expires_at"]),
+    )
+
+
+# Full-row projection used by both the list and single-fetch endpoints.
+_REVIEW_COLUMNS = """
+    id::text, investigation_id::text, status, title, description,
+    max_severity, alert_count, malicious_count, suspicious_count,
+    clean_count, findings, enrichments, misp_context, ai_decision,
+    ai_confidence, ai_assessment, ai_recommendation,
+    timeout_seconds, created_at, expires_at
+"""
+
+
+@router.get("/api/review/{review_id}", response_model=_PendingReviewItem)
+async def review_detail(review_id: str, request: Request) -> _PendingReviewItem:
+    """Fetch a single HIL review by id, role-aware tenant-scoped.
+
+    Uses the same two-pool RLS idiom as ``_resolve_pending_review``:
+    MSSP-level roles read cross-tenant via the BYPASSRLS session; tenant
+    users are pinned by ``tenant_context`` so a cross-tenant id 404s the
+    same way a truly missing row does (never disclose existence).
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+
+    from soctalk.core.tenancy.context import tenant_context
+    from soctalk.core.tenancy.db import (
+        get_app_sessionmaker,
+        get_mssp_sessionmaker,
+    )
+
+    identity = current_identity(request)
+    sql = text(
+        f"SELECT {_REVIEW_COLUMNS} FROM pending_reviews WHERE id = :rid"
+    )
+
+    if identity.role in _MSSP_LEVEL_ROLES:
+        sm = get_mssp_sessionmaker()
+        async with sm() as s:
+            row = (await s.execute(sql, {"rid": review_id})).mappings().first()
+    else:
+        if identity.tenant_id is None:
+            raise HTTPException(403, "tenant scope required")
+        sm = get_app_sessionmaker()
+        async with sm() as s:
+            async with tenant_context(s, identity.tenant_id):
+                row = (await s.execute(sql, {"rid": review_id})).mappings().first()
+
+    if row is None:
+        raise HTTPException(404, "review not found")
+    return _pending_review_item(row)
+
+
 class _ReviewActionResponse(BaseModel):
     success: bool = True
     review_id: str
     new_status: str
     investigation_id: str
-
-
-_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
 
 
 async def _resolve_pending_review(

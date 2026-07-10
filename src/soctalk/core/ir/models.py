@@ -48,6 +48,7 @@ class CaseStatus(str, Enum):
     PAUSED = "paused"
     CLOSED = "closed"
     AUTO_CLOSED_FP = "auto_closed_fp"
+    CANCELLED = "cancelled"
 
 
 class RunStatus(str, Enum):

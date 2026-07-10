@@ -22,13 +22,16 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.ir.labels import TERMINAL_STATUSES, cancel_investigation
 from soctalk.core.tenancy.auth import current_identity
-
+from soctalk.core.tenancy.context import tenant_context
+from soctalk.core.tenancy.decorators import require_role
+from soctalk.core.tenancy.models import Role
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations-bridge"])
 
@@ -90,7 +93,7 @@ def _phase_from_status(status: str) -> str:
     # verdict / closed); IR has a richer status set we collapse.
     if status in ("active",):
         return "analysis"
-    if status in ("auto_closed_fp", "closed_fp", "closed", "closed_tp"):
+    if status in TERMINAL_STATUSES:
         return "closed"
     return status
 
@@ -379,3 +382,76 @@ async def get_events(
         for r in rows
     ]
     return EventTimelineResponse(events=events, total=len(events))
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: cancel
+#
+# Pause/resume are intentionally not implemented: a status flip with no
+# effect on the runs worker would be a button that lies about backend
+# state (see issue #16). Cancel is a genuine terminal transition — the
+# worker's claim query guards on ``investigations.status = 'active'``, so
+# moving to ``cancelled`` stops any future run from being claimed, and we
+# terminate the live run explicitly for a clean lifecycle (mirroring the
+# merge-away path in ir/labels.py).
+# ---------------------------------------------------------------------------
+
+
+class CancelRequest(BaseModel):
+    reason: str | None = None
+
+
+class ActionResponse(BaseModel):
+    success: bool
+    message: str
+    investigation_id: str
+
+
+async def _resolve_tenant(db: AsyncSession, investigation_id: UUID) -> UUID:
+    """Resolve an investigation's tenant_id. MSSP audience reads across
+    tenants, so this succeeds with ``app.current_tenant_id`` unset; the
+    caller then wraps the mutation in ``tenant_context`` so RLS WITH CHECK
+    passes."""
+    row = (
+        await db.execute(
+            text("SELECT tenant_id FROM investigations WHERE id = :id"),
+            {"id": str(investigation_id)},
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "investigation not found")
+    return UUID(str(row))
+
+
+@router.post(
+    "/{investigation_id}/cancel",
+    response_model=ActionResponse,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def post_cancel_investigation(
+    investigation_id: UUID, payload: CancelRequest, request: Request
+) -> ActionResponse:
+    db = _db(request)
+    identity = current_identity(request)
+    tid = await _resolve_tenant(db, investigation_id)
+    reason = (payload.reason or "").strip() or None
+
+    async with tenant_context(db, tid):
+        try:
+            await cancel_investigation(
+                db,
+                tenant_id=tid,
+                investigation_id=investigation_id,
+                reason=reason,
+                actor=f"user:{identity.user_id}",
+            )
+        except LookupError:
+            raise HTTPException(404, "investigation not found")
+        except ValueError as exc:
+            raise HTTPException(409, f"investigation {exc}")
+
+    return ActionResponse(
+        success=True,
+        message="Investigation cancelled",
+        investigation_id=str(investigation_id),
+    )

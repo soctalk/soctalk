@@ -495,10 +495,9 @@ export const api = {
 			return response.events;
 		},
 
-		pause: (id: string) => request<ActionResponse>(`/investigations/${id}/pause`, { method: 'POST' }),
-
-		resume: (id: string) => request<ActionResponse>(`/investigations/${id}/resume`, { method: 'POST' }),
-
+		// Pause/resume intentionally omitted: the runs worker has no pause
+		// semantics, so those routes do not exist (issue #16). Cancel is the
+		// only wired lifecycle transition.
 		cancel: (id: string, reason?: string) =>
 			request<ActionResponse>(`/investigations/${id}/cancel`, {
 				method: 'POST',
