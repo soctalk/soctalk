@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir 'fastapi==0.115.*' 'uvicorn[standard]==0.30.*' 'h
 
 COPY src/soctalk_adapter /app/soctalk_adapter
 COPY src/soctalk_wire /app/soctalk_wire
+COPY src/soctalk_entities /app/soctalk_entities
 
 # Match the chart's runAsUser; ensures /app is readable.
 RUN find /app -type f -exec chmod a+r {} + \
