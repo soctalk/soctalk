@@ -1,0 +1,162 @@
+"""Per-tier LLM provider/base_url config loading (issue #4).
+
+load_config builds LLMConfig.tiers from SOCTALK_<TIER>_* env so the
+InferenceRequest resolver can route the high-volume router loop to a cheap
+self-hosted (OpenAI-compatible) endpoint while the reasoning verdict stays on
+a frontier model — without forking the config system. Backward compatibility:
+single-provider deployments produce no tier overrides and keep the strict
+mutual-exclusion guard.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from soctalk.config import load_config
+from soctalk.inference import InferenceTier, ProviderEngine, resolve_tier
+
+_PREFIXES = ("SOCTALK_", "ANTHROPIC_", "OPENAI_")
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    """Strip all LLM env so each test starts from nothing, and load from a
+    throwaway env_file so the repo .env never leaks in."""
+    import os
+
+    for k in list(os.environ):
+        if k.startswith(_PREFIXES):
+            monkeypatch.delenv(k, raising=False)
+
+    def _load(**env):
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        return load_config(env_file="/dev/null").llm
+
+    return _load
+
+
+# ------------------------------------------------------------- mixed routing
+
+
+def test_mixed_provider_tiers_resolve(clean_env):
+    cfg = clean_env(
+        SOCTALK_FAST_PROVIDER="openai",
+        SOCTALK_FAST_MODEL="qwen3-32b",
+        SOCTALK_FAST_BASE_URL="http://sglang.internal/v1",
+        SOCTALK_FAST_ENGINE="sglang",
+        SOCTALK_FAST_API_KEY="sk-local-dummy",
+        SOCTALK_REASONING_PROVIDER="anthropic",
+        SOCTALK_REASONING_MODEL="claude-sonnet-4-6",
+        ANTHROPIC_API_KEY="ak-real",
+    )
+    router = resolve_tier(cfg, InferenceTier.ROUTER)
+    reasoning = resolve_tier(cfg, InferenceTier.REASONING)
+
+    assert router.provider == "openai"
+    assert router.engine == ProviderEngine.SGLANG
+    assert router.model == "qwen3-32b"
+    assert router.llm_config.openai_base_url == "http://sglang.internal/v1"
+    assert router.llm_config.openai_api_key == "sk-local-dummy"
+    assert router.llm_config.anthropic_api_key == ""  # scoped: other provider scrubbed
+
+    assert reasoning.provider == "anthropic"
+    assert reasoning.engine == ProviderEngine.FRONTIER
+    assert reasoning.model == "claude-sonnet-4-6"
+    assert reasoning.llm_config.anthropic_api_key == "ak-real"
+    assert reasoning.llm_config.openai_api_key == ""
+
+
+def test_per_tier_api_key_avoids_second_global_key(clean_env):
+    # Only ANTHROPIC_API_KEY globally; the served router carries its own key,
+    # so no OPENAI_API_KEY is needed and the guard is irrelevant.
+    cfg = clean_env(
+        SOCTALK_FAST_PROVIDER="openai",
+        SOCTALK_FAST_BASE_URL="http://vllm:8000/v1",
+        SOCTALK_FAST_ENGINE="vllm",
+        SOCTALK_FAST_API_KEY="sk-served",
+        ANTHROPIC_API_KEY="ak",
+    )
+    router = resolve_tier(cfg, InferenceTier.ROUTER)
+    assert router.provider == "openai"
+    assert router.llm_config.openai_api_key == "sk-served"
+
+
+# ------------------------------------------------------------- backward compat
+
+
+def test_single_provider_leaves_tiers_empty(clean_env):
+    cfg = clean_env(SOCTALK_FAST_MODEL="claude-x", ANTHROPIC_API_KEY="ak")
+    assert cfg.tiers == {}
+
+
+def test_model_only_tier_var_creates_no_override(clean_env):
+    # A bare per-tier MODEL (no provider/base_url/engine) must not materialize a
+    # tier — otherwise it would relax the mutual-exclusion guard for a plain
+    # single-provider deployment.
+    cfg = clean_env(
+        SOCTALK_FAST_MODEL="m1",
+        SOCTALK_REASONING_MODEL="m2",
+        SOCTALK_CHAT_MODEL="m3",
+        ANTHROPIC_API_KEY="ak",
+    )
+    assert cfg.tiers == {}
+
+
+def test_both_keys_rejected_without_tiers(clean_env):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        clean_env(ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o")
+
+
+# --------------------------------------------------------------- mixed guard
+
+
+def test_both_keys_allowed_with_tiers(clean_env):
+    cfg = clean_env(
+        ANTHROPIC_API_KEY="a",
+        OPENAI_API_KEY="o",
+        SOCTALK_FAST_PROVIDER="openai",
+        SOCTALK_FAST_BASE_URL="http://vllm/v1",
+        SOCTALK_REASONING_PROVIDER="anthropic",
+    )
+    # Global/default provider keeps the historical default when unspecified.
+    assert cfg.provider == "anthropic"
+    assert set(cfg.tiers) == {"router", "reasoning"}
+
+
+def test_mixed_mode_respects_explicit_default_provider(clean_env):
+    cfg = clean_env(
+        SOCTALK_LLM_PROVIDER="openai",
+        ANTHROPIC_API_KEY="a",
+        OPENAI_API_KEY="o",
+        SOCTALK_REASONING_PROVIDER="anthropic",
+    )
+    assert cfg.provider == "openai"
+
+
+# ---------------------------------------------------------------- validation
+
+
+def test_invalid_tier_provider_rejected(clean_env):
+    with pytest.raises(ValueError, match="SOCTALK_FAST_PROVIDER"):
+        clean_env(SOCTALK_FAST_PROVIDER="bedrock", SOCTALK_FAST_BASE_URL="x", ANTHROPIC_API_KEY="a")
+
+
+def test_invalid_tier_engine_rejected(clean_env):
+    with pytest.raises(ValueError, match="SOCTALK_FAST_ENGINE"):
+        clean_env(
+            SOCTALK_FAST_ENGINE="tensorrt",
+            SOCTALK_FAST_BASE_URL="x",
+            SOCTALK_FAST_PROVIDER="openai",
+            ANTHROPIC_API_KEY="a",
+        )
+
+
+def test_invalid_tier_decoding_mode_rejected(clean_env):
+    with pytest.raises(ValueError, match="SOCTALK_FAST_DECODING_MODE"):
+        clean_env(
+            SOCTALK_FAST_DECODING_MODE="regex",
+            SOCTALK_FAST_PROVIDER="openai",
+            SOCTALK_FAST_BASE_URL="x",
+            ANTHROPIC_API_KEY="a",
+        )
