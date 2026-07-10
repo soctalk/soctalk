@@ -70,6 +70,26 @@ class LlmConfigRead(BaseModel):
     tiers: dict[str, Any] | None = None
 
 
+def _cross_provider_tiers_without_key(
+    primary_provider: str | None, llm_tiers: dict[str, Any] | None
+) -> list[str]:
+    """Tier names on a DIFFERENT provider than the primary that carry no own key.
+
+    A provisioned tenant mounts only the primary provider's credential, so such a
+    tier can't authenticate and the worker would CrashLoop at startup — the API
+    rejects it (422) at config time instead. openai/openai-compatible collapse to
+    one runtime provider.
+    """
+    def _canon(p: str | None) -> str:
+        return "openai" if p in ("openai", "openai-compatible") else (p or "")
+
+    primary = _canon(primary_provider)
+    return [
+        tier for tier, block in (llm_tiers or {}).items()
+        if _canon((block or {}).get("provider")) != primary and not (block or {}).get("api_key_plain")
+    ]
+
+
 def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Read-safe view of ``llm_tiers`` — strips per-tier plaintext keys."""
     if not raw:
@@ -282,6 +302,17 @@ async def update_tenant_llm(
                 cfg.llm_tiers = validate_llm_tiers(payload.tiers)
             except ValueError as e:
                 raise HTTPException(422, f"invalid llm_tiers: {e}") from e
+            # A tier on a DIFFERENT provider than the tenant's primary must carry
+            # its own key (the tenant mounts only the primary credential). Reject
+            # at config time rather than let the worker CrashLoop at startup.
+            offending = _cross_provider_tiers_without_key(cfg.llm_provider, cfg.llm_tiers)
+            if offending:
+                raise HTTPException(
+                    422,
+                    f"llm_tiers {offending} use a different provider than the tenant's "
+                    f"{cfg.llm_provider!r} but supply no api_key_plain; a cross-provider "
+                    "tier must supply its own key.",
+                )
         # Overrides are chart-affecting: render.py resolves them into
         # runsWorker.fastModel / reasoningModel, so a change (including
         # a clear) needs a helm re-render exactly like provider/model.

@@ -116,12 +116,25 @@ def _load_tier_configs() -> dict[str, dict]:
         if "engine" in entry:
             from soctalk.inference import ProviderEngine
             try:
-                ProviderEngine(entry["engine"])
+                engine = ProviderEngine(entry["engine"])
             except ValueError as e:
                 raise ValueError(
                     f"Invalid {prefix}_ENGINE={entry['engine']!r}. "
                     f"Expected one of {[m.value for m in ProviderEngine]}."
                 ) from e
+            # A served / gateway engine has no public default endpoint — without a
+            # base_url (per-tier OR the global OPENAI_BASE_URL the resolver
+            # inherits) the worker would dial api.openai.com with a served model
+            # name and fail. Fail loudly at config time instead.
+            served = {ProviderEngine.VLLM, ProviderEngine.SGLANG,
+                      ProviderEngine.OPENAI_COMPATIBLE}
+            global_openai_base = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+            if engine in served and not entry.get("base_url") and not global_openai_base:
+                raise ValueError(
+                    f"{prefix}_ENGINE={entry['engine']} requires {prefix}_BASE_URL "
+                    "(or a global OPENAI_BASE_URL) — a served/gateway engine has no "
+                    "default endpoint."
+                )
         if "default_decoding_mode" in entry:
             from soctalk.inference import DecodingMode
             try:
@@ -260,12 +273,23 @@ def load_config(env_file: Optional[Path] = None) -> Config:
     # single-provider guard.
     tier_configs = _load_tier_configs()
 
-    if anthropic_api_key and openai_api_key and not tier_configs:
+    # Relax the guard ONLY for genuine mixed-provider intent — a tier that names
+    # a second provider or a served engine (vLLM/SGLang/openai-compatible, which
+    # routes to the OpenAI client). A base_url-only override rides the global
+    # provider and does NOT justify both keys, so it stays gated (a stray second
+    # key there is a silent misconfig, not a mixed deployment).
+    _served = {"vllm", "sglang", "openai_compatible"}
+    has_mixed_intent = any(
+        t.get("provider") or (t.get("engine") in _served)
+        for t in tier_configs.values()
+    )
+
+    if anthropic_api_key and openai_api_key and not has_mixed_intent:
         raise ValueError(
             "Both ANTHROPIC_API_KEY and OPENAI_API_KEY are set. "
             "SocTalk supports either Anthropic or an OpenAI-compatible provider (mutually exclusive) "
-            "unless per-tier providers are configured (SOCTALK_<TIER>_PROVIDER). "
-            "Unset one of the keys."
+            "unless per-tier providers are configured (SOCTALK_<TIER>_PROVIDER / a served "
+            "SOCTALK_<TIER>_ENGINE). Unset one of the keys."
         )
 
     if provider_preference:

@@ -162,7 +162,12 @@ def _handle_propose_action(targs: dict[str, Any]) -> tuple[dict[str, Any] | None
     Validation lives in ``actions.build_proposed_action`` (unchanged) — the
     model is never trusted to point at endpoints.
     """
-    target = targs.get("target") or {}
+    # ``target`` may arrive as a non-dict (the model is untrusted) — coerce so
+    # ``.get`` can't raise AttributeError out of the try and abort the turn
+    # before the ToolMessage ack is appended.
+    target = targs.get("target")
+    if not isinstance(target, dict):
+        target = {}
     try:
         payload = actions.build_proposed_action(
             action=targs.get("action"),
@@ -175,7 +180,7 @@ def _handle_propose_action(targs: dict[str, Any]) -> tuple[dict[str, Any] | None
             feedback=targs.get("feedback"),
         )
         return payload, "Action surfaced to the analyst for confirmation."
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         logger.warning("chat_propose_action_invalid err=%s", str(e))
         return None, (
             f"propose_action rejected: {e}. Fix the arguments and call it again, "
@@ -345,8 +350,12 @@ def _build_messages(
             label = content.get("action", "action")
             tid = (content.get("target") or {}).get("id", "?")
             status = "confirmed" if content.get("confirmed_at") else "pending"
+            # Continuity note as an AIMessage — NOT a mid-history SystemMessage:
+            # langchain-anthropic rejects non-leading system messages ("multiple
+            # non-consecutive system messages"), which would break every turn
+            # after the first proposed action (same reason tool rows are dropped).
             out.append(
-                SystemMessage(content=f"[prior_action] {label} on {tid} ({status})")
+                AIMessage(content=f"[prior_action] {label} on {tid} ({status})")
             )
 
     return out
@@ -832,11 +841,13 @@ async def run_turn(
                 model_name=ctx.model_name,
             )
 
-        # Persist the proposed_action if any (last one wins). We don't
-        # persist this until *after* the turn ends so a half-built
-        # action from a cancelled stream doesn't show up as a stale
-        # button.
-        if action_payload is not None and stop_reason == "end_turn":
+        # Persist the proposed_action if any (last one wins). With the native
+        # propose_action tool the payload is fully built when surfaced (no
+        # half-built stream), so persist it whenever it was emitted — EXCEPT on
+        # ``disconnected`` (the client is gone, no button to back). Notably a
+        # ``budget_exhausted`` stop must still persist: the confirm button was
+        # already streamed, so a missing row would leave it unclickable.
+        if action_payload is not None and stop_reason != "disconnected":
             await _insert_message(
                 db,
                 conversation_id=ctx.conversation_id,
