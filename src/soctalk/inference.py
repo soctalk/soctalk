@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 from langchain_core.messages import HumanMessage
 
@@ -193,13 +193,25 @@ def resolve_tier(
     tiers = getattr(cfg, "tiers", None) or {}
     tconf = tiers.get(tier.value) or tiers.get(tier) or {}
 
-    provider = tconf.get("provider") or cfg.provider
+    explicit_provider = tconf.get("provider")
     engine_raw = tconf.get("engine")
-    engine = (
-        ProviderEngine(engine_raw) if engine_raw
-        else (ProviderEngine.FRONTIER if provider in ("anthropic", "openai")
-              else ProviderEngine.OPENAI_COMPATIBLE)
-    )
+    if engine_raw:
+        engine = ProviderEngine(engine_raw)
+    else:
+        base_provider = explicit_provider or cfg.provider
+        engine = (ProviderEngine.FRONTIER if base_provider in ("anthropic", "openai")
+                  else ProviderEngine.OPENAI_COMPATIBLE)
+    # A served / generic OpenAI-compatible engine (vLLM, SGLang, a gateway) speaks
+    # the OpenAI protocol, so it must use the OpenAI client even when the global
+    # provider is Anthropic — otherwise a served-engine tier would build the wrong
+    # client. An explicit per-tier provider always wins.
+    if explicit_provider:
+        provider = explicit_provider
+    elif engine in (ProviderEngine.VLLM, ProviderEngine.SGLANG,
+                    ProviderEngine.OPENAI_COMPATIBLE):
+        provider = "openai"
+    else:
+        provider = cfg.provider
     model = model_override or tconf.get("model") or _legacy_model_for_tier(cfg, tier)
     decoding = DecodingMode(tconf.get("default_decoding_mode", "auto"))
 
@@ -224,6 +236,13 @@ def resolve_decoding_mode(
     """Resolve AUTO to a concrete mechanism once provider/engine is known
     (the #13 seam). Rejects modes an engine can't honour rather than
     silently degrading."""
+    if has_schema and has_grammar:
+        # A request carries one constrained-decoding target, not both — an
+        # engine honours a single constraint per call, and silently preferring
+        # one would drop the other.
+        raise ValueError(
+            "output_schema and grammar are mutually exclusive on one request"
+        )
     if requested != DecodingMode.AUTO:
         # Validate the explicit request against the engine.
         if requested in (DecodingMode.GUIDED_JSON, DecodingMode.GUIDED_GRAMMAR) \
@@ -308,6 +327,139 @@ async def _invoke_structured(
     raise SchemaValidationError(str(result.get("parsing_error")))
 
 
+# --------------------------------------------- served-engine guided decoding
+
+
+def _json_schema_of(schema: type) -> dict[str, Any]:
+    fn = getattr(schema, "model_json_schema", None)
+    if fn is None:
+        raise TypeError(f"{schema!r} is not a pydantic model (no model_json_schema)")
+    return cast("dict[str, Any]", fn())
+
+
+def _parse_json_into(schema: type, text: str) -> Any:
+    fn = getattr(schema, "model_validate_json", None)
+    if fn is None:
+        raise TypeError(f"{schema!r} is not a pydantic model (no model_validate_json)")
+    return fn(text)
+
+
+def guided_request_kwargs(
+    mode: DecodingMode, engine: ProviderEngine, *,
+    schema: dict[str, Any] | None = None, grammar: str | None = None,
+    schema_name: str = "output",
+) -> dict[str, Any]:
+    """Shape a served-engine guided-decoding request into the kwargs to
+    ``.bind()`` onto the OpenAI-compatible client.
+
+    This is the per-engine wire seam. SGLang and vLLM both serve an
+    OpenAI-compatible endpoint but carry constraints differently, and the
+    contract drifts by version (vLLM moved the top-level ``guided_json`` fields
+    under a ``structured_outputs`` object at v0.12). JSON-schema goes through the
+    standard ``response_format`` where the engine honours it; a raw EBNF grammar
+    is engine-native and rides ``extra_body``.
+    """
+    if engine == ProviderEngine.SGLANG:
+        if mode == DecodingMode.GUIDED_JSON:
+            if schema is None:
+                raise ValueError("guided_json requires a schema")
+            return {"response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+            }}
+        if mode == DecodingMode.GUIDED_GRAMMAR:
+            if not grammar:
+                raise ValueError("guided_grammar requires an EBNF grammar")
+            return {"extra_body": {"ebnf": grammar}}
+    elif engine == ProviderEngine.VLLM:
+        # vLLM >= 0.12 nests structured outputs; older builds used top-level
+        # guided_json / guided_grammar. We target the current contract.
+        if mode == DecodingMode.GUIDED_JSON:
+            if schema is None:
+                raise ValueError("guided_json requires a schema")
+            return {"extra_body": {"structured_outputs": {"json": schema}}}
+        if mode == DecodingMode.GUIDED_GRAMMAR:
+            if not grammar:
+                raise ValueError("guided_grammar requires an EBNF grammar")
+            return {"extra_body": {"structured_outputs": {"grammar": grammar}}}
+    raise ValueError(
+        f"{mode.value} guided decoding is not wired for engine {engine.value}"
+    )
+
+
+async def _invoke_guided(
+    req: InferenceRequest, resolved: ResolvedModel, mode: DecodingMode,
+) -> InferenceResult[Any]:
+    """Native served-engine guided decoding (SGLang / vLLM). Constraints ride
+    the OpenAI-compatible client via ``response_format`` (JSON schema) or
+    ``extra_body`` (EBNF grammar); the engine enforces them at decode time, so
+    valid output is guaranteed by construction and we parse without a retry."""
+    # Guided decoding rides the OpenAI-compatible client. A served-engine tier
+    # that resolved to a non-openai provider (e.g. an explicit provider=anthropic
+    # with engine=sglang) can't honour these kwargs — fail rather than send
+    # SGLang/vLLM shaping to ChatAnthropic.
+    if resolved.provider != "openai":
+        raise ValueError(
+            f"guided decoding requires the OpenAI-compatible client; tier resolved "
+            f"to provider={resolved.provider!r} with engine={resolved.engine.value}"
+        )
+    # Combining tools with a constrained-output request is engine-specific and
+    # SGLang forbids tools + response_format in one call. Refuse rather than
+    # silently drop the tools (they are never bound on this path).
+    if req.tools:
+        raise ValueError(
+            "tools are not supported together with guided decoding; issue the "
+            "tool call and the constrained response as separate requests"
+        )
+
+    schema_dict: dict[str, Any] | None = None
+    schema_name = "output"
+    if req.output_schema is not None:
+        schema_name = getattr(req.output_schema, "__name__", "output")
+        schema_dict = _json_schema_of(req.output_schema)
+
+    kwargs = guided_request_kwargs(
+        mode, resolved.engine,
+        schema=schema_dict, grammar=req.grammar, schema_name=schema_name,
+    )
+
+    llm = create_chat_model(
+        resolved.llm_config, model=resolved.model,
+        temperature=req.sampling.temperature, max_tokens=req.sampling.max_tokens,
+    ).bind(**kwargs)
+
+    messages = _build_messages(req, resolved)
+    raw = await llm.ainvoke(messages)
+    _track(req, raw)
+    content = getattr(raw, "content", None)
+    text = content if isinstance(content, str) else None
+
+    parsed: Any = None
+    # GUIDED_JSON returns schema-conforming JSON in the content; parse it into
+    # the pydantic model. The engine enforces validity at decode time, so a
+    # failure here is a real contract break — raise loudly for parity with the
+    # frontier structured path, never return a silent parsed=None that callers
+    # would treat as a valid decision. GUIDED_GRAMMAR returns raw grammar text.
+    if mode == DecodingMode.GUIDED_JSON and req.output_schema is not None:
+        if not isinstance(text, str):
+            raise SchemaValidationError(
+                f"guided_json returned non-text content: {content!r}"
+            )
+        try:
+            parsed = _parse_json_into(req.output_schema, text)
+        except Exception as e:  # noqa: BLE001 — re-raise as the canonical error
+            raise SchemaValidationError(
+                f"guided_json output failed {schema_name} validation: {e}"
+            ) from e
+
+    return InferenceResult(
+        parsed=parsed, raw_message=raw, text=text,
+        tool_calls=getattr(raw, "tool_calls", []) or [],
+        usage=_usage_of(raw),
+        resolved=replace(resolved, decoding_mode=mode), attempts=1,
+    )
+
+
 async def ainvoke_request(
     req: InferenceRequest, *, cfg: LLMConfig,
 ) -> InferenceResult:
@@ -328,15 +480,11 @@ async def ainvoke_request(
         requested_mode, engine=resolved.engine, provider=resolved.provider,
         has_schema=req.output_schema is not None, has_grammar=req.grammar is not None,
     )
-    # Guided decoding needs the served-engine request shaping that only lands
-    # with #13; until then refuse loudly rather than silently degrade a guided
-    # request to unconstrained (a schema-less grammar request would otherwise
-    # slip through the "output_schema is None" unconstrained branch below).
+    # Served-engine native guided decoding (SGLang / vLLM): the engine enforces
+    # a JSON schema or EBNF grammar at decode time. Dispatched separately from
+    # the frontier tool_use / json_schema_strict path below.
     if mode in (DecodingMode.GUIDED_JSON, DecodingMode.GUIDED_GRAMMAR):
-        raise NotImplementedError(
-            f"{mode.value} decoding requires the served-engine request shaping "
-            "from issue #13 (vLLM/SGLang guided decoding is not yet wired through)."
-        )
+        return await _invoke_guided(req, resolved, mode)
 
     llm = create_chat_model(
         resolved.llm_config,
@@ -408,5 +556,6 @@ __all__ = [
     "InferenceTier", "ProviderEngine", "DecodingMode", "ExtractionPolicy",
     "SamplingParams", "ToolSpec", "InferenceAccounting", "InferenceRequest",
     "ResolvedModel", "UsageDelta", "InferenceResult",
-    "resolve_tier", "resolve_decoding_mode", "ainvoke_request",
+    "resolve_tier", "resolve_decoding_mode", "guided_request_kwargs",
+    "ainvoke_request",
 ]
