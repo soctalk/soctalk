@@ -168,7 +168,11 @@ async def record_human_review_requested(
                      WHEN i.severity >= 10 THEN 'high'
                      WHEN i.severity >= 7  THEN 'medium'
                      ELSE 'low' END,
-                1, 0, 0, 0,
+                -- Real alert_count (issue #26): correlation puts multiple
+                -- alerts on one investigation; the analyst review must
+                -- reflect the true count, not a hardcoded 1.
+                (SELECT count(*) FROM alerts a WHERE a.investigation_id = i.id),
+                0, 0, 0,
                 CAST(:findings AS text[]), CAST(:enrichments AS jsonb),
                 :decision, :confidence, :reason, :reason,
                 3600, now(), i.tenant_id
