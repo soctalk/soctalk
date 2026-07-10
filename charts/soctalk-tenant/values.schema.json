@@ -61,6 +61,24 @@
         "apiKey": {
           "description": "Plaintext LLM API key. When non-empty the chart creates the Secret referenced by apiKeyRef in the release namespace; when empty the Secret must be pre-provisioned (legacy in-cluster mode). Passes through the AgentJob spec — same trust boundary as the agent runtime token.",
           "type": "string"
+        },
+        "tiers": {
+          "description": "Optional per-tier LLM backends for a hybrid tenant (issue #12). Absent = single-provider (the properties above). Each tier's provider/baseUrl/model/engine render to SOCTALK_<TIER>_* worker env; 'fast' maps to the runtime router tier, 'reasoning' to the reasoning tier.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fast": { "$ref": "#/$defs/llmTier" },
+            "reasoning": { "$ref": "#/$defs/llmTier" }
+          }
+        },
+        "tierKeys": {
+          "description": "Plaintext per-tier API keys for tiers carrying their own credential (materialized as fast_api_key/reasoning_api_key data keys on the tenant-llm-key Secret). Empty string on the controller-owned Secret path, same as apiKey.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fast": { "type": "string" },
+            "reasoning": { "type": "string" }
+          }
         }
       }
     },
@@ -175,6 +193,7 @@
         "enabled":         { "type": "boolean" },
         "allowedLlmHosts": { "type": "array", "items": { "type": "string" } },
         "llmEgressPort":   { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port the runs-worker egress policy opens for outbound LLM calls. Controller-derived from the LLM base URL (443 https / 80 http / explicit port) so self-hosted endpoints on non-standard ports aren't blocked." },
+        "extraLlmEgressPorts": { "description": "Additional distinct LLM egress ports opened for the runs-worker when per-tier backends (llm.tiers) use ports other than llmEgressPort (issue #12). Empty/absent for single-provider tenants.", "type": "array", "items": { "type": "integer", "minimum": 1, "maximum": 65535 } },
         "externalSiemHosts": {
           "description": "FQDNs of the externally-provided Wazuh indexer + API the adapter must reach (deduped). Populated for the 'provided' profile; empty for in-cluster profiles. Feeds the Cilium FQDN egress allow-list (matchName entries). Items are bare hostnames — no scheme, no port.",
           "type": "array",
@@ -323,6 +342,17 @@
     }
   },
   "$defs": {
+    "llmTier": {
+      "type": "object",
+      "required": ["provider", "baseUrl", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "enum": ["openai", "anthropic"] },
+        "baseUrl":  { "type": "string", "format": "uri" },
+        "model":    { "type": "string", "minLength": 1 },
+        "engine":   { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] }
+      }
+    },
     "resourceQuantities": {
       "type": "object",
       "additionalProperties": false,

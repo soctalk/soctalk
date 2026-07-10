@@ -24,6 +24,7 @@ Secret template).
 from __future__ import annotations
 
 import os
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -64,6 +65,26 @@ class LlmConfigRead(BaseModel):
     # check WHICH key is in use, without leaking the secret. Empty
     # string when no key is set.
     api_key_preview: str = ""
+    # Per-tier LLM backends for a hybrid tenant (issue #12). Sanitized —
+    # ``has_api_key`` per tier, never the plaintext. None = single-provider.
+    tiers: dict[str, Any] | None = None
+
+
+def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Read-safe view of ``llm_tiers`` — strips per-tier plaintext keys."""
+    if not raw:
+        return None
+    out: dict[str, Any] = {}
+    for tier, block in raw.items():
+        block = block or {}
+        out[tier] = {
+            "provider": block.get("provider"),
+            "base_url": block.get("base_url"),
+            "model": block.get("model"),
+            "engine": block.get("engine"),
+            "has_api_key": bool(block.get("api_key_plain")),
+        }
+    return out
 
 
 def _mask_key(api_key: str | None) -> str:
@@ -120,6 +141,11 @@ class LlmConfigUpdate(BaseModel):
     fast_model: str | None = Field(default=None, max_length=255)
     reasoning_model: str | None = Field(default=None, max_length=255)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+    # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
+    # unchanged; ``{}`` = clear back to single-provider; a map = replace.
+    # Shape ``{"fast": {provider, base_url, model, engine?, api_key_plain?}, ...}``
+    # validated server-side by ``validate_llm_tiers`` (422 on a bad block).
+    tiers: dict[str, Any] | None = Field(default=None)
 
     @field_validator("provider")
     @classmethod
@@ -176,6 +202,7 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
+        tiers=_sanitize_tiers(cfg.llm_tiers),
     )
 
 
@@ -232,6 +259,7 @@ async def update_tenant_llm(
         prior_model = cfg.llm_model
         prior_fast_model = cfg.llm_fast_model
         prior_reasoning_model = cfg.llm_reasoning_model
+        prior_tiers = cfg.llm_tiers
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
         if payload.base_url is not None:
@@ -245,6 +273,15 @@ async def update_tenant_llm(
             cfg.llm_fast_model = payload.fast_model.strip() or None
         if payload.reasoning_model is not None:
             cfg.llm_reasoning_model = payload.reasoning_model.strip() or None
+        # Per-tier backends (issue #12): None = unchanged; {} = clear to
+        # single-provider (NULL); a map = validate + replace. Replacement
+        # assignment (not in-place) so the JSONB column is marked dirty.
+        if payload.tiers is not None:
+            from soctalk.core.tenancy.models import validate_llm_tiers
+            try:
+                cfg.llm_tiers = validate_llm_tiers(payload.tiers)
+            except ValueError as e:
+                raise HTTPException(422, f"invalid llm_tiers: {e}") from e
         # Overrides are chart-affecting: render.py resolves them into
         # runsWorker.fastModel / reasoningModel, so a change (including
         # a clear) needs a helm re-render exactly like provider/model.
@@ -254,6 +291,7 @@ async def update_tenant_llm(
             or cfg.llm_model != prior_model
             or cfg.llm_fast_model != prior_fast_model
             or cfg.llm_reasoning_model != prior_reasoning_model
+            or cfg.llm_tiers != prior_tiers
         )
         if chart_affecting_changed:
             # Enqueue a provisioning job so the worker helm-upgrades the
@@ -338,6 +376,7 @@ async def update_tenant_llm(
         reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
+        tiers=_sanitize_tiers(cfg.llm_tiers),
     )
 
 
@@ -433,8 +472,8 @@ async def _delete_api_key_secret(tenant_id: UUID, tenant_slug: str | None = None
     failures are logged but non-fatal — Postgres is the source of
     truth.
     """
-    from kubernetes.client.exceptions import ApiException
     import structlog
+    from kubernetes.client.exceptions import ApiException
 
     log = structlog.get_logger()
 
@@ -697,6 +736,7 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         reasoning_model=cfg.llm_reasoning_model,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
+        tiers=_sanitize_tiers(cfg.llm_tiers),
     )
 
 

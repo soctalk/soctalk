@@ -23,9 +23,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, Text
@@ -203,6 +204,49 @@ class User(SQLModel, table=True):
 # ----------------------------------------------------------------------------
 
 
+# Per-tier LLM backend for a hybrid tenant (issue #12) — the deployment side of
+# the runtime per-tier providers (#4). Tenant-facing ``provider`` uses the
+# install enum ('openai-compatible' | 'anthropic'); render canonicalizes it to
+# the runtime 'openai' | 'anthropic' and emits SOCTALK_<TIER>_* env. The tier
+# key names are ``fast`` (the high-volume router loop → runtime 'router' tier
+# via SOCTALK_FAST_*) and ``reasoning`` (the verdict → 'reasoning' tier).
+_ALLOWED_LLM_TIERS: frozenset[str] = frozenset({"fast", "reasoning"})
+
+
+class LLMTierConfig(BaseModel):
+    """Validated per-tier LLM backend. Stored (as a dict) in
+    ``IntegrationConfig.llm_tiers`` JSONB; validated in the application layer
+    before writes, matching the ``config``/``runtime`` JSONB convention."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["openai-compatible", "anthropic"]
+    base_url: str
+    model: str
+    engine: Literal["frontier", "openai_compatible", "vllm", "sglang"] | None = None
+    # Own credential for a different-provider tier. Omit to reuse the primary
+    # ``llm_api_key_plain`` (only valid when this tier's provider matches the
+    # primary provider). Same plaintext-at-rest caveat as ``llm_api_key_plain``.
+    api_key_plain: str | None = None
+
+
+def validate_llm_tiers(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
+    """Validate an ``llm_tiers`` payload, returning the normalized dict (or None).
+
+    Raises ``ValueError`` on an unknown tier key or an invalid tier block, so a
+    bad provisioning request fails loudly rather than persisting garbage.
+    """
+    if not raw:
+        return None
+    unknown = set(raw) - _ALLOWED_LLM_TIERS
+    if unknown:
+        raise ValueError(
+            f"unknown llm_tiers key(s) {sorted(unknown)}; allowed: {sorted(_ALLOWED_LLM_TIERS)}"
+        )
+    return {tier: LLMTierConfig(**block).model_dump(exclude_none=True)
+            for tier, block in raw.items()}
+
+
 class IntegrationConfig(SQLModel, table=True):
     """Per-tenant integration endpoints (Wazuh URL, TheHive URL, etc.).
 
@@ -274,6 +318,13 @@ class IntegrationConfig(SQLModel, table=True):
     llm_model: str = Field(default="gpt-4o", max_length=255)
     llm_fast_model: str | None = Field(default=None, max_length=255)
     llm_reasoning_model: str | None = Field(default=None, max_length=255)
+    # Optional per-tier LLM backends for a hybrid tenant (issue #12). NULL =
+    # single-provider (today's behaviour, unchanged). Shape:
+    # ``{"fast": {provider, base_url, model, engine?, api_key_plain?}, "reasoning": {...}}``
+    # validated by ``validate_llm_tiers`` before writes.
+    llm_tiers: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB, nullable=True)
+    )
     llm_temperature: float = Field(default=0.0)
     llm_max_tokens: int = Field(default=4096)
     # Plaintext LLM API key material stored in Postgres.

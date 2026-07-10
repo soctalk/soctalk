@@ -23,7 +23,6 @@ from typing import Any, Literal
 
 from soctalk.core.tenancy.models import BrandingConfig, IntegrationConfig, Tenant
 
-
 Profile = Literal["poc", "persistent", "provided", "legacy"]
 
 
@@ -117,6 +116,61 @@ def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
     return hosts
 
 
+def _canonical_llm_provider(provider: str) -> str:
+    """Map the install-side enum to the runtime provider the worker knows.
+
+    ``openai-compatible`` (self-hosted vLLM/SGLang/gateway) speaks the OpenAI
+    protocol, so the worker reads ``OPENAI_API_KEY`` / ``SOCTALK_<TIER>_PROVIDER=
+    openai``. Same mapping the single-block env uses in 35-runs-worker.yaml.
+    """
+    return "openai" if provider == "openai-compatible" else provider
+
+
+def _render_llm_tiers(
+    integration: IntegrationConfig, *, include_llm_api_key: bool, primary_port: int
+) -> tuple[dict[str, Any], dict[str, str], list[int]]:
+    """Render per-tier LLM backends (issue #12) into chart values.
+
+    Returns ``(tiers, tier_keys, extra_ports)``:
+      * ``tiers``       — ``{tier: {provider, baseUrl, model, engine?}}`` for the
+        worker env (provider canonicalized). Empty when the tenant is
+        single-provider (``llm_tiers`` NULL) — the caller then adds nothing, so
+        the rendered values are byte-identical to today.
+      * ``tier_keys``   — ``{tier: plaintext}`` for tiers carrying their OWN
+        credential; materialized as extra data keys on ``tenant-llm-key``.
+        Plaintext only on the L2 chart-owned path (``include_llm_api_key``);
+        "" on the L1 controller path (the controller mirrors the real key).
+      * ``extra_ports`` — distinct LLM egress ports beyond ``primary_port``,
+        added to the worker NetworkPolicy (port-union, additive).
+    """
+    raw = integration.llm_tiers
+    if not raw:
+        return {}, {}, []
+    from urllib.parse import urlparse
+
+    tiers: dict[str, Any] = {}
+    tier_keys: dict[str, str] = {}
+    ports: set[int] = set()
+    for tier_name, block in raw.items():
+        entry: dict[str, Any] = {
+            "provider": _canonical_llm_provider(block["provider"]),
+            "baseUrl": block["base_url"],
+            "model": block["model"],
+        }
+        if block.get("engine"):
+            entry["engine"] = block["engine"]
+        tiers[tier_name] = entry
+
+        u = urlparse(block["base_url"])
+        ports.add(u.port or (80 if u.scheme == "http" else 443))
+
+        if block.get("api_key_plain"):
+            tier_keys[tier_name] = block["api_key_plain"] if include_llm_api_key else ""
+
+    extra_ports = sorted(ports - {primary_port})
+    return tiers, tier_keys, extra_ports
+
+
 def render_tenant_values(
     tenant: Tenant,
     integration: IntegrationConfig,
@@ -177,6 +231,12 @@ def render_tenant_values(
     # LiteLLM, …) on a non-standard port would otherwise be blocked.
     llm_egress_port = _llm_url.port or (
         80 if _llm_url.scheme == "http" else 443
+    )
+
+    # Per-tier LLM backends (issue #12) — empty for single-provider tenants,
+    # so nothing below is added and the values are byte-identical to today.
+    llm_tier_values, llm_tier_keys, extra_llm_ports = _render_llm_tiers(
+        integration, include_llm_api_key=include_llm_api_key, primary_port=llm_egress_port
     )
 
     # 'provided' = tenant brings their OWN externally-deployed Wazuh stack.
@@ -385,6 +445,18 @@ def render_tenant_values(
             "managed-by": "soctalk",
         },
     }
+
+    # Per-tier LLM backends (issue #12): inject ONLY when configured so a
+    # single-provider tenant renders exactly as before. The worker template
+    # emits SOCTALK_<TIER>_* env from ``llm.tiers``; 25-secrets materializes the
+    # per-tier keys into ``tenant-llm-key``; the worker NetworkPolicy opens the
+    # extra ports.
+    if llm_tier_values:
+        values["llm"]["tiers"] = llm_tier_values
+        if llm_tier_keys:
+            values["llm"]["tierKeys"] = llm_tier_keys
+        if extra_llm_ports:
+            values["networkPolicies"]["extraLlmEgressPorts"] = extra_llm_ports
 
     if is_provided:
         # No Wazuh agents enroll against this namespace — the tenant's own

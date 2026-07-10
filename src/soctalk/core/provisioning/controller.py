@@ -28,7 +28,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
@@ -38,7 +38,6 @@ from soctalk.core.provisioning.helm import (
     HelmError,
     helm_install_tenant,
     helm_install_wazuh,
-    helm_status,
     helm_uninstall,
 )
 from soctalk.core.provisioning.k8s import K8sClient, new_k8s_client
@@ -473,6 +472,13 @@ class TenantController:
             steps.append(
                 ("write_external_siem_secret", self._step_write_external_siem_secret)
             )
+        # Re-sync the LLM key Secret before the chart re-renders (issue #12): a
+        # PATCH that adds/changes a per-tier backend must write the tier's
+        # ``<tier>_api_key`` into tenant-llm-key, else the re-rendered worker
+        # references a Secret key that doesn't exist yet and CrashLoops. Idempotent
+        # (put_secret create-or-patch); a no-op for single-provider tenants beyond
+        # rewriting the same api_key.
+        steps.append(("sync_llm_key", self._copy_llm_key_to_tenant_ns))
         steps.append(("helm_apply_tenant", self._step_helm_apply_tenant))
         steps.append(("wait_workloads", self._step_wait_workloads))
 
@@ -1464,10 +1470,23 @@ class TenantController:
                     ctx.integration.llm_provider = "openai-compatible"
                     _flip_models("openai-compatible")
                     await self.session.flush()
+        # Per-tier credentials for a hybrid tenant (issue #12): a tier with its
+        # own key rides in the SAME Secret under ``<tier>_api_key`` — the chart's
+        # 35-runs-worker mounts SOCTALK_<TIER>_API_KEY from these. Same-provider
+        # tiers reuse ``api_key`` and carry no own key. (put_secret patches/merges
+        # the data map, so a removed tier leaves a now-unused stale key here until
+        # the deferred rotation follow-up adds full-replace — harmless: the worker
+        # env no longer references it.)
+        secret_data = {"api_key": api_key}
+        for tier, block in (getattr(ctx.integration, "llm_tiers", None) or {}).items():
+            tier_key = (block or {}).get("api_key_plain")
+            if tier_key:
+                secret_data[f"{tier}_api_key"] = tier_key
+
         await self.k8s.put_secret(
             ctx.namespace,
             "tenant-llm-key",
-            data={"api_key": api_key},
+            data=secret_data,
             labels={
                 "soctalk.io/tenant-id": str(ctx.tenant.id),
                 "soctalk.io/secret-purpose": "llm",
@@ -1488,8 +1507,10 @@ class TenantController:
         ``integration.contact_email`` is set on the tenant — that
         overrides so tenants land with the email they expect.
         """
-        from sqlalchemy import select as _select
         import secrets as _secrets
+
+        from sqlalchemy import select as _select
+
         from soctalk.core.auth.models import PasswordCredential
         from soctalk.core.auth.passwords import hash_password
         from soctalk.core.tenancy.models import User, UserType
