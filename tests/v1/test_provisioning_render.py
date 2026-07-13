@@ -84,6 +84,30 @@ def test_poc_profile_emits_tight_resource_quota():
     assert v["resourceQuota"]["pods"] == "20"
 
 
+def test_poc_profile_wires_linuxep_wazuh_manager():
+    # The poc profile enables the linux-ep subchart, whose statefulset hard-fails
+    # helm install unless wazuh.managerHost + credsSecret are set — the cause of
+    # the demo 'degraded' provisioning failure. Assert the passthrough block is
+    # emitted with the wazuh-<slug> release convention.
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t, integration=_make_integration(t.id), branding=_make_branding(t.id),
+        mssp_id=str(uuid4()), install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm", profile="poc",
+    )
+    lep = v["linuxep"]
+    assert lep["wazuh"]["managerHost"] == f"wazuh-{t.slug}-wazuh-manager"
+    assert lep["wazuh"]["credsSecret"]["name"] == f"wazuh-{t.slug}-wazuh-creds"
+    assert v["components"]["linuxep"]["enabled"] is True
+    # Non-poc profiles don't enable linux-ep → no passthrough block.
+    v2 = render_tenant_values(
+        tenant=_make_tenant("persistent"), integration=_make_integration(t.id),
+        branding=_make_branding(t.id), mssp_id=str(uuid4()), install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm", profile="persistent",
+    )
+    assert "linuxep" not in v2
+
+
 def test_persistent_profile_emits_larger_quota():
     t = _make_tenant("persistent")
     v = render_tenant_values(

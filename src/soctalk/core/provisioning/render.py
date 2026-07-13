@@ -507,6 +507,20 @@ def render_tenant_values(
     if integration.llm_token_budget_per_run is not None:
         values["llm"]["tokenBudgetPerRun"] = integration.llm_token_budget_per_run
 
+    # The linux-ep subchart is enabled on the 'poc' profile
+    # (components.linuxep.enabled above), but its statefulset template HARD-FAILS
+    # helm install unless ``linuxep.wazuh.managerHost`` + ``credsSecret`` are set
+    # ("wazuh.managerHost is required") — which tips a poc tenant to 'degraded'
+    # at the helm_apply_tenant step. Wire the passthrough values here using the
+    # same ``wazuh-<slug>`` release convention the in-cluster indexer URL uses
+    # (``render_linux_ep_values`` was written for exactly this but never called).
+    if profile == "poc":
+        values["linuxep"] = render_linux_ep_values(
+            tenant,
+            wazuh_manager_host=f"wazuh-{tenant.slug}-wazuh-manager",
+            authd_secret_name=f"wazuh-{tenant.slug}-wazuh-creds",
+        )
+
     if is_provided:
         # No Wazuh agents enroll against this namespace — the tenant's own
         # Wazuh fronts its agents — so there is no agent ingress to publish.
