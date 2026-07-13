@@ -185,9 +185,10 @@ class _FakeLLM:
         self.bound_tools: list[Any] = []
         self.bound_kwargs: dict[str, Any] = {}
 
-    def with_structured_output(self, schema, include_raw=False):
+    def with_structured_output(self, schema, include_raw=False, method=None):
         assert include_raw is True, "must keep raw for usage tracking"
         self.structured_schema = schema
+        self.structured_method = method
         return self._structured
 
     async def ainvoke(self, messages):
@@ -262,6 +263,27 @@ async def test_dispatch_no_budget_state_skips_tracking(patch_seams):
     req = _req(metadata=InferenceAccounting(producer="test", budget_state=None))
     await ainvoke_request(req, cfg=_cfg())
     assert tracked == [], "budget_state=None means no accounting"
+
+
+async def test_dispatch_json_object_mode_uses_json_mode_and_schema_hint(patch_seams):
+    # JSON_OBJECT (for endpoints that reject strict json_schema + tool_choice,
+    # e.g. DeepSeek's hosted thinking models) must call with_structured_output
+    # with method="json_mode" and inject the schema into the prompt.
+    raw = AIMessage(content='{"next_action":"ENRICH"}',
+                    usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8})
+    fake = _FakeLLM(structured=[{"raw": raw, "parsed": _decision(), "parsing_error": None}])
+    patch_seams(fake)
+
+    res = await ainvoke_request(_req(decoding_mode=DecodingMode.JSON_OBJECT), cfg=_cfg())
+
+    assert res.parsed.next_action == "ENRICH"
+    assert fake.structured_method == "json_mode"
+    assert res.resolved.decoding_mode == DecodingMode.JSON_OBJECT
+    # A schema-hint message was appended to the structured call.
+    msgs = fake._structured.calls[0]
+    assert any(isinstance(getattr(m, "content", None), str)
+               and "json" in m.content.lower() and "next_action" in m.content
+               for m in msgs)
 
 
 async def test_dispatch_retries_once_with_error_feedback(patch_seams):
