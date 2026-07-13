@@ -96,7 +96,11 @@ def decommission(sess: str, tenant_id: str) -> None:
     try:
         req = urllib.request.Request(
             f"{BASE}/api/mssp/tenants/{tenant_id}:decommission?force=true",
-            headers={"Cookie": f"soctalk_session={sess}"},
+            # Origin header satisfies the cookie-auth CSRF check (state-changing
+            # first-party requests must carry a matching Origin/Referer); the
+            # browser sends it automatically, a raw urllib POST must set it or
+            # the API returns 403 "CSRF validation failed" and cleanup is skipped.
+            headers={"Cookie": f"soctalk_session={sess}", "Origin": BASE},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=30) as r:
