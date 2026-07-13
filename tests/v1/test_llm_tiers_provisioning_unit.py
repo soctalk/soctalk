@@ -226,6 +226,17 @@ def test_hybrid_render_emits_decoding_mode():
     assert v["llm"]["tiers"]["fast"]["decodingMode"] == "json_object"
 
 
+def test_render_emits_global_sampling():
+    # Tenant-global sampling flows into values.llm → SOCTALK_LLM_* worker env.
+    v = _render(_integration(uuid4(), llm_temperature=0.7, llm_max_tokens=512))
+    assert v["llm"]["temperature"] == 0.7
+    assert v["llm"]["maxTokens"] == 512
+    # Defaults still emitted (columns carry defaults) so env reflects the tenant.
+    d = _render(_integration(uuid4()))
+    assert d["llm"]["temperature"] == 0.0
+    assert d["llm"]["maxTokens"] == 4096
+
+
 def test_render_secret_checksum_rolls_on_key_change():
     # A key-only tier rotation must change the rollout checksum so helm upgrade
     # rolls the worker (env-from-secret doesn't hot-reload) — Codex review #2.

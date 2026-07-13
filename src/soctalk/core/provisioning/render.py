@@ -281,6 +281,14 @@ def render_tenant_values(
             "provider": integration.llm_provider,
             "baseUrl": integration.llm_base_url,
             "model": integration.llm_model,
+            # Tenant-global default sampling (issue #4/#12 follow-up). Rendered
+            # to SOCTALK_LLM_TEMPERATURE / SOCTALK_LLM_MAX_TOKENS worker env,
+            # which config.load_config() already reads into LLMConfig.temperature
+            # / .max_tokens — consumed by the router/supervisor tier. Always
+            # emitted (columns carry defaults) so the env reflects the tenant
+            # value rather than falling back to the process default.
+            "temperature": integration.llm_temperature,
+            "maxTokens": integration.llm_max_tokens,
             # Cross-cluster (L2) install-spec path only: pass the
             # plaintext through so the chart's 25-secrets.yaml
             # materializes ``tenant-llm-key`` on install — there is no

@@ -50,6 +50,8 @@ interface LlmRead {
 	model: string;
 	fast_model: string | null;
 	reasoning_model: string | null;
+	temperature: number;
+	max_tokens: number;
 	has_api_key: boolean;
 	api_key_preview: string;
 }
@@ -60,6 +62,8 @@ const LLM_READ_WITH_KEY: LlmRead = {
 	model: 'gpt-4o-mini',
 	fast_model: null,
 	reasoning_model: null,
+	temperature: 0.0,
+	max_tokens: 4096,
 	has_api_key: true,
 	api_key_preview: 'sk-…7890'
 };
@@ -70,6 +74,8 @@ const LLM_READ_NO_KEY: LlmRead = {
 	model: 'gpt-4o-mini',
 	fast_model: null,
 	reasoning_model: null,
+	temperature: 0.0,
+	max_tokens: 4096,
 	has_api_key: false,
 	api_key_preview: ''
 };
@@ -149,6 +155,12 @@ async function mockApi(page: Page, initialRead: LlmRead = LLM_READ_WITH_KEY): Pr
 						: {}),
 					...(body.reasoning_model !== undefined
 						? { reasoning_model: (body.reasoning_model as string) || null }
+						: {}),
+					...(body.temperature !== undefined
+						? { temperature: body.temperature as number }
+						: {}),
+					...(body.max_tokens !== undefined
+						? { max_tokens: body.max_tokens as number }
 						: {}),
 					// A sent key is masked server-side: presence flag + tail preview only.
 					...(body.api_key !== undefined
@@ -260,6 +272,49 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		// The read view re-renders from the PATCH response.
 		await expect(page.getByTestId('llm-fast-model')).toContainText('gpt-4o-mini-fast');
 		await expect(page.getByTestId('llm-reasoning-model')).toContainText('default (gpt-4o-mini)');
+	});
+
+	test('renders global sampling and PATCHes exactly { temperature, max_tokens } when changed', async ({
+		page
+	}) => {
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+		// Read view shows the defaults.
+		await expect(page.getByTestId('llm-temperature')).toContainText('0');
+		await expect(page.getByTestId('llm-max-tokens')).toContainText('4096');
+
+		await page.getByTestId('llm-edit').click();
+		await expect(page.locator('input[name="temperature"]')).toHaveValue('0');
+		await expect(page.locator('input[name="max_tokens"]')).toHaveValue('4096');
+
+		await page.fill('input[name="temperature"]', '0.7');
+		await page.fill('input[name="max_tokens"]', '512');
+
+		const patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		// Only the two changed sampling fields ride along.
+		expect(handles.lastPatchBody()).toEqual({ temperature: 0.7, max_tokens: 512 });
+		await expect(page.getByTestId('llm-temperature')).toContainText('0.7');
+		await expect(page.getByTestId('llm-max-tokens')).toContainText('512');
+	});
+
+	test('out-of-range temperature blocks the PATCH', async ({ page }) => {
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await page.fill('input[name="temperature"]', '3');
+		await page.getByTestId('llm-save').click();
+
+		await expect(page.getByTestId('llm-form-error')).toContainText('between 0 and 2');
+		expect(handles.patchCount()).toBe(0);
 	});
 
 	test('clearing the thinking model sends reasoning_model: "" and no other model fields', async ({

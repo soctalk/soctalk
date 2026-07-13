@@ -42,6 +42,10 @@
 		// falls back to the primary model).
 		fast_model: string;
 		reasoning_model: string;
+		// Tenant-global default sampling for the router/supervisor tier. Kept as
+		// strings so an emptied input can be validated before coercion.
+		temperature: string;
+		max_tokens: string;
 		api_key: string;
 	}
 
@@ -51,6 +55,8 @@
 		model: '',
 		fast_model: '',
 		reasoning_model: '',
+		temperature: '',
+		max_tokens: '',
 		api_key: ''
 	};
 	let formError: string | null = null;
@@ -204,6 +210,8 @@
 			// later diffs as a clear ('' sent), while staying empty is unchanged.
 			fast_model: read?.fast_model ?? '',
 			reasoning_model: read?.reasoning_model ?? '',
+			temperature: read != null ? String(read.temperature) : '',
+			max_tokens: read != null ? String(read.max_tokens) : '',
 			api_key: ''
 		};
 		// Seed the per-tier chain editor from the sanitized read.tiers map.
@@ -227,6 +235,23 @@
 		if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
 			formError = 'Base URL must start with http:// or https://';
 			return;
+		}
+		// Tenant-global sampling bounds (mirror the backend + chart schema).
+		const tempStr = formData.temperature.trim();
+		if (tempStr !== '') {
+			const t = Number(tempStr);
+			if (!Number.isFinite(t) || t < 0 || t > 2) {
+				formError = 'Temperature must be a number between 0 and 2';
+				return;
+			}
+		}
+		const maxTokStr = formData.max_tokens.trim();
+		if (maxTokStr !== '') {
+			const m = Number(maxTokStr);
+			if (!Number.isInteger(m) || m < 1 || m > 131072) {
+				formError = 'Max tokens must be a whole number between 1 and 131072';
+				return;
+			}
 		}
 		// Validate each enabled tier before building the payload — surface the
 		// error inline rather than round-tripping to a backend 422 toast.
@@ -273,6 +298,13 @@
 			const reasoningModel = formData.reasoning_model.trim();
 			if (read && reasoningModel !== (read.reasoning_model ?? '')) {
 				payload.reasoning_model = reasoningModel;
+			}
+			// Tenant-global sampling — send only when changed from the read.
+			if (read && tempStr !== '' && Number(tempStr) !== read.temperature) {
+				payload.temperature = Number(tempStr);
+			}
+			if (read && maxTokStr !== '' && Number(maxTokStr) !== read.max_tokens) {
+				payload.max_tokens = Number(maxTokStr);
 			}
 			if (formData.api_key) payload.api_key = formData.api_key;
 
@@ -404,6 +436,32 @@
 					/>
 					<span class="text-xs opacity-60">leave blank to use the primary model</span>
 				</label>
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="llm-sampling">
+					<label class="label">
+						<span class="text-sm">Temperature</span>
+						<input
+							name="temperature"
+							class="input"
+							type="text"
+							inputmode="decimal"
+							bind:value={formData.temperature}
+							placeholder="0.0"
+						/>
+						<span class="text-xs opacity-60">router sampling, 0–2</span>
+					</label>
+					<label class="label">
+						<span class="text-sm">Max tokens</span>
+						<input
+							name="max_tokens"
+							class="input"
+							type="text"
+							inputmode="numeric"
+							bind:value={formData.max_tokens}
+							placeholder="4096"
+						/>
+						<span class="text-xs opacity-60">router output cap</span>
+					</label>
+				</div>
 				<label class="label">
 					<span class="text-sm">Replace API key</span>
 					<input
@@ -583,6 +641,14 @@
 					<dd class="font-mono text-xs" data-testid="llm-reasoning-model">
 						{read.reasoning_model ?? `default (${read.model})`}
 					</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">Temperature</dt>
+					<dd class="font-mono text-xs" data-testid="llm-temperature">{read.temperature}</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">Max tokens</dt>
+					<dd class="font-mono text-xs" data-testid="llm-max-tokens">{read.max_tokens}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">API key</dt>
