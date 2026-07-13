@@ -80,12 +80,12 @@ def dump_failure_diagnostics(sess: str, tenant_id: str, data: dict) -> None:
     print(f"  --- lifecycle events (most recent {min(len(events), 50)}) ---", flush=True)
     for ev in events:
         et = ev.get("event_type") or ev.get("type") or "?"
-        step_ = ev.get("step") or ""
-        msg = ev.get("message") or ev.get("detail") or ev.get("error") or ""
-        ts = ev.get("created_at") or ev.get("ts") or ""
-        line = f"  [{ts}] {et}" + (f" step={step_}" if step_ else "")
-        if msg:
-            line += f" :: {str(msg)[:400]}"
+        ts = ev.get("timestamp") or ev.get("created_at") or ""
+        # The failure reason (helm error, step, exception) lives in ``details``.
+        details = ev.get("details") or {}
+        line = f"  [{ts}] {et}"
+        if details:
+            line += f" :: {json.dumps(details)[:600]}"
         print(line, flush=True)
 
 
