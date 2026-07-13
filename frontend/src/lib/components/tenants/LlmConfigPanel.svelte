@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tenantsApi, type TenantLlmRead, type TenantLlmUpdate } from '$lib/api/tenants';
+	import {
+		tenantsApi,
+		type TenantLlmRead,
+		type TenantLlmUpdate,
+		type TenantLlmTierRead,
+		type TenantLlmTierWrite,
+		type LlmDecodingMode
+	} from '$lib/api/tenants';
 	import { addToast } from '$lib/stores';
 
 	// MSSP-side LLM configuration panel for the tenant detail page. Shows the
@@ -48,6 +55,124 @@
 	};
 	let formError: string | null = null;
 
+	// --- Per-tier "model chain" editor (issue #12 / #4) -----------------
+	// A hybrid tenant routes the fast (router) and/or reasoning (verdict)
+	// tier to a DEDICATED backend — its own provider/base_url/model/engine/
+	// decoding + optional own key — instead of the primary provider. When a
+	// tier has a dedicated backend it supersedes the simple fast/thinking
+	// model override above (the tier's own model wins at render time).
+	const TIER_KEYS = ['fast', 'reasoning'] as const;
+	type TierKey = (typeof TIER_KEYS)[number];
+	const TIER_LABELS: Record<TierKey, string> = {
+		fast: 'Fast / router',
+		reasoning: 'Reasoning / verdict'
+	};
+	const DECODING_MODES: LlmDecodingMode[] = [
+		'auto',
+		'none',
+		'tool_use',
+		'json_schema_strict',
+		'json_object',
+		'guided_json',
+		'guided_grammar'
+	];
+
+	interface TierForm {
+		enabled: boolean;
+		provider: 'openai-compatible' | 'anthropic';
+		base_url: string;
+		model: string;
+		engine: '' | 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
+		decoding_mode: '' | LlmDecodingMode;
+		// Whether a key is already stored for this tier (from the sanitized read).
+		has_api_key: boolean;
+		// New key input — blank = keep the stored key (keep/replace/clear).
+		api_key: string;
+		// Explicit "reuse the primary credential" — clears the tier's own key.
+		clear_key: boolean;
+	}
+
+	function blankTier(): TierForm {
+		return {
+			enabled: false,
+			provider: 'openai-compatible',
+			base_url: '',
+			model: '',
+			engine: '',
+			decoding_mode: '',
+			has_api_key: false,
+			api_key: '',
+			clear_key: false
+		};
+	}
+
+	let tierForms: Record<TierKey, TierForm> = {
+		fast: blankTier(),
+		reasoning: blankTier()
+	};
+
+	function seedTier(r: TenantLlmTierRead | undefined): TierForm {
+		if (!r) return blankTier();
+		return {
+			enabled: true,
+			provider: (r.provider as TierForm['provider']) ?? 'openai-compatible',
+			base_url: r.base_url ?? '',
+			model: r.model ?? '',
+			engine: (r.engine as TierForm['engine']) ?? '',
+			decoding_mode: (r.decoding_mode as LlmDecodingMode) ?? '',
+			has_api_key: r.has_api_key,
+			api_key: '',
+			clear_key: false
+		};
+	}
+
+	// A tier's backend differs from the stored read (structural OR key touched).
+	function tierDiffers(f: TierForm, r: TenantLlmTierRead | undefined): boolean {
+		if (!r) return true; // newly enabled
+		return (
+			f.provider !== r.provider ||
+			f.base_url.trim() !== (r.base_url ?? '') ||
+			f.model.trim() !== (r.model ?? '') ||
+			(f.engine || null) !== (r.engine ?? null) ||
+			(f.decoding_mode || null) !== (r.decoding_mode ?? null) ||
+			!!f.api_key ||
+			f.clear_key
+		);
+	}
+
+	// Build the tiers half of the PATCH: ``undefined`` = omit (unchanged),
+	// ``{}`` = clear back to single-provider, a map = replace (backend merges
+	// per-tier keys via keep/replace/clear).
+	function buildTiers(): Record<string, TenantLlmTierWrite> | undefined {
+		const readTiers = read?.tiers ?? null;
+		const readEnabled = readTiers ? Object.keys(readTiers) : [];
+		const enabled = TIER_KEYS.filter((k) => tierForms[k].enabled);
+		let changed =
+			enabled.length !== readEnabled.length || enabled.some((k) => !readEnabled.includes(k));
+		for (const k of enabled) {
+			if (tierDiffers(tierForms[k], readTiers?.[k])) changed = true;
+		}
+		if (!changed) return undefined;
+		if (enabled.length === 0) return readTiers ? {} : undefined;
+		const out: Record<string, TenantLlmTierWrite> = {};
+		for (const k of enabled) {
+			const f = tierForms[k];
+			const t: TenantLlmTierWrite = {
+				provider: f.provider,
+				base_url: f.base_url.trim(),
+				model: f.model.trim()
+			};
+			if (f.engine) t.engine = f.engine;
+			if (f.decoding_mode) t.decoding_mode = f.decoding_mode;
+			// Key: a typed value replaces; an explicit clear sends ''; otherwise
+			// omit so the backend carries the stored key forward.
+			if (f.api_key) t.api_key_plain = f.api_key;
+			else if (f.clear_key) t.api_key_plain = '';
+			out[k] = t;
+		}
+		return out;
+	}
+
 	async function loadRead(): Promise<void> {
 		loadingRead = true;
 		readError = null;
@@ -77,6 +202,11 @@
 			reasoning_model: read?.reasoning_model ?? '',
 			api_key: ''
 		};
+		// Seed the per-tier chain editor from the sanitized read.tiers map.
+		tierForms = {
+			fast: seedTier(read?.tiers?.fast),
+			reasoning: seedTier(read?.tiers?.reasoning)
+		};
 		formError = null;
 		editing = true;
 	}
@@ -93,6 +223,30 @@
 		if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
 			formError = 'Base URL must start with http:// or https://';
 			return;
+		}
+		// Validate each enabled tier before building the payload — surface the
+		// error inline rather than round-tripping to a backend 422 toast.
+		for (const k of TIER_KEYS) {
+			const f = tierForms[k];
+			if (!f.enabled) continue;
+			if (!/^https?:\/\//.test(f.base_url.trim())) {
+				formError = `${TIER_LABELS[k]} tier: base URL must start with http:// or https://`;
+				return;
+			}
+			if (!f.model.trim()) {
+				formError = `${TIER_LABELS[k]} tier: model is required`;
+				return;
+			}
+			// A tier on a different provider than the primary must carry its own
+			// key (the tenant mounts only the primary credential). Catch it here
+			// with an actionable message; the backend enforces it too (422).
+			const primary = formData.provider;
+			const crossProvider = f.provider !== primary;
+			const willHaveKey = f.api_key ? true : f.clear_key ? false : f.has_api_key;
+			if (crossProvider && !willHaveKey) {
+				formError = `${TIER_LABELS[k]} tier is on a different provider (${f.provider}) than the primary (${primary}) and needs its own API key`;
+				return;
+			}
 		}
 		saving = true;
 		try {
@@ -117,6 +271,10 @@
 				payload.reasoning_model = reasoningModel;
 			}
 			if (formData.api_key) payload.api_key = formData.api_key;
+
+			// Per-tier chain: undefined = omit (unchanged), {} = clear, map = replace.
+			const tiersPayload = buildTiers();
+			if (tiersPayload !== undefined) payload.tiers = tiersPayload;
 
 			if (Object.keys(payload).length === 0) {
 				// Nothing changed — close the form without a no-op PATCH.
@@ -253,6 +411,120 @@
 						bind:value={formData.api_key}
 					/>
 				</label>
+
+				<!-- Per-tier "model chain" editor: route the fast (router) and/or
+				     reasoning (verdict) tier to a dedicated backend. -->
+				<div class="pt-3 border-t border-surface-500/20" data-testid="llm-chain-editor">
+					<div class="text-sm font-semibold">Model chain (advanced)</div>
+					<p class="text-xs opacity-60 mb-3">
+						Route a tier to a dedicated backend — e.g. a cheap self-hosted router
+						feeding a frontier reasoning model. A dedicated backend supersedes the
+						matching model override above.
+					</p>
+					{#each TIER_KEYS as tk}
+						<div class="mb-3 rounded border border-surface-500/20 p-3" data-testid={`llm-tier-${tk}`}>
+							<label class="flex items-center gap-2">
+								<input
+									type="checkbox"
+									class="checkbox"
+									data-testid={`llm-tier-${tk}-enabled`}
+									bind:checked={tierForms[tk].enabled}
+								/>
+								<span class="text-sm font-medium">{TIER_LABELS[tk]}</span>
+								<span class="text-xs opacity-60">dedicated backend</span>
+							</label>
+							{#if tierForms[tk].enabled}
+								<div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+									<label class="label">
+										<span class="text-xs">Provider</span>
+										<select
+											class="select select-sm"
+											data-testid={`llm-tier-${tk}-provider`}
+											bind:value={tierForms[tk].provider}
+										>
+											<option value="openai-compatible">OpenAI-compatible</option>
+											<option value="anthropic">Anthropic</option>
+										</select>
+									</label>
+									<label class="label">
+										<span class="text-xs">Engine</span>
+										<select
+											class="select select-sm"
+											data-testid={`llm-tier-${tk}-engine`}
+											bind:value={tierForms[tk].engine}
+										>
+											<option value="">auto</option>
+											<option value="frontier">frontier</option>
+											<option value="openai_compatible">openai_compatible</option>
+											<option value="vllm">vllm</option>
+											<option value="sglang">sglang</option>
+										</select>
+									</label>
+									<label class="label md:col-span-2">
+										<span class="text-xs">Base URL</span>
+										<input
+											class="input"
+											data-testid={`llm-tier-${tk}-base-url`}
+											bind:value={tierForms[tk].base_url}
+											placeholder="http://sglang.internal:8000/v1"
+										/>
+									</label>
+									<label class="label">
+										<span class="text-xs">Model</span>
+										<input
+											class="input"
+											data-testid={`llm-tier-${tk}-model`}
+											bind:value={tierForms[tk].model}
+											placeholder="qwen3-32b"
+										/>
+									</label>
+									<label class="label">
+										<span class="text-xs">Decoding mode</span>
+										<select
+											class="select select-sm"
+											data-testid={`llm-tier-${tk}-decoding`}
+											bind:value={tierForms[tk].decoding_mode}
+										>
+											<option value="">auto (resolver picks)</option>
+											{#each DECODING_MODES as dm}
+												<option value={dm}>{dm}</option>
+											{/each}
+										</select>
+									</label>
+									<label class="label md:col-span-2">
+										<span class="text-xs">
+											{tierForms[tk].has_api_key ? 'Replace tier API key' : 'Tier API key'}
+										</span>
+										<input
+											type="password"
+											class="input"
+											data-testid={`llm-tier-${tk}-api-key`}
+											autocomplete="off"
+											placeholder={tierForms[tk].has_api_key
+												? 'leave blank to keep'
+												: 'blank = reuse the primary credential'}
+											bind:value={tierForms[tk].api_key}
+											disabled={tierForms[tk].clear_key}
+										/>
+										{#if tierForms[tk].has_api_key}
+											<label class="flex items-center gap-2 mt-1">
+												<input
+													type="checkbox"
+													class="checkbox"
+													data-testid={`llm-tier-${tk}-clear-key`}
+													bind:checked={tierForms[tk].clear_key}
+												/>
+												<span class="text-xs opacity-70">
+													Clear the tier key — reuse the primary credential
+												</span>
+											</label>
+										{/if}
+									</label>
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</div>
 				<div class="flex gap-2">
 					<button
 						type="submit"
@@ -323,6 +595,33 @@
 					</dd>
 				</div>
 			</dl>
+
+			{#if read.tiers}
+				<!-- Per-tier "model chain" read view — one row per dedicated backend. -->
+				<div class="mt-4 pt-3 border-t border-surface-500/20" data-testid="llm-chain-view">
+					<div class="text-sm font-semibold mb-2">Model chain</div>
+					<div class="space-y-2">
+						{#each TIER_KEYS as tk}
+							{#if read.tiers[tk]}
+								<div class="rounded border border-surface-500/20 p-2 text-xs" data-testid={`llm-chain-${tk}`}>
+									<div class="font-medium opacity-80">{TIER_LABELS[tk]}</div>
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1 mt-1 font-mono">
+										<div><span class="opacity-60">provider</span> {read.tiers[tk].provider ?? '—'}</div>
+										<div><span class="opacity-60">engine</span> {read.tiers[tk].engine ?? 'auto'}</div>
+										<div class="md:col-span-2 break-all"><span class="opacity-60">base</span> {read.tiers[tk].base_url ?? '—'}</div>
+										<div><span class="opacity-60">model</span> {read.tiers[tk].model ?? '—'}</div>
+										<div><span class="opacity-60">decoding</span> {read.tiers[tk].decoding_mode ?? 'auto'}</div>
+										<div class="md:col-span-2">
+											<span class="opacity-60">key</span>
+											{read.tiers[tk].has_api_key ? 'own key' : 'reuses primary'}
+										</div>
+									</div>
+								</div>
+							{/if}
+						{/each}
+					</div>
+				</div>
+			{/if}
 
 			{#if read.has_api_key}
 				<div class="mt-3">
