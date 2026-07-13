@@ -18,6 +18,13 @@ spec:
       labels:
         {{- include "soctalk-tenant.labels" . | nindent 8 }}
         app.kubernetes.io/name: soctalk-runs-worker
+      {{- if .Values.llm.secretChecksum }}
+      annotations:
+        # Forces a rollout when the LLM key material (primary or per-tier own
+        # keys) rotates — env-from-secret does not hot-reload, and a key-only
+        # change otherwise leaves chart values byte-identical (issue #12).
+        checksum/llm-secret: {{ .Values.llm.secretChecksum | quote }}
+      {{- end }}
     spec:
       serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
       automountServiceAccountToken: false

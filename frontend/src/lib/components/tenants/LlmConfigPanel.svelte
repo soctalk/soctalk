@@ -135,7 +135,7 @@
 			f.model.trim() !== (r.model ?? '') ||
 			(f.engine || null) !== (r.engine ?? null) ||
 			(f.decoding_mode || null) !== (r.decoding_mode ?? null) ||
-			!!f.api_key ||
+			!!f.api_key.trim() ||
 			f.clear_key
 		);
 	}
@@ -165,8 +165,12 @@
 			if (f.engine) t.engine = f.engine;
 			if (f.decoding_mode) t.decoding_mode = f.decoding_mode;
 			// Key: a typed value replaces; an explicit clear sends ''; otherwise
-			// omit so the backend carries the stored key forward.
-			if (f.api_key) t.api_key_plain = f.api_key;
+			// omit so the backend carries the stored key forward. Trim so a
+			// whitespace-only entry is treated as "no new key" (keep), matching
+			// the backend's whitespace = clear/keep handling rather than sending
+			// blanks that silently clear a same-provider tier's own key.
+			const newKey = f.api_key.trim();
+			if (newKey) t.api_key_plain = newKey;
 			else if (f.clear_key) t.api_key_plain = '';
 			out[k] = t;
 		}
@@ -242,7 +246,7 @@
 			// with an actionable message; the backend enforces it too (422).
 			const primary = formData.provider;
 			const crossProvider = f.provider !== primary;
-			const willHaveKey = f.api_key ? true : f.clear_key ? false : f.has_api_key;
+			const willHaveKey = f.api_key.trim() ? true : f.clear_key ? false : f.has_api_key;
 			if (crossProvider && !willHaveKey) {
 				formError = `${TIER_LABELS[k]} tier is on a different provider (${f.provider}) than the primary (${primary}) and needs its own API key`;
 				return;

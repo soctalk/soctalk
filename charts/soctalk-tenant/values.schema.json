@@ -62,6 +62,10 @@
           "description": "Plaintext LLM API key. When non-empty the chart creates the Secret referenced by apiKeyRef in the release namespace; when empty the Secret must be pre-provisioned (legacy in-cluster mode). Passes through the AgentJob spec — same trust boundary as the agent runtime token.",
           "type": "string"
         },
+        "secretChecksum": {
+          "description": "sha256 of the LLM key material (primary + per-tier own keys), salted with the tenant id. Rendered as a runs-worker pod-template annotation (checksum/llm-secret) so a key-only rotation — which leaves the rest of the values byte-identical — still rolls the worker (env-from-secret does not hot-reload). Not a secret; a sha256 of a high-entropy key is not reversible.",
+          "type": "string"
+        },
         "tiers": {
           "description": "Optional per-tier LLM backends for a hybrid tenant (issue #12). Absent = single-provider (the properties above). Each tier's provider/baseUrl/model/engine render to SOCTALK_<TIER>_* worker env; 'fast' maps to the runtime router tier, 'reasoning' to the reasoning tier.",
           "type": "object",

@@ -253,13 +253,22 @@ class LLMTierConfig(BaseModel):
             if self.engine in served:
                 raise ValueError(f"engine {self.engine!r} is OpenAI-compatible; "
                                  "not valid with provider 'anthropic'")
-            if self.decoding_mode in ("json_object", "json_schema_strict",
-                                      "guided_json", "guided_grammar"):
-                raise ValueError(f"decoding_mode {self.decoding_mode!r} is not "
-                                 "available on Anthropic (use tool_use or auto)")
-        if self.engine == "frontier" and self.decoding_mode in ("guided_json", "guided_grammar"):
+            # Anthropic has no JSON-mode response_format, so json_object can't be
+            # honoured. json_schema_strict IS accepted — the runtime resolver maps
+            # it to tool_use on Anthropic (resolve_decoding_mode). guided_* is
+            # caught by the served-engine rule below (Anthropic never runs on
+            # vllm/sglang).
+            if self.decoding_mode == "json_object":
+                raise ValueError("decoding_mode 'json_object' is not available on "
+                                 "Anthropic (use tool_use, json_schema_strict, or auto)")
+        # Guided decoding is engine-native shaping only vLLM/SGLang implement
+        # (guided_request_kwargs). frontier, openai_compatible, and an unset
+        # engine (which the runtime resolves as frontier) all reject it — mirror
+        # that here so the UI can't persist a combo the worker fails on.
+        if self.decoding_mode in ("guided_json", "guided_grammar") and \
+                self.engine not in ("vllm", "sglang"):
             raise ValueError(f"decoding_mode {self.decoding_mode!r} needs a served "
-                             "engine (vllm/sglang), not 'frontier'")
+                             f"engine (vllm/sglang), not {self.engine or 'unset'!r}")
         return self
 
 
@@ -273,8 +282,12 @@ def validate_llm_tiers(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]] 
         return None
     unknown = set(raw) - _ALLOWED_LLM_TIERS
     if unknown:
+        # Never echo the raw unknown keys — a malformed client could pass a
+        # pasted secret as a tier KEY, which would then leak into the API 422
+        # and the UI toast. Report the count + the allowed set instead.
         raise ValueError(
-            f"unknown llm_tiers key(s) {sorted(unknown)}; allowed: {sorted(_ALLOWED_LLM_TIERS)}"
+            f"unknown llm_tiers key(s): {len(unknown)} not in allowed tiers "
+            f"{sorted(_ALLOWED_LLM_TIERS)}"
         )
     out: dict[str, dict[str, Any]] = {}
     for tier, block in raw.items():

@@ -110,10 +110,30 @@ def test_validate_llm_tiers_anthropic_rejects_json_object():
                                           "decoding_mode": "json_object"}})
 
 
-def test_validate_llm_tiers_frontier_rejects_guided():
-    with pytest.raises(ValueError, match="needs a served engine"):
-        validate_llm_tiers({"fast": {**_FAST, "engine": "frontier",
-                                     "decoding_mode": "guided_json"}})
+def test_validate_llm_tiers_anthropic_allows_json_schema_strict():
+    # Runtime maps json_schema_strict → tool_use on Anthropic (resolve_decoding_
+    # mode), so the API must NOT 422 it — parity with the runtime resolver.
+    out = validate_llm_tiers({"reasoning": {"provider": "anthropic",
+                                            "base_url": "https://api.anthropic.com",
+                                            "model": "claude-opus-4",
+                                            "decoding_mode": "json_schema_strict"}})
+    assert out["reasoning"]["decoding_mode"] == "json_schema_strict"
+
+
+def test_validate_llm_tiers_guided_requires_served_engine():
+    # Guided shaping is only implemented for vllm/sglang (guided_request_kwargs).
+    for bad_engine in ("frontier", "openai_compatible", None):
+        block = {**_FAST, "decoding_mode": "guided_json"}
+        if bad_engine is None:
+            block.pop("engine", None)
+        else:
+            block["engine"] = bad_engine
+        with pytest.raises(ValueError, match="needs a served engine"):
+            validate_llm_tiers({"fast": block})
+    # vllm / sglang accept guided modes.
+    ok = validate_llm_tiers({"fast": {**_FAST, "engine": "vllm",
+                                      "decoding_mode": "guided_grammar"}})
+    assert ok["fast"]["decoding_mode"] == "guided_grammar"
 
 
 def test_validate_llm_tiers_bad_base_url_rejected():
@@ -204,6 +224,23 @@ def test_hybrid_render_emits_decoding_mode():
     v = _render(integ)
     # render maps snake_case decoding_mode → chart camelCase decodingMode.
     assert v["llm"]["tiers"]["fast"]["decodingMode"] == "json_object"
+
+
+def test_render_secret_checksum_rolls_on_key_change():
+    # A key-only tier rotation must change the rollout checksum so helm upgrade
+    # rolls the worker (env-from-secret doesn't hot-reload) — Codex review #2.
+    tid = uuid4()
+    a = _render(_integration(tid, llm_tiers=validate_llm_tiers({"fast": _FAST})))
+    rotated = {**_FAST, "api_key_plain": "sk-rotated"}
+    b = _render(_integration(tid, llm_tiers=validate_llm_tiers({"fast": rotated})))
+    assert a["llm"]["secretChecksum"] != b["llm"]["secretChecksum"]
+    # Independent of include_llm_api_key — the L1 path withholds the plaintext
+    # from values but the checksum still reflects the true material.
+    c = _render(_integration(tid, llm_tiers=validate_llm_tiers({"fast": _FAST})),
+                include_llm_api_key=False)
+    assert c["llm"]["secretChecksum"] == a["llm"]["secretChecksum"]
+    # Structural-only single-provider tenants still get a stable checksum.
+    assert _render(_integration(tid))["llm"]["secretChecksum"]
 
 
 def test_hybrid_render_l1_controller_path_omits_plaintext():
