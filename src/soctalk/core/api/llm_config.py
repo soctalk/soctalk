@@ -59,6 +59,10 @@ class LlmConfigRead(BaseModel):
     # into runsWorker.fastModel / reasoningModel).
     fast_model: str | None = None
     reasoning_model: str | None = None
+    # Tenant-global default sampling for the router/supervisor tier. Rendered
+    # into SOCTALK_LLM_TEMPERATURE / SOCTALK_LLM_MAX_TOKENS worker env.
+    temperature: float
+    max_tokens: int
     has_api_key: bool
     # ``customer_safe`` mode for tenant-side rendering: shows the
     # last 4 chars of the configured key so the tenant can sanity-
@@ -196,6 +200,11 @@ class LlmConfigUpdate(BaseModel):
     # see the class docstring for the tri-state contract.
     fast_model: str | None = Field(default=None, max_length=255)
     reasoning_model: str | None = Field(default=None, max_length=255)
+    # Tenant-global default sampling. ``None`` = unchanged. Bounds mirror the
+    # chart's values.schema.json so an out-of-range value is rejected at the API
+    # rather than failing Helm validation on the next re-render.
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=131072)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
     # unchanged; ``{}`` = clear back to single-provider; a map = replace.
@@ -256,6 +265,8 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         model=cfg.llm_model,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -315,6 +326,8 @@ async def update_tenant_llm(
         prior_model = cfg.llm_model
         prior_fast_model = cfg.llm_fast_model
         prior_reasoning_model = cfg.llm_reasoning_model
+        prior_temperature = cfg.llm_temperature
+        prior_max_tokens = cfg.llm_max_tokens
         prior_tiers = cfg.llm_tiers
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
@@ -329,6 +342,12 @@ async def update_tenant_llm(
             cfg.llm_fast_model = payload.fast_model.strip() or None
         if payload.reasoning_model is not None:
             cfg.llm_reasoning_model = payload.reasoning_model.strip() or None
+        # Tenant-global default sampling (None = unchanged). Bounds validated on
+        # the payload model; render.py emits them to the worker env.
+        if payload.temperature is not None:
+            cfg.llm_temperature = payload.temperature
+        if payload.max_tokens is not None:
+            cfg.llm_max_tokens = payload.max_tokens
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -366,6 +385,8 @@ async def update_tenant_llm(
             or cfg.llm_model != prior_model
             or cfg.llm_fast_model != prior_fast_model
             or cfg.llm_reasoning_model != prior_reasoning_model
+            or cfg.llm_temperature != prior_temperature
+            or cfg.llm_max_tokens != prior_max_tokens
             or cfg.llm_tiers != prior_tiers
         )
         if chart_affecting_changed:
@@ -449,6 +470,8 @@ async def update_tenant_llm(
         model=cfg.llm_model,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -809,6 +832,8 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         model=cfg.llm_model,
         fast_model=cfg.llm_fast_model,
         reasoning_model=cfg.llm_reasoning_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),

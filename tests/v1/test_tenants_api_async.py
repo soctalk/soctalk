@@ -1815,6 +1815,68 @@ async def test_patch_llm_fast_model_persists_returns_and_enqueues_reconcile(
     assert "tenant.provision" not in kinds
 
 
+async def test_patch_llm_global_sampling_persists_and_enqueues_reconcile(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """PATCH temperature/max_tokens persists the columns, echoes them, and
+    enqueues a reconcile (chart-affecting — flows into SOCTALK_LLM_* env)."""
+    from soctalk.core.api.llm_config import (
+        LlmConfigUpdate,
+        get_tenant_llm,
+        update_tenant_llm,
+    )
+
+    tenant = await _seed_llm_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    # Defaults surface on GET.
+    before = await get_tenant_llm(tenant.id, FakeRequest())
+    assert before.temperature == 0.0
+    assert before.max_tokens == 4096
+
+    result = await update_tenant_llm(
+        tenant.id,
+        LlmConfigUpdate(temperature=0.7, max_tokens=512),
+        FakeRequest(),
+    )
+    assert result.temperature == 0.7
+    assert result.max_tokens == 512
+
+    cfg = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == tenant.id
+            )
+        )
+    ).scalar_one()
+    assert cfg.llm_temperature == 0.7
+    assert cfg.llm_max_tokens == 512
+
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+
+
+async def test_patch_llm_sampling_out_of_range_rejected():
+    """Bounds are enforced on the payload model (temperature 0–2, max_tokens
+    1–131072) so an out-of-range value never reaches Helm validation."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    from soctalk.core.api.llm_config import LlmConfigUpdate
+
+    with _pytest.raises(ValidationError):
+        LlmConfigUpdate(temperature=2.5)
+    with _pytest.raises(ValidationError):
+        LlmConfigUpdate(max_tokens=0)
+
+
 async def test_patch_llm_reasoning_model_degraded_tenant_enqueues_provision(
     mssp_session: AsyncSession, seeded_org: Organization
 ):

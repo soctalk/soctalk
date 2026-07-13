@@ -190,6 +190,9 @@ export interface TenantLlmRead {
 	// tier falls back to ``model``.
 	fast_model: string | null;
 	reasoning_model: string | null;
+	// Tenant-global default sampling for the router/supervisor tier.
+	temperature: number;
+	max_tokens: number;
 	has_api_key: boolean;
 	api_key_preview: string;
 	// Per-tier backends for a hybrid tenant (the model "chain"). ``null`` for a
@@ -211,6 +214,10 @@ export interface TenantLlmUpdate {
 	// set the override.
 	fast_model?: string;
 	reasoning_model?: string;
+	// Tenant-global default sampling: omitted = unchanged. temperature 0–2,
+	// max_tokens 1–131072 (bounds enforced server-side).
+	temperature?: number;
+	max_tokens?: number;
 	// Per-tier backends (the model "chain"): omitted = leave unchanged, {} =
 	// clear back to single-provider, a map = replace. Per-tier key semantics
 	// are keep/replace/clear (see ``TenantLlmTierWrite``).

@@ -314,7 +314,13 @@ async def _get_supervisor_decision(
         messages=[HumanMessage(
             content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)
         )],
-        sampling=SamplingParams(temperature=config.llm.temperature, max_tokens=1024),
+        # Tenant-global default sampling (SOCTALK_LLM_TEMPERATURE / _MAX_TOKENS).
+        # A schema-constrained router decision is tiny, so the token cap is a
+        # ceiling not a target — honouring the tenant value lets an operator tune
+        # cost/latency without changing routing behaviour on the default (4096).
+        sampling=SamplingParams(
+            temperature=config.llm.temperature, max_tokens=config.llm.max_tokens
+        ),
     )
     res = await ainvoke_request(req, cfg=config.llm)
     return res.parsed

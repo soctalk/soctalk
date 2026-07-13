@@ -75,6 +75,19 @@ spec:
             - name: SOCTALK_LLM_PROVIDER
               value: {{ $prov | quote }}
             {{- /*
+              Tenant-global default sampling. load_config() reads these into
+              LLMConfig.temperature / .max_tokens (consumed by the router tier).
+              Emitted only when set so an unset value keeps the process default.
+            */}}
+            {{- if not (kindIs "invalid" .Values.llm.temperature) }}
+            - name: SOCTALK_LLM_TEMPERATURE
+              value: {{ .Values.llm.temperature | quote }}
+            {{- end }}
+            {{- if .Values.llm.maxTokens }}
+            - name: SOCTALK_LLM_MAX_TOKENS
+              value: {{ .Values.llm.maxTokens | quote }}
+            {{- end }}
+            {{- /*
               Per-tier LLM backends (issue #12). When a tier block is present the
               worker gets the full SOCTALK_<TIER>_* env (provider is required so
               #4's resolver materializes the tier and the mutual-exclusion guard
