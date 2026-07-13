@@ -52,8 +52,11 @@ SPEC = EngineSpec(
 )
 
 MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+    # GPUs right-sized to the smallest that fits (cost) — L4 ~$0.80/hr,
+    # L40S ~$1.95/hr, A100-80GB ~$3/hr. The triage eval uses short prompts, so a
+    # 16k context is plenty for the small tiers.
     "Qwen/Qwen3-14B": dict(
-        gpu="A100-80GB", tp=1, context_length=32768,
+        gpu="L40S", tp=1, context_length=32768,
         tool_call_parser="qwen", reasoning_parser="qwen3",
         image_tag="v0.5.8", startup_min=20,
     ),
@@ -61,6 +64,22 @@ MODEL_CONFIGS: dict[str, dict[str, Any]] = {
         gpu="A100-80GB", tp=1, context_length=32768,
         tool_call_parser="qwen", reasoning_parser="qwen3",
         image_tag="v0.5.8", startup_min=20,
+    ),
+    # --- DeepSeek R1-Distill (Qwen base) parameter ladder: low → high ---
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": dict(
+        gpu="L4", tp=1, context_length=16384,
+        tool_call_parser="deepseekv3", reasoning_parser="deepseek-r1",
+        image_tag="v0.5.8", startup_min=12,
+    ),
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": dict(
+        gpu="L4", tp=1, context_length=16384,
+        tool_call_parser="deepseekv3", reasoning_parser="deepseek-r1",
+        image_tag="v0.5.8", startup_min=15,
+    ),
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": dict(
+        gpu="L40S", tp=1, context_length=32768,
+        tool_call_parser="deepseekv3", reasoning_parser="deepseek-r1",
+        image_tag="v0.5.8", startup_min=18,
     ),
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": dict(
         gpu="A100-80GB", tp=1, context_length=32768,

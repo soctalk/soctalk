@@ -43,10 +43,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENGINES = {
     "sglang": dict(module="bench.modal.sglang_service", health="/health_generate",
                    model_env="SGLANG_MODEL", key_env="SGLANG_API_KEY",
-                   app_prefix="soctalk-sglang"),
+                   gpu_env="SGLANG_GPU", app_prefix="soctalk-sglang"),
     "vllm": dict(module="bench.modal.vllm_service", health="/health",
                  model_env="VLLM_MODEL", key_env="VLLM_API_KEY",
-                 app_prefix="soctalk-vllm"),
+                 gpu_env="VLLM_GPU", app_prefix="soctalk-vllm"),
 }
 
 LINEUP = [
@@ -55,11 +55,25 @@ LINEUP = [
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
 ]
 
+# DeepSeek R1-Distill parameter ladder, low → high (run via --deepseek-ladder).
+# Each on the cheapest GPU that fits — the whole sweep is mostly L4/L40S.
+DEEPSEEK_LADDER = [
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+]
+
 # GPU spec per model, for display and to decide whether a CPU pre-download is
 # worth it (big multi-GPU models). Mirrors MODEL_CONFIGS in the service.
+# Right-sized to the cheapest GPU that fits: L4 ~$0.80/hr, L40S ~$1.95/hr,
+# A100-80GB ~$3/hr.
 GPU_BY_MODEL = {
-    "Qwen/Qwen3-14B": "A100-80GB",
+    "Qwen/Qwen3-14B": "L40S",
     "Qwen/Qwen3-32B": "A100-80GB",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": "L4",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "L4",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": "L40S",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": "A100-80GB",
     "Qwen/Qwen3-235B-A22B-Thinking-2507-FP8": "H100:4",
 }
@@ -89,7 +103,7 @@ def predownload(engine: dict, model: str) -> None:
     print("  weights cached", flush=True)
 
 
-def deploy(engine: dict, model: str, api_key: str) -> str:
+def deploy(engine: dict, model: str, api_key: str, gpu: str | None = None) -> str:
     """Deploy the Modal app for `model`; return the web endpoint URL."""
     # modal's rich output wraps to the terminal width; in a non-TTY subprocess
     # that defaults to 80 cols, which splits a long endpoint URL across lines
@@ -97,6 +111,8 @@ def deploy(engine: dict, model: str, api_key: str) -> str:
     # stays on one line.
     env = {**os.environ, "COLUMNS": "300",
            engine["model_env"]: model, engine["key_env"]: api_key}
+    if gpu:  # override the per-model GPU (cost) — the service reads gpu_env
+        env[engine["gpu_env"]] = gpu
     print(f"  deploying {_app_name(engine, model)} ...", flush=True)
     proc = subprocess.run(
         ["modal", "deploy", "-m", engine["module"]],
@@ -209,6 +225,12 @@ def main() -> int:
                     help="Subset of the lineup to run (default: all).")
     ap.add_argument("--smoke", action="store_true",
                     help="Validate the pipeline on Qwen3-14B only.")
+    ap.add_argument("--deepseek-ladder", action="store_true",
+                    help="Run the DeepSeek R1-Distill parameter ladder (1.5B→7B→14B→32B), "
+                         "each on the cheapest GPU that fits.")
+    ap.add_argument("--gpu", default=None,
+                    help="Override the GPU for every model (e.g. L4, L40S, A100-40GB) — "
+                         "cheaper than the per-model default. May OOM if too small.")
     ap.add_argument("--trials", type=int, default=1)
     ap.add_argument("--concurrency", type=int, default=2)
     ap.add_argument("--keep-up", action="store_true",
@@ -219,19 +241,24 @@ def main() -> int:
     args = ap.parse_args()
 
     engine = ENGINES[args.engine]
-    models = ["Qwen/Qwen3-14B"] if args.smoke else (args.models or LINEUP)
+    if args.smoke:
+        models = ["Qwen/Qwen3-14B"]
+    elif args.deepseek_ladder:
+        models = DEEPSEEK_LADDER
+    else:
+        models = args.models or LINEUP
     api_key = "sk-bench-" + secrets.token_hex(16)
 
     rows: list[dict] = []
     for model in models:
-        gpu = GPU_BY_MODEL.get(model, "A100-80GB")
+        gpu = args.gpu or GPU_BY_MODEL.get(model, "A100-80GB")
         print(f"\n### {model}  ({args.engine}, {gpu})")
         t0 = time.time()
         row: dict = {"model": model, "engine": args.engine, "gpu": gpu}
         try:
             if not args.no_predownload:
                 predownload(engine, model)
-            url = deploy(engine, model, api_key)
+            url = deploy(engine, model, api_key, gpu=args.gpu or GPU_BY_MODEL.get(model))
             wait_ready(engine, url, api_key)
             row["result"] = run_eval(model, url, api_key, args.trials, args.concurrency)
         except Exception as e:  # noqa: BLE001 — one model failing shouldn't sink the sweep
