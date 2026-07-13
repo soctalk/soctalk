@@ -111,6 +111,28 @@ jobs:
                  --wait --atomic --timeout 15m
                rm -f /tmp/demo-values.yaml"
 
+      - name: Diagnose on failure (pod/events — survives atomic rollback)
+        if: failure()
+        run: |
+          set +e
+          # helm --atomic rolls back the failed pods, but Events linger briefly
+          # and reveal WHY the new image didn't become Ready — image-pull errors,
+          # FailedScheduling (node out of memory from accumulated tenant stacks),
+          # or a crashing api/db-init container. Best-effort; never fails the job.
+          ssh -i ~/.ssh/id_demo -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
+              "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+               echo '=== nodes (allocatable vs used) ==='
+               kubectl top nodes 2>/dev/null || kubectl describe nodes | grep -A6 'Allocated resources' | head -20
+               echo '=== soctalk-system pods ==='
+               kubectl -n soctalk-system get pods -o wide
+               echo '=== recent events ==='
+               kubectl -n soctalk-system get events --sort-by=.lastTimestamp | tail -40
+               echo '=== non-running tenant namespaces (accumulated backlog) ==='
+               kubectl get ns | grep -cE 'tenant-|wazuh-' || true
+               echo '=== api deploy describe (tail) ==='
+               kubectl -n soctalk-system describe deploy/soctalk-system-api | tail -30" || true
+
       - name: Force rollout so the moving `latest` tag is re-pulled
         run: |
           set -euo pipefail
