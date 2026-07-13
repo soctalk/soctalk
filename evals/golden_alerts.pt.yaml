@@ -1,0 +1,298 @@
+# AUTO-GENERATED from golden_alerts.yaml by golden_i18n.py — do not edit.
+# Locale: pt. Model-facing prose translated; identifiers + expects identical.
+cases:
+- id: ransomware-fileshare-tp
+  kind: verdict
+  description: Mass encryption on a file share, malicious C2 IP confirmed.
+  iteration_count: 4
+  investigation:
+    title: Possível atividade de ransomware em compartilhamento de arquivos
+    alerts:
+    - severity: critical
+      level: 12
+      rule_description: Renomeação massiva de arquivos com pico de entropia; smbd
+        gravando extensões .locked; saída para IP incomum
+      source:
+        agent_name: fileserver-02
+    enrichments:
+    - verdict: malicious
+      observable:
+        type: ip
+        value: 198.51.100.44
+      analyzer: AbuseIPDB
+      confidence: 0.97
+    findings:
+    - severity: critical
+      description: vssadmin delete shadows executado; 40k arquivos renomeados em 6
+        minutos
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.9
+    action_reasoning: Comportamento de criptografia mais IP de C2 confirmado como
+      malicioso
+  expect:
+    verdict_decisions:
+    - escalate
+    confidence_min: 0.6
+- id: bruteforce-then-login-tp
+  kind: verdict
+  description: SSH brute force followed by successful login from confirmed bad IP.
+  iteration_count: 3
+  investigation:
+    title: Força bruta SSH seguida de login bem-sucedido no bastion
+    alerts:
+    - severity: high
+      level: 10
+      rule_description: 40 logins SSH falhos em 90s a partir de um único IP externo,
+        seguidos de senha aceita para o usuário deploy
+      source:
+        agent_name: bastion-01
+    enrichments:
+    - verdict: malicious
+      observable:
+        type: ip
+        value: 203.0.113.99
+      analyzer: AbuseIPDB
+      confidence: 0.95
+    findings: []
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.85
+    action_reasoning: Autenticação bem-sucedida após força bruta de uma origem reconhecidamente
+      maliciosa
+  expect:
+    verdict_decisions:
+    - escalate
+    confidence_min: 0.55
+- id: webshell-c2-tp
+  kind: verdict
+  description: Webshell execution with MISP-attributed C2 infrastructure.
+  iteration_count: 5
+  investigation:
+    title: Webshell em servidor de aplicação com callback de C2
+    alerts:
+    - severity: high
+      level: 11
+      rule_description: www-data executou um binário a partir de /tmp seguido de beaconing
+        periódico para um IP externo
+      source:
+        agent_name: app-03
+    enrichments:
+    - verdict: malicious
+      observable:
+        type: ip
+        value: 192.0.2.77
+      analyzer: VirusTotal
+      confidence: 0.9
+    findings:
+    - severity: high
+      description: Intervalo de beacon de 60s +/- 2s para 192.0.2.77:443, consistente
+        com C2
+    misp_context:
+      matches:
+      - value: 192.0.2.77
+        type: ip-dst
+        event_ids:
+        - '3021'
+        to_ids: true
+      threat_actors:
+      - FIN-EXAMPLE
+      campaigns: []
+      warninglist_hits: []
+      checked_iocs:
+      - 192.0.2.77
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.9
+    action_reasoning: Veredictos maliciosos mais atribuição do MISP
+  expect:
+    verdict_decisions:
+    - escalate
+    confidence_min: 0.7
+- id: internal-scanner-fp
+  kind: verdict
+  description: Web 404 burst from the org's own vulnerability scanner, benign enrichment,
+    MISP warninglist hit.
+  iteration_count: 3
+  investigation:
+    title: Padrão de ataque web proveniente do scanner interno
+    alerts:
+    - severity: medium
+      level: 6
+      rule_description: 'Rajada de respostas 404/403 de uma única origem interna 10.10.5.20
+        (hostname: qualys-scanner-01) durante a janela de varredura agendada'
+      source:
+        agent_name: web-01
+    enrichments:
+    - verdict: benign
+      observable:
+        type: ip
+        value: 10.10.5.20
+      analyzer: AbuseIPDB
+      confidence: 0.9
+      details:
+        note: private address space, zero abuse reports
+    findings: []
+    misp_context:
+      matches: []
+      threat_actors: []
+      campaigns: []
+      warninglist_hits:
+      - value: 10.10.5.20
+        list: org-authorized-scanners
+      checked_iocs:
+      - 10.10.5.20
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.1
+    action_reasoning: Scanner autorizado conhecido durante a janela de varredura
+  expect:
+    verdict_decisions:
+    - close
+    confidence_min: 0.5
+- id: maintenance-window-fp
+  kind: verdict
+  description: Service account created a scheduled task during a documented change
+    window; everything benign.
+  iteration_count: 2
+  investigation:
+    title: Tarefa agendada criada por conta de serviço
+    alerts:
+    - severity: medium
+      level: 5
+      rule_description: Tarefa agendada 'patch-reboot-window' criada por CORP\svc-sccm
+        durante a mudança aprovada CHG-4411; caminho do binário C:\Program Files\SCCM\agent.exe
+        (assinado)
+      source:
+        agent_name: win-app-11
+    enrichments: []
+    findings:
+    - severity: low
+      description: O binário da tarefa é o agente SCCM assinado pelo fornecedor; o
+        horário de criação coincide com a janela de mudança aprovada
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.1
+    action_reasoning: Atividade de mudança documentada pela conta esperada
+  expect:
+    verdict_decisions:
+    - close
+    confidence_min: 0.5
+- id: rare-outbound-ambiguous
+  kind: verdict
+  description: Single rare outbound connection, enrichment inconclusive — no strong
+    evidence either way.
+  iteration_count: 4
+  investigation:
+    title: Conexão de saída incomum a partir de uma estação de trabalho
+    alerts:
+    - severity: medium
+      level: 7
+      rule_description: A estação de trabalho fez uma única conexão HTTPS de saída
+        para um domínio registrado há 12 dias; sem visibilidade do conteúdo
+      source:
+        agent_name: ws-0142
+    enrichments:
+    - verdict: suspicious
+      observable:
+        type: domain
+        value: cdn-metrics-sync.example
+      analyzer: VirusTotal
+      confidence: 0.4
+      details:
+        note: 2/90 vendors flag; newly registered
+    findings: []
+  supervisor_assessment:
+    next_action: VERDICT
+    tp_confidence: 0.5
+    action_reasoning: Enriquecimento inconclusivo após o pipeline completo
+  expect:
+    verdict_decisions:
+    - needs_more_info
+    - escalate
+    confidence_min: 0.0
+- id: routing-pending-observables
+  kind: routing
+  description: Fresh alert with un-enriched observables — first move must be ENRICH.
+  iteration_count: 0
+  investigation:
+    title: Rajada de logins suspeita
+    alerts:
+    - severity: 9
+      rule_description: Múltiplos logins falhos seguidos de sucesso a partir de um
+        IP externo
+      source:
+        agent_name: bastion-01
+    enrichments: []
+    findings: []
+  pending_observables:
+  - type: ip
+    value: 203.0.113.7
+  expect:
+    routing_actions:
+    - ENRICH
+- id: routing-enriched-needs-verdict
+  kind: routing
+  description: Everything enriched and contextualized, high confidence — go to VERDICT
+    (CLOSE also defensible for a benign picture).
+  iteration_count: 6
+  investigation:
+    title: Investigação de anomalia de autenticação
+    alerts:
+    - severity: 9
+      rule_description: Força bruta SSH seguida de login bem-sucedido
+      source:
+        agent_name: bastion-01
+    enrichments:
+    - verdict: malicious
+      observable:
+        type: ip
+        value: 203.0.113.99
+      analyzer: AbuseIPDB
+      confidence: 0.95
+    findings:
+    - severity: high
+      description: A sessão de login gerou uma reverse shell para o mesmo IP
+    misp_context:
+      matches:
+      - value: 203.0.113.99
+        type: ip-dst
+        event_ids:
+        - '8812'
+        to_ids: true
+      threat_actors: []
+      campaigns: []
+      warninglist_hits: []
+      checked_iocs:
+      - 203.0.113.99
+  pending_observables: []
+  expect:
+    routing_actions:
+    - VERDICT
+- id: routing-malicious-needs-context
+  kind: routing
+  description: Malicious enrichment in hand but no MISP context yet — CONTEXTUALIZE
+    or INVESTIGATE are both sound; VERDICT acceptable for a decisive router.
+  iteration_count: 2
+  investigation:
+    title: Hash de malware detectado
+    alerts:
+    - severity: 10
+      rule_description: SHA256 reconhecidamente malicioso gravado em disco por um
+        processo de navegador
+      source:
+        agent_name: ws-0201
+    enrichments:
+    - verdict: malicious
+      observable:
+        type: hash_sha256
+        value: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      analyzer: VirusTotal
+      confidence: 0.98
+    findings: []
+  pending_observables: []
+  expect:
+    routing_actions:
+    - CONTEXTUALIZE
+    - INVESTIGATE
+    - VERDICT
