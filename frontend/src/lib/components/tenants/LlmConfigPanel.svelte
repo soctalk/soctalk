@@ -285,8 +285,8 @@
 		const dollarStr = formData.dollar_budget.trim();
 		if (dollarStr !== '') {
 			const d = Number(dollarStr);
-			if (!Number.isFinite(d) || d <= 0 || d > 10000) {
-				formError = 'Dollar budget must be greater than 0 and at most 10000';
+			if (!Number.isFinite(d) || d < 0.1 || d > 10000) {
+				formError = 'Dollar budget must be at least 0.10 and at most 10000';
 				return;
 			}
 		}

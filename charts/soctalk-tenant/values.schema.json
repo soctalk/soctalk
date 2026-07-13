@@ -69,9 +69,9 @@
           "type": "string"
         },
         "dollarBudgetPerRun": {
-          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget → supervisor CLOSE). Absent = the worker default.",
+          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget → supervisor CLOSE). Absent = the worker default. Floor $0.10 so a sub-cent cap can't halt the run after one call.",
           "type": "number",
-          "exclusiveMinimum": 0,
+          "minimum": 0.10,
           "maximum": 10000
         },
         "tokenBudgetPerRun": {

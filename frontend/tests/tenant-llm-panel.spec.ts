@@ -372,7 +372,7 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		await page.fill('input[name="dollar_budget"]', '0');
 		await page.getByTestId('llm-save').click();
 
-		await expect(page.getByTestId('llm-form-error')).toContainText('greater than 0');
+		await expect(page.getByTestId('llm-form-error')).toContainText('at least 0.10');
 		expect(handles.patchCount()).toBe(0);
 	});
 

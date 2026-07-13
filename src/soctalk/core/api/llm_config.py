@@ -217,8 +217,9 @@ class LlmConfigUpdate(BaseModel):
     # Per-tenant case-run budget caps (issue #5). Nullable columns, so these are
     # true tri-state via ``model_fields_set``: field ABSENT = unchanged; field
     # present as ``null`` = clear to the worker default; a number = set. Bounds:
-    # dollars must be > 0 (0 would kill every run at over_budget); tokens ≥ 1000.
-    dollar_budget_per_run: float | None = Field(default=None, gt=0, le=10000)
+    # a $0.10 floor (not just > 0) so a sub-cent cap can't halt the run right
+    # after the first priced call (Codex); tokens ≥ 1000.
+    dollar_budget_per_run: float | None = Field(default=None, ge=0.10, le=10000)
     token_budget_per_run: int | None = Field(default=None, ge=1000, le=100_000_000)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
