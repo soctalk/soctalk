@@ -90,6 +90,10 @@
 		model: string;
 		engine: '' | 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
 		decoding_mode: '' | LlmDecodingMode;
+		// Per-tier sampling override — '' = inherit the caller default. Strings so
+		// an emptied input validates before coercion.
+		temperature: string;
+		max_tokens: string;
 		// Whether a key is already stored for this tier (from the sanitized read).
 		has_api_key: boolean;
 		// New key input — blank = keep the stored key (keep/replace/clear).
@@ -106,6 +110,8 @@
 			model: '',
 			engine: '',
 			decoding_mode: '',
+			temperature: '',
+			max_tokens: '',
 			has_api_key: false,
 			api_key: '',
 			clear_key: false
@@ -126,6 +132,8 @@
 			model: r.model ?? '',
 			engine: (r.engine as TierForm['engine']) ?? '',
 			decoding_mode: (r.decoding_mode as LlmDecodingMode) ?? '',
+			temperature: r.temperature != null ? String(r.temperature) : '',
+			max_tokens: r.max_tokens != null ? String(r.max_tokens) : '',
 			has_api_key: r.has_api_key,
 			api_key: '',
 			clear_key: false
@@ -141,6 +149,8 @@
 			f.model.trim() !== (r.model ?? '') ||
 			(f.engine || null) !== (r.engine ?? null) ||
 			(f.decoding_mode || null) !== (r.decoding_mode ?? null) ||
+			f.temperature.trim() !== (r.temperature != null ? String(r.temperature) : '') ||
+			f.max_tokens.trim() !== (r.max_tokens != null ? String(r.max_tokens) : '') ||
 			!!f.api_key.trim() ||
 			f.clear_key
 		);
@@ -170,6 +180,9 @@
 			};
 			if (f.engine) t.engine = f.engine;
 			if (f.decoding_mode) t.decoding_mode = f.decoding_mode;
+			// Per-tier sampling: send only when set (blank = inherit the default).
+			if (f.temperature.trim() !== '') t.temperature = Number(f.temperature);
+			if (f.max_tokens.trim() !== '') t.max_tokens = Number(f.max_tokens);
 			// Key: a typed value replaces; an explicit clear sends ''; otherwise
 			// omit so the backend carries the stored key forward. Trim so a
 			// whitespace-only entry is treated as "no new key" (keep), matching
@@ -272,6 +285,21 @@
 			if (!f.model.trim()) {
 				formError = `${TIER_LABELS[k]} tier: model is required`;
 				return;
+			}
+			// Per-tier sampling bounds (blank = inherit, so only validate when set).
+			if (f.temperature.trim() !== '') {
+				const tt = Number(f.temperature);
+				if (!Number.isFinite(tt) || tt < 0 || tt > 2) {
+					formError = `${TIER_LABELS[k]} tier: temperature must be between 0 and 2`;
+					return;
+				}
+			}
+			if (f.max_tokens.trim() !== '') {
+				const mm = Number(f.max_tokens);
+				if (!Number.isInteger(mm) || mm < 1 || mm > 8192) {
+					formError = `${TIER_LABELS[k]} tier: max tokens must be a whole number 1–8192`;
+					return;
+				}
 			}
 			// A tier on a different provider than the primary must carry its own
 			// key (the tenant mounts only the primary credential). Catch it here
@@ -560,6 +588,28 @@
 											{/each}
 										</select>
 									</label>
+									<label class="label">
+										<span class="text-xs">Temperature</span>
+										<input
+											class="input"
+											type="text"
+											inputmode="decimal"
+											data-testid={`llm-tier-${tk}-temperature`}
+											bind:value={tierForms[tk].temperature}
+											placeholder="inherit"
+										/>
+									</label>
+									<label class="label">
+										<span class="text-xs">Max tokens</span>
+										<input
+											class="input"
+											type="text"
+											inputmode="numeric"
+											data-testid={`llm-tier-${tk}-max-tokens`}
+											bind:value={tierForms[tk].max_tokens}
+											placeholder="inherit"
+										/>
+									</label>
 									<label class="label md:col-span-2">
 										<span class="text-xs">
 											{tierForms[tk].has_api_key ? 'Replace tier API key' : 'Tier API key'}
@@ -688,6 +738,8 @@
 										<div class="md:col-span-2 break-all"><span class="opacity-60">base</span> {read.tiers[tk].base_url ?? '—'}</div>
 										<div><span class="opacity-60">model</span> {read.tiers[tk].model ?? '—'}</div>
 										<div><span class="opacity-60">decoding</span> {read.tiers[tk].decoding_mode ?? 'auto'}</div>
+										<div><span class="opacity-60">temp</span> {read.tiers[tk].temperature ?? 'inherit'}</div>
+										<div><span class="opacity-60">max tok</span> {read.tiers[tk].max_tokens ?? 'inherit'}</div>
 										<div class="md:col-span-2">
 											<span class="opacity-60">key</span>
 											{read.tiers[tk].has_api_key ? 'own key' : 'reuses primary'}

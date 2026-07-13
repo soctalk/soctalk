@@ -111,6 +111,14 @@ spec:
             - name: SOCTALK_FAST_DECODING_MODE
               value: {{ $tiers.fast.decodingMode | quote }}
             {{- end }}
+            {{- if not (kindIs "invalid" $tiers.fast.temperature) }}
+            - name: SOCTALK_FAST_TEMPERATURE
+              value: {{ $tiers.fast.temperature | quote }}
+            {{- end }}
+            {{- if $tiers.fast.maxTokens }}
+            - name: SOCTALK_FAST_MAX_TOKENS
+              value: {{ $tiers.fast.maxTokens | quote }}
+            {{- end }}
             {{- if hasKey $tierKeys "fast" }}
             - name: SOCTALK_FAST_API_KEY
               valueFrom:
@@ -136,6 +144,14 @@ spec:
             {{- if $tiers.reasoning.decodingMode }}
             - name: SOCTALK_REASONING_DECODING_MODE
               value: {{ $tiers.reasoning.decodingMode | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $tiers.reasoning.temperature) }}
+            - name: SOCTALK_REASONING_TEMPERATURE
+              value: {{ $tiers.reasoning.temperature | quote }}
+            {{- end }}
+            {{- if $tiers.reasoning.maxTokens }}
+            - name: SOCTALK_REASONING_MAX_TOKENS
+              value: {{ $tiers.reasoning.maxTokens | quote }}
             {{- end }}
             {{- if hasKey $tierKeys "reasoning" }}
             - name: SOCTALK_REASONING_API_KEY

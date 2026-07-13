@@ -237,6 +237,12 @@ class LLMTierConfig(BaseModel):
         "auto", "none", "tool_use", "json_schema_strict", "json_object",
         "guided_json", "guided_grammar",
     ] | None = None
+    # Per-tier sampling override. Omit to inherit the tier's caller default
+    # (router → the tenant-global temperature/max_tokens; reasoning → the
+    # verdict's tuned constants). Bounds mirror the global sampling knobs +
+    # LLMConfig so the UI can't persist a value the worker would reject.
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=8192)
     # Own credential for a different-provider tier. Omit to reuse the primary
     # ``llm_api_key_plain`` (only valid when this tier's provider matches the
     # primary provider). Same plaintext-at-rest caveat as ``llm_api_key_plain``.

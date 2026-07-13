@@ -166,6 +166,10 @@ export interface TenantLlmTierRead {
 	model: string | null;
 	engine: string | null;
 	decoding_mode: LlmDecodingMode | null;
+	// Per-tier sampling override — null means the tier inherits its caller
+	// default (router → tenant-global sampling; reasoning → tuned constants).
+	temperature: number | null;
+	max_tokens: number | null;
 	has_api_key: boolean;
 }
 
@@ -179,6 +183,9 @@ export interface TenantLlmTierWrite {
 	model: string;
 	engine?: 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
 	decoding_mode?: LlmDecodingMode;
+	// Per-tier sampling override (0–2 / 1–8192). Omit to inherit the default.
+	temperature?: number;
+	max_tokens?: number;
 	api_key_plain?: string;
 }
 
