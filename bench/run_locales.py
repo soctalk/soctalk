@@ -70,10 +70,26 @@ def print_table(model_label: str, rows: list[dict]) -> None:
     print("-" * 78)
 
 
+def _custom_env(base_url: str, model: str, key: str) -> dict:
+    """Env for an arbitrary OpenAI-compatible endpoint (e.g. a Modal-served
+    open model) — both tiers on it, so per-locale is measured on one model."""
+    return {**os.environ,
+            "SOCTALK_EVAL_ROUTING_THRESHOLD": "0", "SOCTALK_EVAL_VERDICT_THRESHOLD": "0",
+            "SOCTALK_LLM_PROVIDER": "openai",
+            "OPENAI_BASE_URL": base_url if base_url.endswith("/v1") else f"{base_url}/v1",
+            "OPENAI_API_KEY": key, "ANTHROPIC_API_KEY": "", "ANTHROPIC_BASE_URL": "",
+            "SOCTALK_FAST_MODEL": model, "SOCTALK_REASONING_MODEL": model}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python bench/run_locales.py")
     p.add_argument("--only", nargs="*", default=["frontier"],
                    help="Endpoint labels from run_hosted.py (default: frontier).")
+    p.add_argument("--base-url", default=None,
+                   help="Custom OpenAI-compatible endpoint (e.g. a Modal URL); needs --model + --api-key-env.")
+    p.add_argument("--model", default=None, help="Model id for --base-url.")
+    p.add_argument("--api-key-env", default="SGLANG_API_KEY", help="Env var with the --base-url key.")
+    p.add_argument("--label", default="custom", help="Label for the --base-url run.")
     p.add_argument("--trials", type=int, default=1)
     p.add_argument("--concurrency", type=int, default=4)
     args = p.parse_args(argv)
@@ -81,6 +97,24 @@ def main(argv: list[str] | None = None) -> int:
     # Ensure the locale files exist (regenerate is cheap + keeps them in sync).
     subprocess.run([sys.executable, str(EVALS / "golden_i18n.py")],
                    capture_output=True, cwd=str(REPO_ROOT))
+
+    # Custom-endpoint mode: sweep locales on one arbitrary served model.
+    if args.base_url:
+        key = os.getenv(args.api_key_env, "").strip()
+        env = _custom_env(args.base_url, args.model, key)
+        rows = []
+        print(f"### {args.label} ({args.model})")
+        for locale, golden in LOCALES:
+            if not golden.exists():
+                continue
+            print(f"  eval {args.label} @ {locale} ...", flush=True)
+            res = run_locale(env, golden, f"{args.label}-{locale}", args.trials, args.concurrency)
+            if res is not None:
+                rows.append({"locale": locale, "result": res})
+        if rows:
+            print_table(args.label, rows)
+            return 0
+        return 1
 
     rc = 0
     for ep in [e for e in ENDPOINTS if e["label"] in args.only]:
