@@ -341,9 +341,14 @@ async def update_tenant_llm(
                 cfg.llm_tiers = validate_llm_tiers(merged_tiers)
             except ValueError as e:
                 raise HTTPException(422, f"invalid llm_tiers: {e}") from e
-            # A tier on a DIFFERENT provider than the tenant's primary must carry
-            # its own key (the tenant mounts only the primary credential). Reject
-            # at config time rather than let the worker CrashLoop at startup.
+        # A tier on a DIFFERENT provider than the tenant's primary must carry its
+        # own key (the tenant mounts only the primary credential). Re-check
+        # whenever the primary provider OR the tiers changed — NOT only when
+        # ``tiers`` is in the payload: a provider-only PATCH can turn an existing
+        # same-provider tier (reusing the primary key) into a cross-provider tier
+        # with no key, which would CrashLoop the worker. Runs against the final
+        # merged state so keep/replace/clear are already resolved.
+        if cfg.llm_provider != prior_provider or cfg.llm_tiers != prior_tiers:
             offending = _cross_provider_tiers_without_key(cfg.llm_provider, cfg.llm_tiers)
             if offending:
                 raise HTTPException(

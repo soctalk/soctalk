@@ -460,6 +460,30 @@ def render_tenant_values(
         if extra_llm_ports:
             values["networkPolicies"]["extraLlmEgressPorts"] = extra_llm_ports
 
+    # Rollout hash for the runs-worker (issue #12 Codex review). LLM key material
+    # (primary + per-tier own keys) lands in ``tenant-llm-key`` as env-from-secret
+    # — which does NOT hot-reload in a running pod. A key-only rotation produces
+    # byte-identical chart values (the plaintext never rides values on the L1
+    # path), so ``helm upgrade`` would be a no-op and the worker would keep the
+    # stale key until an unrelated restart. Emit a checksum of the true key
+    # material (independent of ``include_llm_api_key``) as a pod-template
+    # annotation input so any rotation changes the Deployment spec and forces a
+    # rollout. Salted with the tenant id — a bare sha256 is not reversible for a
+    # high-entropy key, and the salt removes any cross-tenant equality signal.
+    import hashlib
+
+    material = "\x00".join(
+        [
+            str(integration.tenant_id),
+            integration.llm_api_key_plain or "",
+            *(
+                f"{t}={(b or {}).get('api_key_plain') or ''}"
+                for t, b in sorted((integration.llm_tiers or {}).items())
+            ),
+        ]
+    )
+    values["llm"]["secretChecksum"] = hashlib.sha256(material.encode()).hexdigest()
+
     if is_provided:
         # No Wazuh agents enroll against this namespace — the tenant's own
         # Wazuh fronts its agents — so there is no agent ingress to publish.
