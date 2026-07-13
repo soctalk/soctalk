@@ -67,6 +67,40 @@ def test_mixed_provider_tiers_resolve(clean_env):
     assert reasoning.llm_config.openai_api_key == ""
 
 
+def test_per_tier_sampling_env_reaches_resolver(clean_env):
+    # Full env-load path (Codex): SOCTALK_FAST_TEMPERATURE/_MAX_TOKENS must map
+    # through _TIER_ENV_PREFIXES into cfg.tiers["router"] and be picked up by
+    # resolve_tier_sampling — proving the fast→router rename lines up end to end.
+    from soctalk.inference import resolve_tier_sampling
+
+    cfg = clean_env(
+        SOCTALK_FAST_PROVIDER="openai",
+        SOCTALK_FAST_MODEL="qwen3-32b",
+        SOCTALK_FAST_BASE_URL="http://sglang.internal/v1",
+        SOCTALK_FAST_ENGINE="sglang",
+        SOCTALK_FAST_API_KEY="sk-local",
+        SOCTALK_FAST_TEMPERATURE="0.3",
+        SOCTALK_FAST_MAX_TOKENS="2048",
+    )
+    assert cfg.tiers["router"]["temperature"] == 0.3
+    assert cfg.tiers["router"]["max_tokens"] == 2048
+    s = resolve_tier_sampling(cfg, InferenceTier.ROUTER, temperature=0.0, max_tokens=4096)
+    assert (s.temperature, s.max_tokens) == (0.3, 2048)
+    # A tier without a sampling override falls back to the caller default.
+    r = resolve_tier_sampling(cfg, InferenceTier.REASONING, temperature=0.1, max_tokens=2048)
+    assert (r.temperature, r.max_tokens) == (0.1, 2048)
+
+
+def test_per_tier_sampling_env_out_of_range_rejected(clean_env):
+    with pytest.raises(ValueError, match="out of range"):
+        clean_env(
+            SOCTALK_FAST_PROVIDER="openai",
+            SOCTALK_FAST_BASE_URL="http://sglang:8000/v1",
+            SOCTALK_FAST_MODEL="m",
+            SOCTALK_FAST_TEMPERATURE="9",
+        )
+
+
 def test_per_tier_api_key_avoids_second_global_key(clean_env):
     # Only ANTHROPIC_API_KEY globally; the served router carries its own key,
     # so no OPENAI_API_KEY is needed and the guard is irrelevant.

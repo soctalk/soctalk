@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
@@ -248,6 +248,15 @@ class LLMTierConfig(BaseModel):
     # primary provider). Same plaintext-at-rest caveat as ``llm_api_key_plain``.
     api_key_plain: str | None = None
 
+    @field_validator("temperature", "max_tokens", mode="before")
+    @classmethod
+    def _reject_bool_sampling(cls, v):
+        # Pydantic v2 coerces bool → 0/1 for numeric fields; reject it for parity
+        # with the global sampling API (Codex) — True must not become 1.0 / 1.
+        if isinstance(v, bool):
+            raise ValueError("must be a number, not a boolean")
+        return v
+
     @model_validator(mode="after")
     def _check_combo(self) -> LLMTierConfig:
         # Match the env resolver's rules so the UI can't persist a combo the
@@ -390,6 +399,12 @@ class IntegrationConfig(SQLModel, table=True):
     )
     llm_temperature: float = Field(default=0.0)
     llm_max_tokens: int = Field(default=4096)
+    # Per-tenant case-run budget caps (issue #5). NULL = use the worker default
+    # (SOCTALK_CASE_RUN_*_BUDGET env or the built-in $5 / 15k). Enforced in
+    # graph/budget.py (over_budget → supervisor CLOSE); rendered into the
+    # runs-worker env only when set.
+    llm_dollar_budget_per_run: float | None = Field(default=None)
+    llm_token_budget_per_run: int | None = Field(default=None)
     # Plaintext LLM API key material stored in Postgres.
     #
     # MVP path: needed for the cross-cluster L1→L2 deploy, where the

@@ -498,6 +498,15 @@ def render_tenant_values(
     )
     values["llm"]["secretChecksum"] = hashlib.sha256(material.encode()).hexdigest()
 
+    # Per-tenant case-run budget caps (issue #5). Emitted only when set — a NULL
+    # column leaves the env unset so the worker keeps its default. Rendered to
+    # SOCTALK_CASE_RUN_DOLLAR_BUDGET / _TOKEN_BUDGET, which graph/budget.py reads
+    # directly (over_budget → supervisor CLOSE).
+    if integration.llm_dollar_budget_per_run is not None:
+        values["llm"]["dollarBudgetPerRun"] = integration.llm_dollar_budget_per_run
+    if integration.llm_token_budget_per_run is not None:
+        values["llm"]["tokenBudgetPerRun"] = integration.llm_token_budget_per_run
+
     if is_provided:
         # No Wazuh agents enroll against this namespace — the tenant's own
         # Wazuh fronts its agents — so there is no agent ingress to publish.

@@ -57,6 +57,8 @@ interface LlmRead {
 	reasoning_model: string | null;
 	temperature: number;
 	max_tokens: number;
+	dollar_budget_per_run: number | null;
+	token_budget_per_run: number | null;
 	has_api_key: boolean;
 	api_key_preview: string;
 	tiers: Record<string, TierRead> | null;
@@ -71,6 +73,8 @@ const READ_SINGLE: LlmRead = {
 	reasoning_model: null,
 	temperature: 0.0,
 	max_tokens: 4096,
+	dollar_budget_per_run: null,
+	token_budget_per_run: null,
 	has_api_key: true,
 	api_key_preview: 'sk-ant-…7890',
 	tiers: null

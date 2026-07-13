@@ -68,6 +68,18 @@
           "description": "sha256 of the LLM key material (primary + per-tier own keys), salted with the tenant id. Rendered as a runs-worker pod-template annotation (checksum/llm-secret) so a key-only rotation — which leaves the rest of the values byte-identical — still rolls the worker (env-from-secret does not hot-reload). Not a secret; a sha256 of a high-entropy key is not reversible.",
           "type": "string"
         },
+        "dollarBudgetPerRun": {
+          "description": "Per-tenant case-run dollar spend cap. Rendered to SOCTALK_CASE_RUN_DOLLAR_BUDGET; enforced in graph/budget.py (over_budget → supervisor CLOSE). Absent = the worker default.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 10000
+        },
+        "tokenBudgetPerRun": {
+          "description": "Per-tenant case-run token cap. Rendered to SOCTALK_CASE_RUN_TOKEN_BUDGET. Absent = the worker default.",
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 100000000
+        },
         "tiers": {
           "description": "Optional per-tier LLM backends for a hybrid tenant (issue #12). Absent = single-provider (the properties above). Each tier's provider/baseUrl/model/engine render to SOCTALK_<TIER>_* worker env; 'fast' maps to the runtime router tier, 'reasoning' to the reasoning tier.",
           "type": "object",
