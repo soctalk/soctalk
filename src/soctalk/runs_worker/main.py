@@ -349,7 +349,12 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         "events": [alert],
         "pending_observables": pending,
         "tokens_used": int(claim["tokens_used"]),
-        "tokens_budget": int(claim["tokens_budget"]),
+        # Per-run token budget: same env-first precedence as dollars, so a
+        # per-tenant SOCTALK_CASE_RUN_TOKEN_BUDGET (rendered from the tenant's
+        # llm_token_budget_per_run) actually overrides the DB row default —
+        # previously the claim value was seeded unconditionally and the env was
+        # ignored for claimed runs.
+        **_tokens_budget_kv(claim.get("tokens_budget")),
         "dollars_used": float(claim.get("dollars_used") or 0.0),
         # Per-run dollar budget precedence (highest to lowest):
         #   1. ``SOCTALK_CASE_RUN_DOLLAR_BUDGET`` env var, **if positive**
@@ -364,6 +369,30 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         #   3. Unset → ``token_budget.ensure`` falls back to $5.
         **_dollars_budget_kv(claim.get("dollars_budget")),
     }
+
+
+def _tokens_budget_kv(claim_tokens_budget: Any) -> dict[str, int]:
+    """Resolve the token-budget seed for graph state (mirrors dollars).
+
+    Env ``SOCTALK_CASE_RUN_TOKEN_BUDGET`` (if positive) overrides the claim row;
+    a non-positive env value is treated as "ignore" (operator typo guard) and
+    falls through to the claim, then to ``token_budget.ensure``'s default.
+    """
+    env_raw = os.environ.get("SOCTALK_CASE_RUN_TOKEN_BUDGET")
+    if env_raw:
+        try:
+            env_v = int(env_raw)
+        except ValueError:
+            env_v = 0
+        if env_v > 0:
+            return {"tokens_budget": env_v}
+    try:
+        claim_v = int(claim_tokens_budget) if claim_tokens_budget is not None else 0
+    except (TypeError, ValueError):
+        claim_v = 0
+    if claim_v > 0:
+        return {"tokens_budget": claim_v}
+    return {}
 
 
 def _dollars_budget_kv(claim_dollars_budget: Any) -> dict[str, float]:
