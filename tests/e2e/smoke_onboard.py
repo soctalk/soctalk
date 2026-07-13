@@ -12,16 +12,16 @@ Env contract:
 - SMOKE_ADMIN_PW
 - SMOKE_SLUG_PREFIX  (default: smoke; the test appends a UTC timestamp)
 """
-import json
 import http.cookiejar
+import json
 import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
 BASE = os.environ["SMOKE_BASE_URL"].rstrip("/")
@@ -29,7 +29,7 @@ HOST = BASE.split("//", 1)[1].split("/", 1)[0]
 ADMIN_EMAIL = os.environ["SMOKE_ADMIN_EMAIL"]
 ADMIN_PW = os.environ["SMOKE_ADMIN_PW"]
 SLUG_PREFIX = os.environ.get("SMOKE_SLUG_PREFIX", "smoke")
-SLUG = f"{SLUG_PREFIX}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+SLUG = f"{SLUG_PREFIX}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
 
 # Resolved tenant id is written to GITHUB_OUTPUT (if present) so the
 # parent workflow can hand it to a cleanup step.
@@ -59,6 +59,36 @@ def api_login() -> str:
     raise SystemExit("no soctalk_session cookie returned by login")
 
 
+def dump_failure_diagnostics(sess: str, tenant_id: str, data: dict) -> None:
+    """On a terminal failure state, print the provisioning failure reason so a
+    red CI run is self-explanatory instead of just ``degraded``. Dumps the
+    tenant ``runtime`` blob (may carry a message) + recent lifecycle events
+    (the failed step + error live here)."""
+    runtime = data.get("runtime")
+    if runtime:
+        print(f"  runtime: {json.dumps(runtime)[:1500]}", flush=True)
+    try:
+        req = urllib.request.Request(
+            f"{BASE}/api/mssp/tenants/{tenant_id}/events?limit=50",
+            headers={"Cookie": f"soctalk_session={sess}"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            events = json.loads(r.read())
+    except Exception as e:
+        print(f"  could not fetch lifecycle events: {e}", flush=True)
+        return
+    print(f"  --- lifecycle events (most recent {min(len(events), 50)}) ---", flush=True)
+    for ev in events:
+        et = ev.get("event_type") or ev.get("type") or "?"
+        step_ = ev.get("step") or ""
+        msg = ev.get("message") or ev.get("detail") or ev.get("error") or ""
+        ts = ev.get("created_at") or ev.get("ts") or ""
+        line = f"  [{ts}] {et}" + (f" step={step_}" if step_ else "")
+        if msg:
+            line += f" :: {str(msg)[:400]}"
+        print(line, flush=True)
+
+
 def decommission(sess: str, tenant_id: str) -> None:
     """Best-effort cleanup so the smoke tenant doesn't accumulate on the
     demo box (each tenant runs a full Wazuh stack; left to pile up they
@@ -72,6 +102,13 @@ def decommission(sess: str, tenant_id: str) -> None:
         with urllib.request.urlopen(req, timeout=30) as r:
             r.read()
         print(f"  decommissioned {tenant_id}", flush=True)
+    except urllib.error.HTTPError as e:
+        # Print the response body so a 403/4xx is diagnosable (e.g. CSRF vs role).
+        try:
+            body = e.read().decode()[:300]
+        except Exception:
+            body = ""
+        print(f"  cleanup warning: decommission failed: {e} :: {body}", flush=True)
     except Exception as e:
         print(f"  cleanup warning: decommission failed: {e}", flush=True)
 
@@ -146,6 +183,7 @@ with sync_playwright() as p:
         # fail fast instead of polling to the timeout.
         if state in ("failed", "error", "degraded"):
             final_state = state
+            dump_failure_diagnostics(sess, tenant_id, data)
             break
         time.sleep(15)
 
