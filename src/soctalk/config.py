@@ -310,14 +310,20 @@ def load_config(env_file: Optional[Path] = None) -> Config:
         if provider == "openai" and not openai_api_key and anthropic_api_key:
             provider = "anthropic"
 
-    if provider == "anthropic" and not anthropic_api_key:
-        raise ValueError(
-            "No LLM API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY (mutually exclusive)."
-        )
-    if provider == "openai" and not openai_api_key:
-        raise ValueError(
-            "No LLM API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY (mutually exclusive)."
-        )
+    # The global-provider key is the fallback for tiers without their own
+    # credential. When per-tier providers are configured (mixed intent, #4) the
+    # tiers can supply their own keys — e.g. two self-hosted OpenAI-compatible
+    # endpoints keyed only per-tier — so a missing global key is not fatal here;
+    # create_chat_model still fails loudly per-call if a specific tier lacks one.
+    if not has_mixed_intent:
+        if provider == "anthropic" and not anthropic_api_key:
+            raise ValueError(
+                "No LLM API key configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY (mutually exclusive)."
+            )
+        if provider == "openai" and not openai_api_key:
+            raise ValueError(
+                "No LLM API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY (mutually exclusive)."
+            )
 
     # LLM config
     llm_config = LLMConfig(

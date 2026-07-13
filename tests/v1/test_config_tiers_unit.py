@@ -212,3 +212,24 @@ def test_served_engine_tier_relaxes_guard(clean_env):
     cfg = clean_env(ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o",
                     SOCTALK_FAST_ENGINE="vllm", SOCTALK_FAST_BASE_URL="http://vllm/v1")
     assert cfg.tiers["router"]["engine"] == "vllm"
+
+
+def test_per_tier_keys_allow_no_global_key(clean_env):
+    # Two self-hosted OpenAI-compatible tiers keyed ONLY per-tier — no global
+    # OPENAI_API_KEY — must load (the fallback global key isn't used). Found by
+    # the open-model combo experiment.
+    cfg = clean_env(
+        SOCTALK_LLM_PROVIDER="openai",
+        SOCTALK_FAST_PROVIDER="openai", SOCTALK_FAST_BASE_URL="http://a:8000/v1",
+        SOCTALK_FAST_API_KEY="sk-a", SOCTALK_FAST_MODEL="m-a",
+        SOCTALK_REASONING_PROVIDER="openai", SOCTALK_REASONING_BASE_URL="http://b:8000/v1",
+        SOCTALK_REASONING_API_KEY="sk-b", SOCTALK_REASONING_MODEL="m-b",
+    )
+    assert cfg.tiers["router"]["api_key"] == "sk-a"
+    assert cfg.tiers["reasoning"]["api_key"] == "sk-b"
+
+
+def test_single_provider_still_requires_a_key(clean_env):
+    # No mixed intent → the global-key requirement stands (no silent keyless run).
+    with pytest.raises(ValueError, match="No LLM API key configured"):
+        clean_env(SOCTALK_LLM_PROVIDER="openai", SOCTALK_FAST_MODEL="m")
