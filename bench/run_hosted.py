@@ -50,7 +50,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # API reports. ``key_env`` names the env var holding the credential.
 ENDPOINTS: list[dict] = [
     {
-        "label": "deepseek-chat",
+        # DeepSeek's non-thinking "flash" model — the successor to the
+        # deepseek-chat alias (Codex flagged the alias as deprecating ~2026-07-24).
+        # NOTE: verify the exact id against GET /models with your key — vendor
+        # naming shifts; run_hosted logs the model it used.
+        "label": "deepseek-flash",
+        "provider": "openai", "base_url": "https://api.deepseek.com",
+        "key_env": "DEEPSEEK_API_KEY",
+        "fast": "deepseek-v4-flash", "reasoning": "deepseek-v4-flash",
+        "prices": {"deepseek-v4-flash": {"input": 0.27, "output": 1.10}},
+    },
+    {
+        "label": "deepseek-chat",  # compat row for the legacy alias
         "provider": "openai", "base_url": "https://api.deepseek.com",
         "key_env": "DEEPSEEK_API_KEY",
         "fast": "deepseek-chat", "reasoning": "deepseek-chat",

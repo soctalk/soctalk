@@ -60,6 +60,13 @@ class DecodingMode(str, Enum):
     NONE = "none"
     TOOL_USE = "tool_use"
     JSON_SCHEMA_STRICT = "json_schema_strict"
+    # response_format={"type":"json_object"} + the schema described in the
+    # prompt. For OpenAI-compatible endpoints that reject strict json_schema AND
+    # tool_choice — notably DeepSeek's hosted thinking models (deepseek-v4-flash:
+    # "response_format type unavailable" / "Thinking mode does not support this
+    # tool_choice"). Weaker than strict (schema isn't enforced by the API, so the
+    # validation retry earns its keep), but the only structured path they accept.
+    JSON_OBJECT = "json_object"
     GUIDED_JSON = "guided_json"
     GUIDED_GRAMMAR = "guided_grammar"
 
@@ -291,13 +298,31 @@ def _track(req: InferenceRequest, raw: Any) -> None:
         track(req.metadata.budget_state, raw)
 
 
+def _json_object_hint(schema: type) -> HumanMessage:
+    """Describe the target schema for a json_object-mode call — the API doesn't
+    enforce the schema, so the model needs it in the prompt."""
+    import json
+    props = getattr(schema, "model_json_schema", lambda: {})().get("properties", {})
+    return HumanMessage(content=(
+        "Respond with ONLY a single JSON object (no prose, no markdown fence) "
+        f"matching the {getattr(schema, '__name__', 'output')} schema — these "
+        f"fields: {json.dumps(props, ensure_ascii=False)}"
+    ))
+
+
 async def _invoke_structured(
     llm: Any, schema: type, messages: list[Any], req: InferenceRequest,
+    *, mode: "DecodingMode" = None,  # type: ignore[assignment]
 ) -> tuple[Any, Any, str | None, int]:
     """Schema-enforced invoke with one validation retry (the ainvoke_structured
     logic, inlined so the dispatcher owns tracking + attempt counting).
     Returns (parsed, raw, parsing_error, attempts)."""
-    structured = llm.with_structured_output(schema, include_raw=True)
+    if mode == DecodingMode.JSON_OBJECT:
+        # response_format=json_object (no strict schema); schema goes in the prompt.
+        structured = llm.with_structured_output(schema, method="json_mode", include_raw=True)
+        messages = [*messages, _json_object_hint(schema)]
+    else:
+        structured = llm.with_structured_output(schema, include_raw=True)
     attempts = 0
 
     result = await structured.ainvoke(messages)
@@ -507,7 +532,7 @@ async def ainvoke_request(
             f"conforming exactly to the {getattr(req.output_schema, '__name__', 'schema')}."
         )))
         parsed, raw, err, attempts = await _invoke_structured(
-            llm, req.output_schema, extract_msgs, req,
+            llm, req.output_schema, extract_msgs, req, mode=mode,
         )
         # usage covers BOTH calls (budget.track already saw each); the returned
         # field must not undercount the reasoning tokens.
@@ -536,12 +561,13 @@ async def ainvoke_request(
             resolved=replace(resolved, decoding_mode=mode), attempts=1,
         )
 
-    # Constrained frontier decoding (tool_use / json_schema_strict) — both go
-    # through with_structured_output, which selects the provider mechanism.
-    # The resolved mode is recorded on ``resolved`` for observability; guided
-    # served-engine modes are rejected above until #13 wires their shaping.
+    # Constrained decoding (tool_use / json_schema_strict / json_object) — all go
+    # through with_structured_output; json_object uses method="json_mode" + a
+    # schema hint (see _invoke_structured). The resolved mode is recorded on
+    # ``resolved`` for observability; guided served-engine modes are rejected
+    # above until #13 wires their shaping.
     parsed, raw, err, attempts = await _invoke_structured(
-        llm, req.output_schema, messages, req,
+        llm, req.output_schema, messages, req, mode=mode,
     )
     return InferenceResult(
         parsed=parsed, raw_message=raw,
