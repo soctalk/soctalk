@@ -108,7 +108,7 @@ jobs:
                  -f /tmp/demo-values.yaml \
                  --set-string install.bootstrapAdmin.email='$ADMIN_EMAIL' \
                  --set-string install.bootstrapAdmin.password='$ADMIN_PW' \
-                 --wait --atomic --timeout 15m
+                 --wait --timeout 8m
                rm -f /tmp/demo-values.yaml"
 
       - name: Diagnose on failure (pod/events — survives atomic rollback)
@@ -131,7 +131,15 @@ jobs:
                echo '=== non-running tenant namespaces (accumulated backlog) ==='
                kubectl get ns | grep -cE 'tenant-|wazuh-' || true
                echo '=== api deploy describe (tail) ==='
-               kubectl -n soctalk-system describe deploy/soctalk-system-api | tail -30" || true
+               kubectl -n soctalk-system describe deploy/soctalk-system-api | tail -20
+               crash=\$(kubectl -n soctalk-system get pods --sort-by=.metadata.creationTimestamp -o name | grep api | tail -1)
+               echo \"=== newest api pod: \$crash ===\"
+               echo '--- db-init (migrations) logs ---'
+               kubectl -n soctalk-system logs \$crash -c db-init --tail=60 2>&1 | tail -30
+               echo '--- api container logs (current) ---'
+               kubectl -n soctalk-system logs \$crash -c api --tail=150 2>&1 | tail -80
+               echo '--- api container logs (previous crash) ---'
+               kubectl -n soctalk-system logs \$crash -c api --previous --tail=150 2>&1 | tail -80" || true
 
       - name: Force rollout so the moving `latest` tag is re-pulled
         run: |
