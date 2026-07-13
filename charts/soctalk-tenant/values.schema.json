@@ -48,7 +48,7 @@
         "provider": { "enum": ["openai-compatible", "anthropic"] },
         "baseUrl":  { "type": "string", "format": "uri" },
         "temperature": { "description": "Tenant-global default sampling temperature for the router/supervisor tier. Rendered to SOCTALK_LLM_TEMPERATURE.", "type": "number", "minimum": 0, "maximum": 2 },
-        "maxTokens": { "description": "Tenant-global default max output tokens for the router/supervisor tier. Rendered to SOCTALK_LLM_MAX_TOKENS.", "type": "integer", "minimum": 1, "maximum": 131072 },
+        "maxTokens": { "description": "Tenant-global default max output tokens for the router/supervisor tier. Rendered to SOCTALK_LLM_MAX_TOKENS. Capped at a router-appropriate ceiling — a schema-constrained decision is small.", "type": "integer", "minimum": 1, "maximum": 8192 },
         "model":    { "type": "string", "minLength": 1 },
         "apiKeyRef": {
           "type": "object",

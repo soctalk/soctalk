@@ -317,6 +317,22 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		expect(handles.patchCount()).toBe(0);
 	});
 
+	test('blanking a sampling field is rejected, not a silent no-op', async ({ page }) => {
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		// Clear temperature — a blank read as "reset" would silently do nothing;
+		// the panel must surface it as required instead.
+		await page.fill('input[name="temperature"]', '');
+		await page.getByTestId('llm-save').click();
+
+		await expect(page.getByTestId('llm-form-error')).toContainText('Temperature is required');
+		expect(handles.patchCount()).toBe(0);
+		await expect(page.getByTestId('llm-edit-form')).toBeVisible();
+	});
+
 	test('clearing the thinking model sends reasoning_model: "" and no other model fields', async ({
 		page
 	}) => {

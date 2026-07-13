@@ -201,10 +201,13 @@ class LlmConfigUpdate(BaseModel):
     fast_model: str | None = Field(default=None, max_length=255)
     reasoning_model: str | None = Field(default=None, max_length=255)
     # Tenant-global default sampling. ``None`` = unchanged. Bounds mirror the
-    # chart's values.schema.json so an out-of-range value is rejected at the API
-    # rather than failing Helm validation on the next re-render.
+    # chart's values.schema.json + LLMConfig so an out-of-range value is rejected
+    # here rather than failing Helm validation / worker startup on the next
+    # re-render. ``max_tokens`` is a ROUTER output cap (Codex #1): a schema-
+    # constrained decision is tiny, so 8192 is generous headroom — a future
+    # large-generation setting would be a separate field, not this ceiling.
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, ge=1, le=131072)
+    max_tokens: int | None = Field(default=None, ge=1, le=8192)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
     # unchanged; ``{}`` = clear back to single-provider; a map = replace.
@@ -226,6 +229,16 @@ class LlmConfigUpdate(BaseModel):
     def _validate_url(cls, v):
         if v is not None and not v.startswith(("http://", "https://")):
             raise ValueError("base_url must start with http(s)://")
+        return v
+
+    @field_validator("temperature", "max_tokens", mode="before")
+    @classmethod
+    def _reject_bool(cls, v):
+        # Pydantic v2 coerces ``bool`` → 0/1 for numeric fields; ``True`` would
+        # silently become temperature 1.0 / max_tokens 1. A config API must not
+        # accept a boolean where a number is meant (Codex #4).
+        if isinstance(v, bool):
+            raise ValueError("must be a number, not a boolean")
         return v
 
 

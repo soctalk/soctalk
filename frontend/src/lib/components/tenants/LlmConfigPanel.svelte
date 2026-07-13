@@ -236,22 +236,29 @@
 			formError = 'Base URL must start with http:// or https://';
 			return;
 		}
-		// Tenant-global sampling bounds (mirror the backend + chart schema).
+		// Tenant-global sampling bounds (mirror the backend + chart schema). Both
+		// fields are required — they always carry a value (the read seeds the
+		// current setting), so a blank is an explicit clear with no meaning; treat
+		// it as an error rather than silently no-op'ing the edit.
 		const tempStr = formData.temperature.trim();
-		if (tempStr !== '') {
-			const t = Number(tempStr);
-			if (!Number.isFinite(t) || t < 0 || t > 2) {
-				formError = 'Temperature must be a number between 0 and 2';
-				return;
-			}
+		if (tempStr === '') {
+			formError = 'Temperature is required (0–2)';
+			return;
+		}
+		const t = Number(tempStr);
+		if (!Number.isFinite(t) || t < 0 || t > 2) {
+			formError = 'Temperature must be a number between 0 and 2';
+			return;
 		}
 		const maxTokStr = formData.max_tokens.trim();
-		if (maxTokStr !== '') {
-			const m = Number(maxTokStr);
-			if (!Number.isInteger(m) || m < 1 || m > 131072) {
-				formError = 'Max tokens must be a whole number between 1 and 131072';
-				return;
-			}
+		if (maxTokStr === '') {
+			formError = 'Max tokens is required (1–8192)';
+			return;
+		}
+		const m = Number(maxTokStr);
+		if (!Number.isInteger(m) || m < 1 || m > 8192) {
+			formError = 'Max tokens must be a whole number between 1 and 8192';
+			return;
 		}
 		// Validate each enabled tier before building the payload — surface the
 		// error inline rather than round-tripping to a backend 422 toast.
@@ -459,7 +466,7 @@
 							bind:value={formData.max_tokens}
 							placeholder="4096"
 						/>
-						<span class="text-xs opacity-60">router output cap</span>
+						<span class="text-xs opacity-60">router output cap, 1–8192</span>
 					</label>
 				</div>
 				<label class="label">
