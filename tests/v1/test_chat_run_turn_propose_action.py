@@ -73,9 +73,10 @@ def wired(monkeypatch):
     monkeypatch.setattr(chat_agent, "_update_conversation_totals", _totals)
 
     # Stub the per-tenant chat-config seam (issue #10) — this test drives the
-    # loop with db=None, and per-tenant resolution is covered separately.
-    async def _tenant_cfg(db, tid, base):
-        return base
+    # loop with db=None, and per-tenant resolution is covered separately. The
+    # helper returns (config, effective_model).
+    async def _tenant_cfg(db, tid, base, requested_model):
+        return base, requested_model
     monkeypatch.setattr(chat_agent, "_tenant_chat_llm_config", _tenant_cfg)
 
     def _install(fake_llm):

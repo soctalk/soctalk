@@ -53,42 +53,70 @@ def _integration(**over):
 
 async def test_no_integration_returns_base_unchanged():
     base = _base()
-    out = await _tenant_chat_llm_config(_FakeDb(None), uuid4(), base)
-    assert out is base
+    cfg, model = await _tenant_chat_llm_config(_FakeDb(None), uuid4(), base, "req-model")
+    assert cfg is base
+    assert model == "req-model"
 
 
-async def test_openai_tenant_overlays_provider_key_model():
+async def test_openai_byok_tenant_overlays_and_swaps_model():
+    # Cross-provider BYOK: overlay provider/base/key AND swap the effective model
+    # (the stored conversation model was chosen for the old anthropic provider).
     integ = _integration(
         llm_provider="openai-compatible", llm_base_url="http://sglang.internal/v1",
         llm_model="qwen3-32b", llm_api_key_plain="sk-tenant-own",
     )
-    out = await _tenant_chat_llm_config(_FakeDb(integ), integ.tenant_id, _base())
-    assert out.provider == "openai"  # openai-compatible → openai
-    assert out.openai_base_url == "http://sglang.internal/v1"
-    assert out.openai_api_key == "sk-tenant-own"
-    # Model applied to both chat_model and fast_model (resolve_tier CHAT fallback).
-    assert out.chat_model == "qwen3-32b"
-    assert out.fast_model == "qwen3-32b"
+    cfg, model = await _tenant_chat_llm_config(
+        _FakeDb(integ), integ.tenant_id, _base(), "claude-sonnet-4-6"
+    )
+    assert cfg.provider == "openai"  # openai-compatible → openai
+    assert cfg.openai_base_url == "http://sglang.internal/v1"
+    assert cfg.openai_api_key == "sk-tenant-own"
+    assert cfg.chat_model == "qwen3-32b"
+    assert cfg.fast_model == "qwen3-32b"
+    # Cross-provider → the tenant model wins over the stale conversation model.
+    assert model == "qwen3-32b"
     # The MSSP anthropic key is NOT leaked onto the openai path.
-    assert out.anthropic_api_key == "mssp-shared-key"  # base retained, unused
+    assert cfg.anthropic_api_key == "mssp-shared-key"  # base retained, unused
 
 
-async def test_anthropic_tenant_without_own_key_keeps_shared_key():
-    # A tenant using the MSSP shared install key (no own key) still uses its own
-    # provider/model, but the primary credential falls back to the base config.
-    integ = _integration(llm_model="claude-opus-4", llm_api_key_plain=None)
-    out = await _tenant_chat_llm_config(_FakeDb(integ), integ.tenant_id, _base())
-    assert out.provider == "anthropic"
-    assert out.anthropic_api_key == "mssp-shared-key"  # base retained (shared key)
-    assert out.chat_model == "claude-opus-4"
-
-
-async def test_missing_model_falls_back_to_base():
-    integ = _integration(llm_model="", llm_api_key_plain="sk-own")
+async def test_cross_provider_without_own_key_falls_back_to_base():
+    # A default/unconfigured openai-compatible row with NO own key on an
+    # anthropic install can't authenticate — must fall back to base (Codex #3).
+    integ = _integration(
+        llm_provider="openai-compatible", llm_base_url="https://api.openai.com/v1",
+        llm_model="gpt-4o", llm_api_key_plain=None,
+    )
     base = _base()
-    out = await _tenant_chat_llm_config(_FakeDb(integ), integ.tenant_id, base)
-    # No tenant model → base chat_model ('' here) or fast_model.
-    assert out.chat_model == base.fast_model
+    cfg, model = await _tenant_chat_llm_config(
+        _FakeDb(integ), integ.tenant_id, base, "claude-sonnet-4-6"
+    )
+    assert cfg is base
+    assert model == "claude-sonnet-4-6"
+
+
+async def test_same_provider_respects_conversation_model():
+    # Same provider (anthropic install + anthropic tenant), no own key: overlay
+    # the model but keep the shared key, and the per-conversation model wins.
+    integ = _integration(llm_model="claude-opus-4", llm_api_key_plain=None)
+    cfg, model = await _tenant_chat_llm_config(
+        _FakeDb(integ), integ.tenant_id, _base(), "claude-sonnet-4-6"
+    )
+    assert cfg.provider == "anthropic"
+    assert cfg.anthropic_api_key == "mssp-shared-key"  # base retained (shared key)
+    # Same provider → the conversation's model choice is respected.
+    assert model == "claude-sonnet-4-6"
+
+
+async def test_overlay_drops_shared_chat_tier():
+    # The process-global 'chat' tier must not override the overlaid backend.
+    base = _base().model_copy(update={"tiers": {"chat": {"provider": "openai",
+                                                         "base_url": "http://shared/v1"}}})
+    integ = _integration(
+        llm_provider="openai-compatible", llm_base_url="http://tenant/v1",
+        llm_model="qwen", llm_api_key_plain="sk-own",
+    )
+    cfg, _ = await _tenant_chat_llm_config(_FakeDb(integ), integ.tenant_id, base, "m")
+    assert "chat" not in cfg.tiers
 
 
 async def test_default_chat_model_prefers_tenant_model(monkeypatch):
