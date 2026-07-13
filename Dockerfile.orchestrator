@@ -81,6 +81,11 @@ RUN REPO="${MCP_GITHUB_ORG}/mcp-server-misp" && \
 # Copy Python project files
 COPY pyproject.toml README.md ./
 COPY src/soctalk ./src/soctalk
+# soctalk_wire + soctalk_entities are declared packages in pyproject and imported
+# at runtime (soctalk.core.ir.graph → soctalk_entities); copy them before
+# ``pip install .`` or the image crashes on boot with ModuleNotFoundError.
+COPY src/soctalk_wire ./src/soctalk_wire
+COPY src/soctalk_entities ./src/soctalk_entities
 
 # Install Python dependencies
 RUN pip install --no-cache-dir .
