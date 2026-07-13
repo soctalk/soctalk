@@ -37,8 +37,12 @@ class LLMConfig(BaseModel):
     openai_api_key: str = ""
     openai_base_url: Optional[str] = None
     openai_organization: Optional[str] = None
-    temperature: float = 0.0
-    max_tokens: int = 4096
+    # Router/supervisor tier sampling. Bounds mirror the API + chart schema so a
+    # provisioning bypass or a hand-set env var can't boot the worker with a
+    # negative temperature or an absurd token cap (Codex #3) — an out-of-range
+    # value fails load_config() loudly at startup.
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=4096, ge=1, le=8192)
     # Chat-agent sampling (issue #10) — lifted out of the hardcoded literals in
     # chat/agent.py so the chat tier's params live alongside the triage params.
     chat_temperature: float = 0.2

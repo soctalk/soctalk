@@ -215,7 +215,7 @@ export interface TenantLlmUpdate {
 	fast_model?: string;
 	reasoning_model?: string;
 	// Tenant-global default sampling: omitted = unchanged. temperature 0–2,
-	// max_tokens 1–131072 (bounds enforced server-side).
+	// max_tokens 1–8192 (router output cap; bounds enforced server-side).
 	temperature?: number;
 	max_tokens?: number;
 	// Per-tier backends (the model "chain"): omitted = leave unchanged, {} =
