@@ -91,7 +91,12 @@ def predownload(engine: dict, model: str) -> None:
 
 def deploy(engine: dict, model: str, api_key: str) -> str:
     """Deploy the Modal app for `model`; return the web endpoint URL."""
-    env = {**os.environ, engine["model_env"]: model, engine["key_env"]: api_key}
+    # modal's rich output wraps to the terminal width; in a non-TTY subprocess
+    # that defaults to 80 cols, which splits a long endpoint URL across lines
+    # (e.g. long model names) and breaks WEB_URL_RE. Widen COLUMNS so the URL
+    # stays on one line.
+    env = {**os.environ, "COLUMNS": "300",
+           engine["model_env"]: model, engine["key_env"]: api_key}
     print(f"  deploying {_app_name(engine, model)} ...", flush=True)
     proc = subprocess.run(
         ["modal", "deploy", "-m", engine["module"]],
@@ -100,7 +105,9 @@ def deploy(engine: dict, model: str, api_key: str) -> str:
     out = proc.stdout + proc.stderr
     if proc.returncode != 0:
         raise RuntimeError(f"modal deploy failed for {model}:\n{out}")
-    m = WEB_URL_RE.search(out)
+    # Belt-and-suspenders: also de-wrap any residual mid-URL line break before
+    # matching, so a narrower terminal can't reintroduce the same failure.
+    m = WEB_URL_RE.search(out) or WEB_URL_RE.search(re.sub(r"\n\s+", "", out))
     if not m:
         raise RuntimeError(f"could not find web URL in modal deploy output:\n{out}")
     url = m.group(0).rstrip("/")
