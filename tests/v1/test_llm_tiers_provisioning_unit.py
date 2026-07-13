@@ -226,6 +226,48 @@ def test_hybrid_render_emits_decoding_mode():
     assert v["llm"]["tiers"]["fast"]["decodingMode"] == "json_object"
 
 
+def test_validate_llm_tiers_per_tier_sampling():
+    out = validate_llm_tiers({"fast": {**_FAST, "temperature": 0.3, "max_tokens": 2048}})
+    assert out["fast"]["temperature"] == 0.3
+    assert out["fast"]["max_tokens"] == 2048
+    # Bounds mirror the global knobs.
+    with pytest.raises(ValueError):
+        validate_llm_tiers({"fast": {**_FAST, "temperature": 2.5}})
+    with pytest.raises(ValueError):
+        validate_llm_tiers({"fast": {**_FAST, "max_tokens": 8193}})
+
+
+def test_hybrid_render_emits_per_tier_sampling():
+    integ = _integration(uuid4(), llm_tiers=validate_llm_tiers(
+        {"fast": {**_FAST, "temperature": 0.0, "max_tokens": 2048}}))
+    v = _render(integ)
+    fast = v["llm"]["tiers"]["fast"]
+    # temperature 0.0 must survive (presence, not truthiness).
+    assert fast["temperature"] == 0.0
+    assert fast["maxTokens"] == 2048
+    # A tier without sampling emits neither key.
+    plain = _render(_integration(uuid4(), llm_tiers=validate_llm_tiers({"fast": _FAST})))
+    assert "temperature" not in plain["llm"]["tiers"]["fast"]
+    assert "maxTokens" not in plain["llm"]["tiers"]["fast"]
+
+
+def test_resolve_tier_sampling_override_and_fallback():
+    from soctalk.inference import InferenceTier, resolve_tier_sampling
+
+    class Cfg:
+        tiers = {"router": {"temperature": 0.3, "max_tokens": 2048}, "reasoning": {}}
+
+    # Router tier overrides the caller default.
+    s = resolve_tier_sampling(Cfg(), InferenceTier.ROUTER, temperature=0.0, max_tokens=4096)
+    assert (s.temperature, s.max_tokens) == (0.3, 2048)
+    # Reasoning tier present but no sampling → caller defaults win.
+    r = resolve_tier_sampling(Cfg(), InferenceTier.REASONING, temperature=0.1, max_tokens=2048)
+    assert (r.temperature, r.max_tokens) == (0.1, 2048)
+    # No tiers at all → defaults.
+    n = resolve_tier_sampling(object(), InferenceTier.ROUTER, temperature=0.5, max_tokens=1024)
+    assert (n.temperature, n.max_tokens) == (0.5, 1024)
+
+
 def test_render_emits_global_sampling():
     # Tenant-global sampling flows into values.llm → SOCTALK_LLM_* worker env.
     v = _render(_integration(uuid4(), llm_temperature=0.7, llm_max_tokens=512))

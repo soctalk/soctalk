@@ -45,6 +45,8 @@ interface TierRead {
 	model: string | null;
 	engine: string | null;
 	decoding_mode: string | null;
+	temperature: number | null;
+	max_tokens: number | null;
 	has_api_key: boolean;
 }
 interface LlmRead {
@@ -84,6 +86,8 @@ const READ_HYBRID: LlmRead = {
 			model: 'qwen3-32b',
 			engine: 'sglang',
 			decoding_mode: 'json_object',
+			temperature: null,
+			max_tokens: null,
 			has_api_key: true
 		}
 	}
@@ -134,6 +138,8 @@ async function mockApi(page: Page, initialRead: LlmRead): Promise<MockHandles> {
 												model: (v.model as string) ?? null,
 												engine: (v.engine as string) ?? null,
 												decoding_mode: (v.decoding_mode as string) ?? null,
+												temperature: (v.temperature as number) ?? null,
+												max_tokens: (v.max_tokens as number) ?? null,
 												// keep semantics: a prior key persists unless '' clears it.
 												has_api_key:
 													v.api_key_plain !== undefined
@@ -241,6 +247,55 @@ test.describe('Tenant detail — LLM model chain editor', () => {
 		expect(tiers.fast.model).toBe('qwen3-14b');
 		// keep: no key typed → api_key_plain omitted so the backend carries it forward.
 		expect(tiers.fast).not.toHaveProperty('api_key_plain');
+	});
+
+	test('per-tier sampling rides the tiers block and renders in the chain view', async ({
+		page
+	}) => {
+		const handles = await mockApi(page, READ_SINGLE);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await page.getByTestId('llm-tier-fast-enabled').check();
+		await page.getByTestId('llm-tier-fast-provider').selectOption('anthropic');
+		await page.getByTestId('llm-tier-fast-base-url').fill('https://api.anthropic.com');
+		await page.getByTestId('llm-tier-fast-model').fill('claude-haiku-4-5');
+		// Per-tier sampling override.
+		await page.getByTestId('llm-tier-fast-temperature').fill('0.4');
+		await page.getByTestId('llm-tier-fast-max-tokens').fill('1024');
+
+		const patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		const body = handles.lastPatchBody() as Record<string, unknown>;
+		const tiers = body.tiers as Record<string, Record<string, unknown>>;
+		expect(tiers.fast.temperature).toBe(0.4);
+		expect(tiers.fast.max_tokens).toBe(1024);
+		// Chain read view shows the override.
+		await expect(page.getByTestId('llm-chain-fast')).toContainText('0.4');
+		await expect(page.getByTestId('llm-chain-fast')).toContainText('1024');
+	});
+
+	test('out-of-range per-tier temperature is blocked client-side (no PATCH)', async ({ page }) => {
+		const handles = await mockApi(page, READ_SINGLE);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await page.getByTestId('llm-tier-fast-enabled').check();
+		await page.getByTestId('llm-tier-fast-provider').selectOption('anthropic');
+		await page.getByTestId('llm-tier-fast-base-url').fill('https://api.anthropic.com');
+		await page.getByTestId('llm-tier-fast-model').fill('claude-haiku-4-5');
+		await page.getByTestId('llm-tier-fast-temperature').fill('3');
+
+		await page.getByTestId('llm-save').click();
+		await expect(page.getByTestId('llm-form-error')).toContainText('temperature must be between 0 and 2');
+		expect(handles.patchCount()).toBe(0);
 	});
 
 	test('cross-provider tier with no key is blocked client-side (no PATCH)', async ({ page }) => {

@@ -142,6 +142,8 @@ def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
             "model": block.get("model"),
             "engine": block.get("engine"),
             "decoding_mode": block.get("decoding_mode"),
+            "temperature": block.get("temperature"),
+            "max_tokens": block.get("max_tokens"),
             "has_api_key": bool(block.get("api_key_plain")),
         }
     return out

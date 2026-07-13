@@ -87,6 +87,8 @@ _TIER_ENV_FIELDS: dict[str, str] = {
     "API_KEY": "api_key",
     "ENGINE": "engine",
     "DECODING_MODE": "default_decoding_mode",
+    "TEMPERATURE": "temperature",
+    "MAX_TOKENS": "max_tokens",
 }
 # A tier entry is materialized only when one of these "routing-defining" fields
 # is set — a bare ``SOCTALK_FAST_MODEL`` (the historical single-provider var)
@@ -148,6 +150,35 @@ def _load_tier_configs() -> dict[str, dict]:
                     f"Invalid {prefix}_DECODING_MODE={entry['default_decoding_mode']!r}. "
                     f"Expected one of {[m.value for m in DecodingMode]}."
                 ) from e
+        # Per-tier sampling overrides arrive as env strings — coerce + bound
+        # them here (same 0–2 / 1–8192 range as the global knobs) so a bad value
+        # fails config load loudly rather than reaching the provider SDK.
+        if "temperature" in entry:
+            try:
+                temp = float(entry["temperature"])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid {prefix}_TEMPERATURE={entry['temperature']!r}. "
+                    "Expected a number."
+                ) from e
+            if not 0.0 <= temp <= 2.0:
+                raise ValueError(
+                    f"{prefix}_TEMPERATURE={temp} out of range (0.0–2.0)."
+                )
+            entry["temperature"] = temp
+        if "max_tokens" in entry:
+            try:
+                mt = int(entry["max_tokens"])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid {prefix}_MAX_TOKENS={entry['max_tokens']!r}. "
+                    "Expected an integer."
+                ) from e
+            if not 1 <= mt <= 8192:
+                raise ValueError(
+                    f"{prefix}_MAX_TOKENS={mt} out of range (1–8192)."
+                )
+            entry["max_tokens"] = mt
         tiers[tier] = entry
     return tiers
 

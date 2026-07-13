@@ -161,6 +161,12 @@ def _render_llm_tiers(
             entry["engine"] = block["engine"]
         if block.get("decoding_mode"):
             entry["decodingMode"] = block["decoding_mode"]
+        # Per-tier sampling override (omitted → tier uses its caller default).
+        # ``temperature`` may be 0.0, so test for presence, not truthiness.
+        if block.get("temperature") is not None:
+            entry["temperature"] = block["temperature"]
+        if block.get("max_tokens") is not None:
+            entry["maxTokens"] = block["max_tokens"]
         tiers[tier_name] = entry
 
         u = urlparse(block["base_url"])

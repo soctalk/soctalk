@@ -233,6 +233,26 @@ def resolve_tier(
     )
 
 
+def resolve_tier_sampling(
+    cfg: Any, tier: InferenceTier, *, temperature: float, max_tokens: int,
+) -> SamplingParams:
+    """Per-tier sampling overlay (issue #4 follow-up).
+
+    A configured tier may override the caller's default temperature / max_tokens
+    (``SOCTALK_<TIER>_TEMPERATURE`` / ``_MAX_TOKENS`` → ``cfg.tiers[tier]``). When
+    a tier omits a field the caller default wins — the router default is the
+    tenant-global sampling, the reasoning default the verdict's tuned constants —
+    so single-provider tenants (empty ``tiers``) behave exactly as before. The
+    per-tier values are already coerced + bounded at config load.
+    """
+    tiers = getattr(cfg, "tiers", None) or {}
+    tconf = tiers.get(tier.value) or tiers.get(tier) or {}
+    return SamplingParams(
+        temperature=tconf.get("temperature", temperature),
+        max_tokens=tconf.get("max_tokens", max_tokens),
+    )
+
+
 # --------------------------------------------------------- decoding-mode seam
 
 
@@ -582,6 +602,6 @@ __all__ = [
     "InferenceTier", "ProviderEngine", "DecodingMode", "ExtractionPolicy",
     "SamplingParams", "ToolSpec", "InferenceAccounting", "InferenceRequest",
     "ResolvedModel", "UsageDelta", "InferenceResult",
-    "resolve_tier", "resolve_decoding_mode", "guided_request_kwargs",
-    "ainvoke_request",
+    "resolve_tier", "resolve_tier_sampling", "resolve_decoding_mode",
+    "guided_request_kwargs", "ainvoke_request",
 ]

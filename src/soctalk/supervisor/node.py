@@ -15,8 +15,8 @@ from soctalk.inference import (
     InferenceAccounting,
     InferenceRequest,
     InferenceTier,
-    SamplingParams,
     ainvoke_request,
+    resolve_tier_sampling,
 )
 from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
@@ -314,12 +314,13 @@ async def _get_supervisor_decision(
         messages=[HumanMessage(
             content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)
         )],
-        # Tenant-global default sampling (SOCTALK_LLM_TEMPERATURE / _MAX_TOKENS).
-        # A schema-constrained router decision is tiny, so the token cap is a
-        # ceiling not a target — honouring the tenant value lets an operator tune
-        # cost/latency without changing routing behaviour on the default (4096).
-        sampling=SamplingParams(
-            temperature=config.llm.temperature, max_tokens=config.llm.max_tokens
+        # Router sampling: a per-tier override (SOCTALK_FAST_TEMPERATURE /
+        # _MAX_TOKENS) wins; otherwise the tenant-global default. A schema-
+        # constrained router decision is tiny, so the token cap is a ceiling not
+        # a target — tuning it changes cost/latency, not routing behaviour.
+        sampling=resolve_tier_sampling(
+            config.llm, InferenceTier.ROUTER,
+            temperature=config.llm.temperature, max_tokens=config.llm.max_tokens,
         ),
     )
     res = await ainvoke_request(req, cfg=config.llm)

@@ -357,7 +357,9 @@
         "baseUrl":  { "type": "string", "format": "uri" },
         "model":    { "type": "string", "minLength": 1 },
         "engine":   { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] },
-        "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] }
+        "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] },
+        "temperature": { "description": "Per-tier sampling temperature override. Rendered to SOCTALK_<TIER>_TEMPERATURE.", "type": "number", "minimum": 0, "maximum": 2 },
+        "maxTokens": { "description": "Per-tier max output tokens override. Rendered to SOCTALK_<TIER>_MAX_TOKENS.", "type": "integer", "minimum": 1, "maximum": 8192 }
       }
     },
     "resourceQuantities": {

@@ -13,8 +13,8 @@ from soctalk.inference import (
     InferenceAccounting,
     InferenceRequest,
     InferenceTier,
-    SamplingParams,
     ainvoke_request,
+    resolve_tier_sampling,
 )
 from soctalk.llm import classify_llm_error as _classify_llm_error
 from soctalk.models.enums import Phase, VerdictDecision
@@ -313,7 +313,12 @@ async def _get_verdict(
         output_schema=VerdictDraft,
         system=VERDICT_SYSTEM_PROMPT,
         messages=[HumanMessage(content=VERDICT_USER_PROMPT_TEMPLATE.format(**context))],
-        sampling=SamplingParams(temperature=0.1, max_tokens=2048),
+        # Reasoning sampling: a per-tier override (SOCTALK_REASONING_TEMPERATURE
+        # / _MAX_TOKENS) wins; otherwise the verdict's tuned defaults (slightly
+        # warmer than the router, longer output for the rationale).
+        sampling=resolve_tier_sampling(
+            config.llm, InferenceTier.REASONING, temperature=0.1, max_tokens=2048,
+        ),
     )
     res = await ainvoke_request(req, cfg=config.llm)
     draft = res.parsed
