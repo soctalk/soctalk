@@ -20,10 +20,24 @@ Per model, over the golden set:
   a valid `SupervisorDecision` / `VerdictDraft` at all (the key open-model risk;
   distinct from a wrong-but-valid answer).
 
+## Two axes
+
+- **Self-hosted (this file, `run_bench.py`)** — open weights served on Modal GPUs
+  via SGLang/vLLM. Measures whether an open model, run on your own hardware, can
+  hold the triage contract.
+- **Hosted API (`run_hosted.py`)** — the same eval pointed at managed
+  OpenAI-compatible endpoints (DeepSeek, Qwen/DashScope) with a frontier
+  baseline, no GPU to run. Exercises the #4 per-tier/OpenAI-compatible seam and
+  #5's `SOCTALK_MODEL_PRICES` overlay. Set `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`
+  and run `python bench/run_hosted.py` (add `--mixed` for a fast=DeepSeek /
+  reasoning=frontier hybrid row).
+
 ## Prerequisites
 
 - `modal` CLI authenticated: `modal token set --token-id ak-... --token-secret as-...`
   (or `modal setup`). Nothing secret is stored in this repo.
+- `SGLANG_API_KEY` set to any token — `run_bench.py` refuses to deploy an
+  unauthenticated (internet-open) GPU endpoint without it.
 - The soctalk `.venv` active (the runner shells out to `python -m soctalk.evals.triage`).
 - A Modal workspace with GPU access (the lineup uses one `A100-80GB` at a time).
 
