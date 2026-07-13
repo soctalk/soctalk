@@ -67,7 +67,7 @@ MODEL_CONFIGS: dict[str, dict[str, Any]] = {
     ),
     # --- DeepSeek R1-Distill (Qwen base) parameter ladder: low → high ---
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": dict(
-        gpu="T4", tp=1, context_length=16384,
+        gpu="L4", tp=1, context_length=16384,
         tool_call_parser="deepseekv3", reasoning_parser="deepseek-r1",
         image_tag="v0.5.8", startup_min=12,
     ),
