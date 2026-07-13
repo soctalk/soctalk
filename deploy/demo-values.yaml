@@ -12,6 +12,12 @@
 image:
   registry: ghcr.io/soctalk   # → ghcr.io/soctalk/soctalk-{api,app-ui,...}:<tag>
   tag: latest                 # demo tracks head of main
+  # MUST be Always for a moving `latest` tag: with IfNotPresent (the chart
+  # default) the node caches the first `latest` it pulls and NEVER re-pulls,
+  # so every deploy silently runs stale code — the reason the demo ran
+  # provisioning logic weeks behind main. Paired with a rollout-restart in
+  # deploy-demo.yml (helm upgrade alone won't restart pods on an unchanged spec).
+  pullPolicy: Always
 
 ingress:
   enabled: true
