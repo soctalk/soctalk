@@ -26,7 +26,8 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import Column, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel, Text
@@ -208,8 +209,13 @@ class User(SQLModel, table=True):
 # the runtime per-tier providers (#4). Tenant-facing ``provider`` uses the
 # install enum ('openai-compatible' | 'anthropic'); render canonicalizes it to
 # the runtime 'openai' | 'anthropic' and emits SOCTALK_<TIER>_* env. The tier
-# key names are ``fast`` (the high-volume router loop → runtime 'router' tier
-# via SOCTALK_FAST_*) and ``reasoning`` (the verdict → 'reasoning' tier).
+# key names map to runtime tiers via SOCTALK_<TIER>_*: ``fast`` (high-volume
+# router loop → 'router') and ``reasoning`` (verdict). NOTE: ``chat`` and
+# ``extraction`` are deliberately NOT allowed yet — the chat agent runs in the
+# API process off the install env (not the tenant worker), and the extraction
+# step reuses the reasoning tier, so a per-tenant chat/extraction tier would be
+# a silent no-op until those call sites route per-tenant (tracked for a later
+# slice; see the UI-config review).
 _ALLOWED_LLM_TIERS: frozenset[str] = frozenset({"fast", "reasoning"})
 
 
@@ -224,10 +230,37 @@ class LLMTierConfig(BaseModel):
     base_url: str
     model: str
     engine: Literal["frontier", "openai_compatible", "vllm", "sglang"] | None = None
+    # Structured-decoding mechanism (#32). Needed for endpoints whose strict
+    # json_schema/tool_choice are unavailable — e.g. DeepSeek's hosted thinking
+    # models require ``json_object``. Omit to let the resolver pick per provider.
+    decoding_mode: Literal[
+        "auto", "none", "tool_use", "json_schema_strict", "json_object",
+        "guided_json", "guided_grammar",
+    ] | None = None
     # Own credential for a different-provider tier. Omit to reuse the primary
     # ``llm_api_key_plain`` (only valid when this tier's provider matches the
     # primary provider). Same plaintext-at-rest caveat as ``llm_api_key_plain``.
     api_key_plain: str | None = None
+
+    @model_validator(mode="after")
+    def _check_combo(self) -> LLMTierConfig:
+        # Match the env resolver's rules so the UI can't persist a combo the
+        # runtime would reject (or silently mishandle) at call time.
+        if not self.base_url.startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        served = {"openai_compatible", "vllm", "sglang"}
+        if self.provider == "anthropic":
+            if self.engine in served:
+                raise ValueError(f"engine {self.engine!r} is OpenAI-compatible; "
+                                 "not valid with provider 'anthropic'")
+            if self.decoding_mode in ("json_object", "json_schema_strict",
+                                      "guided_json", "guided_grammar"):
+                raise ValueError(f"decoding_mode {self.decoding_mode!r} is not "
+                                 "available on Anthropic (use tool_use or auto)")
+        if self.engine == "frontier" and self.decoding_mode in ("guided_json", "guided_grammar"):
+            raise ValueError(f"decoding_mode {self.decoding_mode!r} needs a served "
+                             "engine (vllm/sglang), not 'frontier'")
+        return self
 
 
 def validate_llm_tiers(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]] | None:
@@ -243,8 +276,19 @@ def validate_llm_tiers(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]] 
         raise ValueError(
             f"unknown llm_tiers key(s) {sorted(unknown)}; allowed: {sorted(_ALLOWED_LLM_TIERS)}"
         )
-    return {tier: LLMTierConfig(**block).model_dump(exclude_none=True)
-            for tier, block in raw.items()}
+    out: dict[str, dict[str, Any]] = {}
+    for tier, block in raw.items():
+        try:
+            out[tier] = LLMTierConfig(**block).model_dump(exclude_none=True)
+        except PydanticValidationError as e:
+            # Build a message from field + msg only — NEVER the input value, so a
+            # bad tier block can't echo api_key_plain into an API error / UI toast.
+            problems = "; ".join(
+                f"{'.'.join(str(p) for p in err['loc']) or 'block'}: {err['msg']}"
+                for err in e.errors()
+            )
+            raise ValueError(f"tier {tier!r}: {problems}") from None
+    return out
 
 
 class IntegrationConfig(SQLModel, table=True):

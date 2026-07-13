@@ -87,6 +87,10 @@ spec:
             - name: SOCTALK_FAST_ENGINE
               value: {{ $tiers.fast.engine | quote }}
             {{- end }}
+            {{- if $tiers.fast.decodingMode }}
+            - name: SOCTALK_FAST_DECODING_MODE
+              value: {{ $tiers.fast.decodingMode | quote }}
+            {{- end }}
             {{- if hasKey $tierKeys "fast" }}
             - name: SOCTALK_FAST_API_KEY
               valueFrom:
@@ -108,6 +112,10 @@ spec:
             {{- if $tiers.reasoning.engine }}
             - name: SOCTALK_REASONING_ENGINE
               value: {{ $tiers.reasoning.engine | quote }}
+            {{- end }}
+            {{- if $tiers.reasoning.decodingMode }}
+            - name: SOCTALK_REASONING_DECODING_MODE
+              value: {{ $tiers.reasoning.decodingMode | quote }}
             {{- end }}
             {{- if hasKey $tierKeys "reasoning" }}
             - name: SOCTALK_REASONING_API_KEY

@@ -144,6 +144,44 @@ export interface ExternalSiemUpdate {
 // no key is set) so the operator can sanity-check WHICH key is in use.
 // ``provider`` echoes the stored canonical value. Mirrors the backend
 // ``LlmConfigRead`` 1:1.
+// Structured-decoding mechanism for a per-tier backend (issue #32). Omitted
+// lets the runtime resolver pick per provider. Mirrors the backend
+// ``LLMTierConfig.decoding_mode`` Literal.
+export type LlmDecodingMode =
+	| 'auto'
+	| 'none'
+	| 'tool_use'
+	| 'json_schema_strict'
+	| 'json_object'
+	| 'guided_json'
+	| 'guided_grammar';
+
+// Sanitized read view of one per-tier LLM backend (the "chain" of a hybrid
+// tenant). The plaintext key is NEVER returned — ``has_api_key`` signals its
+// presence, matching the top-level ``TenantLlmRead`` convention. Mirrors the
+// backend ``_sanitize_tiers`` output.
+export interface TenantLlmTierRead {
+	provider: string | null;
+	base_url: string | null;
+	model: string | null;
+	engine: string | null;
+	decoding_mode: LlmDecodingMode | null;
+	has_api_key: boolean;
+}
+
+// Write shape for one per-tier backend. Sent on PATCH; the plaintext key
+// follows keep/replace/clear semantics: OMIT ``api_key_plain`` to keep the
+// stored key, send a non-empty value to replace it, send '' to clear it.
+// Mirrors the backend ``LLMTierConfig`` input.
+export interface TenantLlmTierWrite {
+	provider: 'openai-compatible' | 'anthropic';
+	base_url: string;
+	model: string;
+	engine?: 'frontier' | 'openai_compatible' | 'vllm' | 'sglang';
+	decoding_mode?: LlmDecodingMode;
+	api_key_plain?: string;
+}
+
 export interface TenantLlmRead {
 	provider: string;
 	base_url: string;
@@ -154,6 +192,9 @@ export interface TenantLlmRead {
 	reasoning_model: string | null;
 	has_api_key: boolean;
 	api_key_preview: string;
+	// Per-tier backends for a hybrid tenant (the model "chain"). ``null`` for a
+	// single-provider tenant. Keys are the tier names (``fast`` / ``reasoning``).
+	tiers: Record<string, TenantLlmTierRead> | null;
 }
 
 // All-optional config patch — only the fields the operator actually
@@ -170,6 +211,10 @@ export interface TenantLlmUpdate {
 	// set the override.
 	fast_model?: string;
 	reasoning_model?: string;
+	// Per-tier backends (the model "chain"): omitted = leave unchanged, {} =
+	// clear back to single-provider, a map = replace. Per-tier key semantics
+	// are keep/replace/clear (see ``TenantLlmTierWrite``).
+	tiers?: Record<string, TenantLlmTierWrite>;
 }
 
 // Live adapter ingest status — the control plane server-side proxies the
