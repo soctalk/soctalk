@@ -12,7 +12,11 @@ from uuid import uuid4
 
 import pytest
 
-from soctalk.core.api.llm_config import _cross_provider_tiers_without_key
+from soctalk.core.api.llm_config import (
+    _cross_provider_tiers_without_key,
+    _merge_tier_keys,
+    _sanitize_tiers,
+)
 from soctalk.core.provisioning.controller import _llm_secret_data
 from soctalk.core.provisioning.render import render_tenant_values
 from soctalk.core.tenancy.models import (
@@ -73,7 +77,7 @@ def test_validate_llm_tiers_none_and_empty():
 
 def test_validate_llm_tiers_unknown_tier_rejected():
     with pytest.raises(ValueError, match="unknown llm_tiers"):
-        validate_llm_tiers({"chat": _FAST})
+        validate_llm_tiers({"verdict": _FAST})  # not a real tier (fast/reasoning/chat/extraction)
 
 
 def test_validate_llm_tiers_bad_block_rejected():
@@ -81,6 +85,90 @@ def test_validate_llm_tiers_bad_block_rejected():
         validate_llm_tiers({"fast": {"provider": "bedrock", "base_url": "x", "model": "m"}})
     with pytest.raises(ValueError):  # extra field (extra=forbid)
         validate_llm_tiers({"fast": {**_FAST, "surprise": 1}})
+
+
+# -------------------------------------------------- decoding + combo matrix
+
+
+def test_validate_llm_tiers_decoding_mode_stored():
+    out = validate_llm_tiers({"fast": {**_FAST, "decoding_mode": "json_object"}})
+    assert out["fast"]["decoding_mode"] == "json_object"
+
+
+def test_validate_llm_tiers_anthropic_rejects_served_engine():
+    with pytest.raises(ValueError, match="OpenAI-compatible"):
+        validate_llm_tiers({"reasoning": {"provider": "anthropic",
+                                          "base_url": "https://api.anthropic.com",
+                                          "model": "claude-opus-4", "engine": "vllm"}})
+
+
+def test_validate_llm_tiers_anthropic_rejects_json_object():
+    with pytest.raises(ValueError, match="not available on Anthropic"):
+        validate_llm_tiers({"reasoning": {"provider": "anthropic",
+                                          "base_url": "https://api.anthropic.com",
+                                          "model": "claude-opus-4",
+                                          "decoding_mode": "json_object"}})
+
+
+def test_validate_llm_tiers_frontier_rejects_guided():
+    with pytest.raises(ValueError, match="needs a served engine"):
+        validate_llm_tiers({"fast": {**_FAST, "engine": "frontier",
+                                     "decoding_mode": "guided_json"}})
+
+
+def test_validate_llm_tiers_bad_base_url_rejected():
+    with pytest.raises(ValueError, match="http"):
+        validate_llm_tiers({"fast": {**_FAST, "base_url": "sglang.internal:8000"}})
+
+
+def test_validate_llm_tiers_error_never_leaks_key():
+    # A bad block that also carries a secret must not echo the plaintext back.
+    with pytest.raises(ValueError) as exc:
+        validate_llm_tiers({"fast": {"provider": "anthropic",
+                                     "base_url": "https://api.anthropic.com",
+                                     "model": "m", "engine": "sglang",
+                                     "api_key_plain": "sk-super-secret"}})
+    assert "sk-super-secret" not in str(exc.value)
+
+
+# ------------------------------------------------ key keep/replace/clear merge
+
+
+def test_merge_tier_keys_keeps_absent():
+    prior = {"fast": {"provider": "openai-compatible", "api_key_plain": "sk-old"}}
+    # Incoming omits api_key_plain (sanitized round-trip) → carry it forward.
+    merged = _merge_tier_keys(prior, {"fast": {"provider": "openai-compatible",
+                                               "model": "new-model"}})
+    assert merged["fast"]["api_key_plain"] == "sk-old"
+    assert merged["fast"]["model"] == "new-model"
+
+
+def test_merge_tier_keys_replaces_when_present():
+    prior = {"fast": {"api_key_plain": "sk-old"}}
+    merged = _merge_tier_keys(prior, {"fast": {"api_key_plain": "sk-new"}})
+    assert merged["fast"]["api_key_plain"] == "sk-new"
+
+
+def test_merge_tier_keys_clears_on_empty():
+    prior = {"fast": {"api_key_plain": "sk-old"}}
+    merged = _merge_tier_keys(prior, {"fast": {"provider": "anthropic",
+                                               "api_key_plain": "  "}})
+    assert "api_key_plain" not in merged["fast"]
+
+
+def test_merge_tier_keys_no_prior():
+    merged = _merge_tier_keys(None, {"fast": {"model": "m"}})
+    assert "api_key_plain" not in merged["fast"]
+
+
+def test_sanitize_tiers_strips_plaintext():
+    sane = _sanitize_tiers({"fast": {"provider": "openai-compatible",
+                                     "base_url": "http://x:8000/v1", "model": "m",
+                                     "engine": "sglang", "decoding_mode": "json_object",
+                                     "api_key_plain": "sk-secret"}})
+    assert sane["fast"]["has_api_key"] is True
+    assert sane["fast"]["decoding_mode"] == "json_object"
+    assert "api_key_plain" not in sane["fast"]
 
 
 # -------------------------------------------------------- byte-identical guard
@@ -108,6 +196,14 @@ def test_hybrid_render_tiers_and_ports():
     assert v["llm"]["tierKeys"]["fast"] == "sk-served"
     # sglang :8000 is distinct from the primary anthropic :443 → port union.
     assert v["networkPolicies"]["extraLlmEgressPorts"] == [8000]
+
+
+def test_hybrid_render_emits_decoding_mode():
+    integ = _integration(uuid4(), llm_tiers=validate_llm_tiers(
+        {"fast": {**_FAST, "decoding_mode": "json_object"}}))
+    v = _render(integ)
+    # render maps snake_case decoding_mode → chart camelCase decodingMode.
+    assert v["llm"]["tiers"]["fast"]["decodingMode"] == "json_object"
 
 
 def test_hybrid_render_l1_controller_path_omits_plaintext():

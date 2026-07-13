@@ -159,6 +159,8 @@ def _render_llm_tiers(
         }
         if block.get("engine"):
             entry["engine"] = block["engine"]
+        if block.get("decoding_mode"):
+            entry["decodingMode"] = block["decoding_mode"]
         tiers[tier_name] = entry
 
         u = urlparse(block["base_url"])

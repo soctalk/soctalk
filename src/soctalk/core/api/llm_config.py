@@ -90,6 +90,41 @@ def _cross_provider_tiers_without_key(
     ]
 
 
+def _merge_tier_keys(
+    prior: dict[str, Any] | None, incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Reconcile per-tier keys across a sanitized round-trip.
+
+    The GET view strips ``api_key_plain`` (only ``has_api_key`` survives), so a
+    UI that reads-edits-writes the tiers map cannot echo the key back. Without
+    reconciliation, a plain replace would silently drop every tier's key on the
+    first model-only edit. Per-tier semantics on the incoming block:
+
+    - ``api_key_plain`` **absent** → KEEP the stored key (carry it forward);
+    - ``api_key_plain`` **empty / whitespace** → CLEAR (drop the own key, tier
+      falls back to the primary credential);
+    - ``api_key_plain`` **non-empty** → REPLACE verbatim.
+
+    Only keys are reconciled; every other field is taken from ``incoming`` as-is
+    (a genuine replace). ``prior`` is the stored (validated) tiers map.
+    """
+    prior = prior or {}
+    merged: dict[str, Any] = {}
+    for tier, block in incoming.items():
+        block = dict(block or {})
+        if "api_key_plain" not in block:
+            existing = (prior.get(tier) or {}).get("api_key_plain")
+            if existing:
+                block["api_key_plain"] = existing
+        elif not str(block.get("api_key_plain") or "").strip():
+            # Explicit clear — drop the sentinel so validate_llm_tiers doesn't
+            # store an empty string (which would read back as has_api_key=false
+            # anyway, but keep the column clean).
+            block.pop("api_key_plain", None)
+        merged[tier] = block
+    return merged
+
+
 def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     """Read-safe view of ``llm_tiers`` — strips per-tier plaintext keys."""
     if not raw:
@@ -102,6 +137,7 @@ def _sanitize_tiers(raw: dict[str, Any] | None) -> dict[str, Any] | None:
             "base_url": block.get("base_url"),
             "model": block.get("model"),
             "engine": block.get("engine"),
+            "decoding_mode": block.get("decoding_mode"),
             "has_api_key": bool(block.get("api_key_plain")),
         }
     return out
@@ -298,8 +334,11 @@ async def update_tenant_llm(
         # assignment (not in-place) so the JSONB column is marked dirty.
         if payload.tiers is not None:
             from soctalk.core.tenancy.models import validate_llm_tiers
+            # Carry forward per-tier keys the sanitized GET view stripped, so a
+            # model-only edit doesn't silently drop them (keep/replace/clear).
+            merged_tiers = _merge_tier_keys(prior_tiers, payload.tiers)
             try:
-                cfg.llm_tiers = validate_llm_tiers(payload.tiers)
+                cfg.llm_tiers = validate_llm_tiers(merged_tiers)
             except ValueError as e:
                 raise HTTPException(422, f"invalid llm_tiers: {e}") from e
             # A tier on a DIFFERENT provider than the tenant's primary must carry

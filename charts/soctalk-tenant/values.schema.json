@@ -350,7 +350,8 @@
         "provider": { "enum": ["openai", "anthropic"] },
         "baseUrl":  { "type": "string", "format": "uri" },
         "model":    { "type": "string", "minLength": 1 },
-        "engine":   { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] }
+        "engine":   { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] },
+        "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] }
       }
     },
     "resourceQuantities": {
