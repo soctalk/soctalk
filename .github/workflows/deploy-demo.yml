@@ -111,6 +111,30 @@ jobs:
                  --wait --atomic --timeout 15m
                rm -f /tmp/demo-values.yaml"
 
+      - name: Force rollout so the moving `latest` tag is re-pulled
+        run: |
+          set -euo pipefail
+          # helm upgrade does NOT restart pods when the release spec is
+          # unchanged, and a moving `latest` tag keeps the same spec every
+          # push — so without an explicit rollout the running pods keep the
+          # stale cached image and new code never reaches the demo. Restart
+          # the app deployments (NOT postgres) and wait for them to become
+          # Ready on the freshly pulled image. pullPolicy:Always (demo-values)
+          # guarantees the restart re-pulls rather than reusing the node cache.
+          ssh -i ~/.ssh/id_demo \
+              -o StrictHostKeyChecking=accept-new \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=40 \
+              "${{ secrets.DEMO_SSH_USER }}@${{ secrets.DEMO_HOST }}" \
+              "set -euo pipefail
+               export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+               for d in soctalk-system-api soctalk-system-app-ui; do
+                 kubectl -n soctalk-system rollout restart deploy/\$d
+               done
+               for d in soctalk-system-api soctalk-system-app-ui; do
+                 kubectl -n soctalk-system rollout status deploy/\$d --timeout=5m
+               done"
+
       - name: Completeness gate (no image-pull failures)
         run: |
           set -euo pipefail
