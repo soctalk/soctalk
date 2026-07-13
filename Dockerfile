@@ -27,6 +27,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy project files
 COPY pyproject.toml README.md ./
 COPY src/soctalk ./src/soctalk
+# pyproject declares soctalk_wire + soctalk_entities as packages too, and
+# soctalk.core.ir.graph imports soctalk_entities at startup — without these the
+# api image builds fine but crashes on boot with
+# ``ModuleNotFoundError: No module named 'soctalk_entities'`` (uvicorn can't
+# import the app). They must be present before ``pip install .``.
+COPY src/soctalk_wire ./src/soctalk_wire
+COPY src/soctalk_entities ./src/soctalk_entities
 COPY alembic ./alembic
 COPY alembic.ini ./
 # Tenant + Wazuh charts: bundled into the api image so the controller's

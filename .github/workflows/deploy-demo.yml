@@ -108,7 +108,7 @@ jobs:
                  -f /tmp/demo-values.yaml \
                  --set-string install.bootstrapAdmin.email='$ADMIN_EMAIL' \
                  --set-string install.bootstrapAdmin.password='$ADMIN_PW' \
-                 --wait --timeout 8m
+                 --wait --atomic --timeout 10m
                rm -f /tmp/demo-values.yaml"
 
       - name: Diagnose on failure (pod/events — survives atomic rollback)
