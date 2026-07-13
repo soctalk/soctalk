@@ -101,12 +101,41 @@ async def _chat_db(
 
 
 def _default_chat_model() -> str:
-    """Per-tenant override later; for Phase 1 this is the env knob."""
+    """Global fallback chat model (fleet scope or an unconfigured tenant)."""
     # Default kept current — ``claude-sonnet-4-20250514`` was an early
     # alpha identifier that Anthropic retired, and shipping it as the
     # built-in default 404'd every chat turn on fresh installs. The
     # canonical Sonnet 4 series alias is ``claude-sonnet-4-6``.
     return os.getenv("SOCTALK_CHAT_MODEL", "claude-sonnet-4-6")
+
+
+async def _default_chat_model_for_tenant(
+    db: AsyncSession, tenant_id: UUID | None
+) -> str:
+    """Default model for a NEW conversation (issue #10).
+
+    A tenant-scoped conversation opens on the TENANT's configured model so it's
+    consistent with the per-tenant provider/key the chat agent resolves at turn
+    time (``_tenant_chat_llm_config``) — otherwise a new chat would default to
+    the global Anthropic model even for a tenant running a self-hosted backend,
+    and the provider overlay would mismatch the model. Fleet scope (no tenant)
+    or an unconfigured tenant falls back to the global default.
+    """
+    if tenant_id is not None:
+        from sqlalchemy import select
+
+        from soctalk.core.tenancy.models import IntegrationConfig
+
+        model = (
+            await db.execute(
+                select(IntegrationConfig.llm_model).where(
+                    IntegrationConfig.tenant_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+        if model:
+            return model
+    return _default_chat_model()
 
 
 def _default_budget_dollars() -> float:
@@ -286,7 +315,6 @@ async def create_conversation(
         except (TypeError, ValueError) as e:
             raise HTTPException(400, "invalid investigation_id") from e
 
-    model_name = body.model or _default_chat_model()
     budget = _default_budget_dollars()
 
     async with _chat_db(request, identity) as db:
@@ -296,6 +324,10 @@ async def create_conversation(
             requested_scope=body.scope,
             investigation_id=inv_uuid,
         )
+        # An explicit model choice wins; otherwise default to the tenant's own
+        # model (tenant scope) so the conversation opens consistent with the
+        # per-tenant provider the agent resolves at turn time.
+        model_name = body.model or await _default_chat_model_for_tenant(db, tenant_id)
         row = (
             await db.execute(
                 text(

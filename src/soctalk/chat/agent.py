@@ -601,6 +601,59 @@ async def _update_conversation_totals(
     return (int(row["total_tokens"] or 0), float(row["total_dollars"] or 0.0))
 
 
+async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
+    """Overlay a tenant's ``IntegrationConfig`` onto the global chat LLMConfig.
+
+    The chat agent runs in the shared API process, so it can't read per-tenant
+    ``SOCTALK_*`` env the way each single-tenant worker does. This loads the
+    tenant's stored LLM config and overlays provider / base_url / model / key
+    onto the process-global chat config so a BYOK or custom-model tenant's chat
+    runs on THEIR backend — matching what its runs-worker uses — instead of the
+    MSSP shared install config.
+
+    Falls back to ``base`` field-by-field when the tenant leaves a value unset
+    (no own key → the shared install key), and returns ``base`` unchanged when
+    the tenant has no ``IntegrationConfig`` row. Chat sampling
+    (``chat_temperature`` / ``chat_max_tokens``) stays global — there is no
+    per-tenant column for it (a possible follow-up).
+    """
+    from sqlalchemy import select
+
+    from soctalk.core.tenancy.models import IntegrationConfig
+
+    integ = (
+        await db.execute(
+            select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
+        )
+    ).scalar_one_or_none()
+    if integ is None:
+        return base
+    provider = (
+        "openai"
+        if integ.llm_provider in ("openai", "openai-compatible")
+        else "anthropic"
+    )
+    # resolve_tier(CHAT) resolves the model as ``chat_model or fast_model``; set
+    # both to the tenant model so it wins whether or not a chat_model is set.
+    model = integ.llm_model or base.chat_model or base.fast_model
+    update: dict[str, Any] = {
+        "provider": provider,
+        "chat_model": model,
+        "fast_model": model,
+    }
+    if provider == "openai":
+        if integ.llm_base_url:
+            update["openai_base_url"] = integ.llm_base_url
+        if integ.llm_api_key_plain:
+            update["openai_api_key"] = integ.llm_api_key_plain
+    else:
+        if integ.llm_base_url:
+            update["anthropic_base_url"] = integ.llm_base_url
+        if integ.llm_api_key_plain:
+            update["anthropic_api_key"] = integ.llm_api_key_plain
+    return base.model_copy(update=update)
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -669,8 +722,15 @@ async def run_turn(
     # its sampling comes from config rather than hardcoded literals. The
     # per-conversation model (ctx.model_name) is preserved as the tier override.
     app_config = get_config()
+    # Per-tenant chat (issue #10/#4): a tenant-scoped conversation resolves the
+    # CHAT tier from the TENANT's own LLM config (provider/model/key), matching
+    # what its worker runs, not the MSSP shared install. Fleet scope
+    # (tenant_id None) stays on the process-global config.
+    llm_cfg = app_config.llm
+    if ctx.tenant_id is not None:
+        llm_cfg = await _tenant_chat_llm_config(db, ctx.tenant_id, app_config.llm)
     resolved = resolve_tier(
-        app_config.llm, InferenceTier.CHAT, model_override=ctx.model_name
+        llm_cfg, InferenceTier.CHAT, model_override=ctx.model_name
     )
     llm = create_chat_model(
         resolved.llm_config,
