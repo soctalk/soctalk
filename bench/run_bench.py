@@ -71,7 +71,7 @@ DEEPSEEK_LADDER = [
 GPU_BY_MODEL = {
     "Qwen/Qwen3-14B": "L40S",
     "Qwen/Qwen3-32B": "A100-80GB",
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": "T4",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": "L4",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "L4",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": "L40S",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": "A100-80GB",
