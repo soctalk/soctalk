@@ -531,6 +531,18 @@ async def post_message(
         ).mappings().first()
         if conv is None:
             raise HTTPException(404, "conversation not found")
+        # Ownership gate for MSSP callers (Codex): the BYPASSRLS session sees
+        # every conversation, and list_conversations already scopes MSSP users to
+        # their own creations — post_message must mirror that, else an MSSP user
+        # with another conversation's UUID could drive a turn on it and spend
+        # that row's tenant's LLM budget/key. Tenant-audience callers stay
+        # RLS-scoped (the row wouldn't be returned for another tenant). 404 (not
+        # 403) so a non-owner can't probe conversation existence.
+        if (
+            identity.role in MSSP_LEVEL_ROLES
+            and conv["created_by_user_id"] != str(identity.user_id)
+        ):
+            raise HTTPException(404, "conversation not found")
         if conv["status"] != "active":
             raise HTTPException(
                 409, f"conversation is {conv['status']}"

@@ -601,7 +601,9 @@ async def _update_conversation_totals(
     return (int(row["total_tokens"] or 0), float(row["total_dollars"] or 0.0))
 
 
-async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
+async def _tenant_chat_llm_config(
+    db: AsyncSession, tenant_id: UUID, base, requested_model: str
+):
     """Overlay a tenant's ``IntegrationConfig`` onto the global chat LLMConfig.
 
     The chat agent runs in the shared API process, so it can't read per-tenant
@@ -611,11 +613,25 @@ async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
     runs on THEIR backend — matching what its runs-worker uses — instead of the
     MSSP shared install config.
 
-    Falls back to ``base`` field-by-field when the tenant leaves a value unset
-    (no own key → the shared install key), and returns ``base`` unchanged when
-    the tenant has no ``IntegrationConfig`` row. Chat sampling
-    (``chat_temperature`` / ``chat_max_tokens``) stays global — there is no
-    per-tenant column for it (a possible follow-up).
+    Returns ``(llm_config, effective_model)``. Chat sampling
+    (``chat_temperature`` / ``chat_max_tokens``) stays global — no per-tenant
+    column for it (a possible follow-up).
+
+    Guards (Codex review):
+    * No ``IntegrationConfig`` row → ``(base, requested_model)`` (global).
+    * A tenant WITHOUT its own key relies on the shared install credential, which
+      only authenticates against the install's provider. If the tenant's provider
+      differs and it has no own key, an overlay would build a keyless client for
+      the wrong vendor — fall back to ``base`` instead (the pre-feature
+      behaviour). A default/unconfigured row on a matching provider still uses
+      the shared key safely.
+    * The process-global ``chat`` tier (``SOCTALK_CHAT_*``) is dropped from the
+      copied config so ``resolve_tier`` uses the overlaid top-level backend, not
+      the shared chat-tier backend/key.
+    * When the overlay changes provider, the conversation's stored model was
+      chosen for the old/shared provider and won't run on the tenant backend —
+      the tenant's own model becomes the effective model. Same provider → the
+      per-conversation model choice is respected.
     """
     from sqlalchemy import select
 
@@ -627,12 +643,16 @@ async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
         )
     ).scalar_one_or_none()
     if integ is None:
-        return base
+        return base, requested_model
     provider = (
         "openai"
         if integ.llm_provider in ("openai", "openai-compatible")
         else "anthropic"
     )
+    has_own_key = bool(integ.llm_api_key_plain)
+    if provider != base.provider and not has_own_key:
+        # Can't authenticate a cross-provider tier on the shared install key.
+        return base, requested_model
     # resolve_tier(CHAT) resolves the model as ``chat_model or fast_model``; set
     # both to the tenant model so it wins whether or not a chat_model is set.
     model = integ.llm_model or base.chat_model or base.fast_model
@@ -641,6 +661,11 @@ async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
         "chat_model": model,
         "fast_model": model,
     }
+    if base.tiers:
+        # Drop the shared 'chat' tier so it can't override the overlaid backend.
+        chatless = {k: v for k, v in base.tiers.items() if k != "chat"}
+        if chatless != base.tiers:
+            update["tiers"] = chatless
     if provider == "openai":
         if integ.llm_base_url:
             update["openai_base_url"] = integ.llm_base_url
@@ -651,7 +676,9 @@ async def _tenant_chat_llm_config(db: AsyncSession, tenant_id: UUID, base):
             update["anthropic_base_url"] = integ.llm_base_url
         if integ.llm_api_key_plain:
             update["anthropic_api_key"] = integ.llm_api_key_plain
-    return base.model_copy(update=update)
+    cfg = base.model_copy(update=update)
+    effective_model = model if provider != base.provider else requested_model
+    return cfg, effective_model
 
 
 # ---------------------------------------------------------------------------
@@ -725,12 +752,17 @@ async def run_turn(
     # Per-tenant chat (issue #10/#4): a tenant-scoped conversation resolves the
     # CHAT tier from the TENANT's own LLM config (provider/model/key), matching
     # what its worker runs, not the MSSP shared install. Fleet scope
-    # (tenant_id None) stays on the process-global config.
+    # (tenant_id None) stays on the process-global config. A cross-provider
+    # overlay also swaps the effective model (the stored conversation model was
+    # chosen for the old provider) — see _tenant_chat_llm_config.
     llm_cfg = app_config.llm
+    model_override = ctx.model_name
     if ctx.tenant_id is not None:
-        llm_cfg = await _tenant_chat_llm_config(db, ctx.tenant_id, app_config.llm)
+        llm_cfg, model_override = await _tenant_chat_llm_config(
+            db, ctx.tenant_id, app_config.llm, ctx.model_name
+        )
     resolved = resolve_tier(
-        llm_cfg, InferenceTier.CHAT, model_override=ctx.model_name
+        llm_cfg, InferenceTier.CHAT, model_override=model_override
     )
     llm = create_chat_model(
         resolved.llm_config,
