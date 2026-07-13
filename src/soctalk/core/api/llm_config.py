@@ -63,6 +63,10 @@ class LlmConfigRead(BaseModel):
     # into SOCTALK_LLM_TEMPERATURE / SOCTALK_LLM_MAX_TOKENS worker env.
     temperature: float
     max_tokens: int
+    # Per-tenant case-run budget caps (issue #5). ``None`` = the worker default
+    # ($5 / 15k). Rendered into SOCTALK_CASE_RUN_*_BUDGET; enforced in budget.py.
+    dollar_budget_per_run: float | None = None
+    token_budget_per_run: int | None = None
     has_api_key: bool
     # ``customer_safe`` mode for tenant-side rendering: shows the
     # last 4 chars of the configured key so the tenant can sanity-
@@ -210,6 +214,12 @@ class LlmConfigUpdate(BaseModel):
     # large-generation setting would be a separate field, not this ceiling.
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=8192)
+    # Per-tenant case-run budget caps (issue #5). Nullable columns, so these are
+    # true tri-state via ``model_fields_set``: field ABSENT = unchanged; field
+    # present as ``null`` = clear to the worker default; a number = set. Bounds:
+    # dollars must be > 0 (0 would kill every run at over_budget); tokens ≥ 1000.
+    dollar_budget_per_run: float | None = Field(default=None, gt=0, le=10000)
+    token_budget_per_run: int | None = Field(default=None, ge=1000, le=100_000_000)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     # Per-tier LLM backends for a hybrid tenant (issue #12). ``None`` = leave
     # unchanged; ``{}`` = clear back to single-provider; a map = replace.
@@ -233,7 +243,10 @@ class LlmConfigUpdate(BaseModel):
             raise ValueError("base_url must start with http(s)://")
         return v
 
-    @field_validator("temperature", "max_tokens", mode="before")
+    @field_validator(
+        "temperature", "max_tokens", "dollar_budget_per_run",
+        "token_budget_per_run", mode="before",
+    )
     @classmethod
     def _reject_bool(cls, v):
         # Pydantic v2 coerces ``bool`` → 0/1 for numeric fields; ``True`` would
@@ -282,6 +295,8 @@ async def get_tenant_llm(tenant_id: UUID, request: Request) -> LlmConfigRead:
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
+        dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -343,6 +358,8 @@ async def update_tenant_llm(
         prior_reasoning_model = cfg.llm_reasoning_model
         prior_temperature = cfg.llm_temperature
         prior_max_tokens = cfg.llm_max_tokens
+        prior_dollar_budget = cfg.llm_dollar_budget_per_run
+        prior_token_budget = cfg.llm_token_budget_per_run
         prior_tiers = cfg.llm_tiers
         if payload.provider is not None:
             cfg.llm_provider = payload.provider
@@ -363,6 +380,13 @@ async def update_tenant_llm(
             cfg.llm_temperature = payload.temperature
         if payload.max_tokens is not None:
             cfg.llm_max_tokens = payload.max_tokens
+        # Budget caps are nullable, so use model_fields_set to tell "unchanged"
+        # (field absent) from "clear to the default" (field sent as null).
+        fields_set = payload.model_fields_set
+        if "dollar_budget_per_run" in fields_set:
+            cfg.llm_dollar_budget_per_run = payload.dollar_budget_per_run
+        if "token_budget_per_run" in fields_set:
+            cfg.llm_token_budget_per_run = payload.token_budget_per_run
         # Per-tier backends (issue #12): None = unchanged; {} = clear to
         # single-provider (NULL); a map = validate + replace. Replacement
         # assignment (not in-place) so the JSONB column is marked dirty.
@@ -402,6 +426,8 @@ async def update_tenant_llm(
             or cfg.llm_reasoning_model != prior_reasoning_model
             or cfg.llm_temperature != prior_temperature
             or cfg.llm_max_tokens != prior_max_tokens
+            or cfg.llm_dollar_budget_per_run != prior_dollar_budget
+            or cfg.llm_token_budget_per_run != prior_token_budget
             or cfg.llm_tiers != prior_tiers
         )
         if chart_affecting_changed:
@@ -487,6 +513,8 @@ async def update_tenant_llm(
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
+        dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),
@@ -849,6 +877,8 @@ async def tenant_get_llm(request: Request) -> LlmConfigRead:
         reasoning_model=cfg.llm_reasoning_model,
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
+        dollar_budget_per_run=cfg.llm_dollar_budget_per_run,
+        token_budget_per_run=cfg.llm_token_budget_per_run,
         has_api_key=bool(cfg.llm_api_key_plain),
         api_key_preview=_mask_key(cfg.llm_api_key_plain),
         tiers=_sanitize_tiers(cfg.llm_tiers),

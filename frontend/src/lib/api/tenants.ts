@@ -200,6 +200,9 @@ export interface TenantLlmRead {
 	// Tenant-global default sampling for the router/supervisor tier.
 	temperature: number;
 	max_tokens: number;
+	// Per-tenant case-run budget caps — null = the worker default ($5 / 15k).
+	dollar_budget_per_run: number | null;
+	token_budget_per_run: number | null;
 	has_api_key: boolean;
 	api_key_preview: string;
 	// Per-tier backends for a hybrid tenant (the model "chain"). ``null`` for a
@@ -225,6 +228,10 @@ export interface TenantLlmUpdate {
 	// max_tokens 1–8192 (router output cap; bounds enforced server-side).
 	temperature?: number;
 	max_tokens?: number;
+	// Per-tenant case-run budget caps. Tri-state: omitted = unchanged, null =
+	// clear to the worker default, a number = set. dollars > 0, tokens ≥ 1000.
+	dollar_budget_per_run?: number | null;
+	token_budget_per_run?: number | null;
 	// Per-tier backends (the model "chain"): omitted = leave unchanged, {} =
 	// clear back to single-provider, a map = replace. Per-tier key semantics
 	// are keep/replace/clear (see ``TenantLlmTierWrite``).

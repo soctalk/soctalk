@@ -237,6 +237,14 @@ def test_validate_llm_tiers_per_tier_sampling():
         validate_llm_tiers({"fast": {**_FAST, "max_tokens": 8193}})
 
 
+def test_validate_llm_tiers_rejects_bool_sampling():
+    # Parity with the global sampling API — True must not coerce to 1.0 / 1.
+    with pytest.raises(ValueError):
+        validate_llm_tiers({"fast": {**_FAST, "temperature": True}})
+    with pytest.raises(ValueError):
+        validate_llm_tiers({"fast": {**_FAST, "max_tokens": True}})
+
+
 def test_hybrid_render_emits_per_tier_sampling():
     integ = _integration(uuid4(), llm_tiers=validate_llm_tiers(
         {"fast": {**_FAST, "temperature": 0.0, "max_tokens": 2048}}))
@@ -266,6 +274,18 @@ def test_resolve_tier_sampling_override_and_fallback():
     # No tiers at all → defaults.
     n = resolve_tier_sampling(object(), InferenceTier.ROUTER, temperature=0.5, max_tokens=1024)
     assert (n.temperature, n.max_tokens) == (0.5, 1024)
+
+
+def test_render_emits_run_budget_only_when_set():
+    # Per-tenant case-run budget caps (issue #5) — emitted only when set so a
+    # NULL column leaves the worker default in place.
+    v = _render(_integration(uuid4(), llm_dollar_budget_per_run=2.5,
+                             llm_token_budget_per_run=50000))
+    assert v["llm"]["dollarBudgetPerRun"] == 2.5
+    assert v["llm"]["tokenBudgetPerRun"] == 50000
+    plain = _render(_integration(uuid4()))
+    assert "dollarBudgetPerRun" not in plain["llm"]
+    assert "tokenBudgetPerRun" not in plain["llm"]
 
 
 def test_render_emits_global_sampling():

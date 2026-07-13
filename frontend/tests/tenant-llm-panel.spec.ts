@@ -52,6 +52,8 @@ interface LlmRead {
 	reasoning_model: string | null;
 	temperature: number;
 	max_tokens: number;
+	dollar_budget_per_run: number | null;
+	token_budget_per_run: number | null;
 	has_api_key: boolean;
 	api_key_preview: string;
 }
@@ -64,6 +66,8 @@ const LLM_READ_WITH_KEY: LlmRead = {
 	reasoning_model: null,
 	temperature: 0.0,
 	max_tokens: 4096,
+	dollar_budget_per_run: null,
+	token_budget_per_run: null,
 	has_api_key: true,
 	api_key_preview: 'sk-…7890'
 };
@@ -76,6 +80,8 @@ const LLM_READ_NO_KEY: LlmRead = {
 	reasoning_model: null,
 	temperature: 0.0,
 	max_tokens: 4096,
+	dollar_budget_per_run: null,
+	token_budget_per_run: null,
 	has_api_key: false,
 	api_key_preview: ''
 };
@@ -161,6 +167,13 @@ async function mockApi(page: Page, initialRead: LlmRead = LLM_READ_WITH_KEY): Pr
 						: {}),
 					...(body.max_tokens !== undefined
 						? { max_tokens: body.max_tokens as number }
+						: {}),
+					// Budget caps are tri-state; null clears back to the default.
+					...('dollar_budget_per_run' in body
+						? { dollar_budget_per_run: body.dollar_budget_per_run as number | null }
+						: {}),
+					...('token_budget_per_run' in body
+						? { token_budget_per_run: body.token_budget_per_run as number | null }
 						: {}),
 					// A sent key is masked server-side: presence flag + tail preview only.
 					...(body.api_key !== undefined
@@ -314,6 +327,52 @@ test.describe('Tenant detail — LLM Configuration panel', () => {
 		await page.getByTestId('llm-save').click();
 
 		await expect(page.getByTestId('llm-form-error')).toContainText('between 0 and 2');
+		expect(handles.patchCount()).toBe(0);
+	});
+
+	test('setting then clearing a run budget PATCHes the value then null', async ({ page }) => {
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+		// Read view shows the default when the cap is null.
+		await expect(page.getByTestId('llm-dollar-budget')).toContainText('default');
+
+		// Set a $ cap.
+		await page.getByTestId('llm-edit').click();
+		await expect(page.locator('input[name="dollar_budget"]')).toHaveValue('');
+		await page.fill('input[name="dollar_budget"]', '2.5');
+		let patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+		await expect.poll(() => handles.lastPatchBody()).not.toBeNull();
+		expect(handles.lastPatchBody()).toEqual({ dollar_budget_per_run: 2.5 });
+		await expect(page.getByTestId('llm-dollar-budget')).toContainText('$2.5');
+
+		// Clear it — blank over a set value sends null (revert to default).
+		await page.getByTestId('llm-edit').click();
+		await expect(page.locator('input[name="dollar_budget"]')).toHaveValue('2.5');
+		await page.fill('input[name="dollar_budget"]', '');
+		patchReq = page.waitForRequest(
+			(r) => new URL(r.url()).pathname.endsWith('/llm') && r.method() === 'PATCH'
+		);
+		await page.getByTestId('llm-save').click();
+		await patchReq;
+		expect(handles.lastPatchBody()).toEqual({ dollar_budget_per_run: null });
+		await expect(page.getByTestId('llm-dollar-budget')).toContainText('default');
+	});
+
+	test('dollar budget of 0 is rejected (would kill every run)', async ({ page }) => {
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('llm-config-panel')).toBeVisible();
+
+		await page.getByTestId('llm-edit').click();
+		await page.fill('input[name="dollar_budget"]', '0');
+		await page.getByTestId('llm-save').click();
+
+		await expect(page.getByTestId('llm-form-error')).toContainText('greater than 0');
 		expect(handles.patchCount()).toBe(0);
 	});
 
