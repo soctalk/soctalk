@@ -98,6 +98,9 @@ def test_poc_profile_wires_linuxep_wazuh_manager():
     lep = v["linuxep"]
     assert lep["wazuh"]["managerHost"] == f"wazuh-{t.slug}-wazuh-manager"
     assert lep["wazuh"]["credsSecret"]["name"] == f"wazuh-{t.slug}-wazuh-creds"
+    # Must match the key the wazuh chart's creds Secret actually uses (AUTHD_PASS),
+    # not render_linux_ep_values' default — else the linuxep pod can't start.
+    assert lep["wazuh"]["credsSecret"]["authdPasswordKey"] == "AUTHD_PASS"
     assert v["components"]["linuxep"]["enabled"] is True
     # Non-poc profiles don't enable linux-ep → no passthrough block.
     v2 = render_tenant_values(
