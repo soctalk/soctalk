@@ -245,6 +245,14 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 
 		expect(body.profile).toBe('poc');
 		expect(body.llm_api_key).toBeUndefined();
+		// Provider left on "install default" (the untouched default): the
+		// wizard OMITS llm_provider/llm_base_url/llm_model entirely so the
+		// backend's SOCTALK_LLM_*_DEFAULT install fallback applies. Sending
+		// them (the old openai-compatible/gpt-4o/api.openai.com defaults) would
+		// pin every tenant to OpenAI regardless of the install default.
+		expect(body).not.toHaveProperty('llm_provider');
+		expect(body).not.toHaveProperty('llm_base_url');
+		expect(body).not.toHaveProperty('llm_model');
 		// Blank Fast/Thinking model overrides are likewise OMITTED.
 		expect(body).not.toHaveProperty('llm_fast_model');
 		expect(body).not.toHaveProperty('llm_reasoning_model');
@@ -273,8 +281,11 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		// Profile → Branding → Review.
 		await page.getByRole('button', { name: 'Next' }).click();
 		await page.getByRole('button', { name: 'Next' }).click();
+		// Provider left on "install default" (the untouched wizard default), so
+		// the primary shows 'install default' rather than a concrete
+		// provider·model — the per-role overrides still append.
 		await expect(page.getByTestId('review-llm')).toHaveText(
-			'openai-compatible · gpt-4o · fast: gpt-4o-mini · thinking: o3'
+			'install default · fast: gpt-4o-mini · thinking: o3'
 		);
 
 		const onboardReq = page.waitForRequest(
@@ -294,12 +305,12 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		await gotoWizard(page);
 		await fillIdentityAndContinue(page);
 
-		// Straight through with the overrides untouched.
+		// Straight through with everything untouched — provider defaults to
+		// "install default" (inherit), so the LLM row is exactly that literal
+		// with no provider·model and no override fragments.
 		await page.getByRole('button', { name: 'Next' }).click();
 		await page.getByRole('button', { name: 'Next' }).click();
-		await expect(page.getByTestId('review-llm')).toHaveText(
-			'openai-compatible · gpt-4o'
-		);
+		await expect(page.getByTestId('review-llm')).toHaveText('install default');
 	});
 
 	test('switching provided → poc clears external_siem and drops back to 4 steps', async ({

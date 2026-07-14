@@ -52,7 +52,11 @@
 		// MSSP shared install key); REQUIRED for 'provided' where the key
 		// gates the External SIEM step. Both inputs (Profile disclosure and
 		// the External SIEM sub-section) bind to these same fields.
-		llm_provider: 'openai-compatible' | 'anthropic';
+		// '' means "inherit the install default" — the wizard leaves the LLM
+		// fields out of the payload so the backend applies the MSSP's own
+		// install default (provider/model/base_url + shared key). Picking a
+		// concrete provider overrides it per-tenant.
+		llm_provider: '' | 'openai-compatible' | 'anthropic';
 		llm_api_key: string;
 		// Present only while profile === 'provided'; cleared otherwise.
 		external_siem?: SiemForm;
@@ -93,7 +97,7 @@
 		llm_model: 'gpt-4o',
 		llm_fast_model: '',
 		llm_reasoning_model: '',
-		llm_provider: 'openai-compatible',
+		llm_provider: '',
 		llm_api_key: '',
 		external_siem: undefined
 	};
@@ -180,14 +184,22 @@
 			branding_logo_url: form.branding_logo_url,
 			branding_primary_color: form.branding_primary_color,
 			branding_secondary_color: form.branding_secondary_color,
-			contact_email: form.contact_email,
-			llm_base_url: form.llm_base_url,
-			llm_model: form.llm_model
+			contact_email: form.contact_email
 		};
-		// LLM credentials follow the api_token pattern: only included when
+		// LLM: '' provider means "inherit the install default" — leave
+		// provider/base_url/model out of the payload entirely so the backend's
+		// SOCTALK_LLM_*_DEFAULT fallback applies (else an explicit
+		// openai-compatible/gpt-4o/api.openai.com would defeat it and every
+		// tenant would come up on OpenAI regardless of the install default).
+		// Picking a concrete provider ships the full endpoint override.
+		if (form.llm_provider.trim()) {
+			payload.llm_provider = form.llm_provider;
+			payload.llm_base_url = form.llm_base_url;
+			payload.llm_model = form.llm_model;
+		}
+		// Per-tenant key follows the api_token pattern: only included when
 		// non-blank so the backend falls back to the MSSP shared install key
-		// for poc/persistent tenants that leave them empty.
-		if (form.llm_provider.trim()) payload.llm_provider = form.llm_provider;
+		// for poc/persistent tenants that leave it empty.
 		if (form.llm_api_key.trim()) payload.llm_api_key = form.llm_api_key;
 		// Per-role model overrides: same omission pattern — blank means
 		// "use the primary model" and the key is left out entirely.
@@ -337,9 +349,15 @@
 					<label class="label">
 						<span class="text-sm">Provider</span>
 						<select name="llm_provider" class="select" bind:value={form.llm_provider}>
+							<option value="">Use install default</option>
 							<option value="openai-compatible">openai-compatible</option>
 							<option value="anthropic">anthropic</option>
 						</select>
+						<small class="opacity-60"
+							>leave on "install default" to inherit the MSSP's provider, model and
+							shared key — the Base URL / Model above only apply once you pick a
+							provider</small
+						>
 					</label>
 					<label class="label">
 						<span class="text-sm">API key</span>
@@ -463,6 +481,7 @@
 				<label class="label">
 					<span class="text-sm">Provider</span>
 					<select name="llm_provider" class="select" bind:value={form.llm_provider}>
+						<option value="">Use install default (inferred from key)</option>
 						<option value="openai-compatible">openai-compatible</option>
 						<option value="anthropic">anthropic</option>
 					</select>
@@ -524,7 +543,7 @@
 				</dd></div>
 				<!-- Per-role override fragments only render when non-blank — a
 				     blank override never shows up as an empty literal. -->
-				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider} · {form.llm_model}{form.llm_fast_model.trim() ? ` · fast: ${form.llm_fast_model.trim()}` : ''}{form.llm_reasoning_model.trim() ? ` · thinking: ${form.llm_reasoning_model.trim()}` : ''}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider.trim() ? `${form.llm_provider} · ${form.llm_model}` : 'install default'}{form.llm_fast_model.trim() ? ` · fast: ${form.llm_fast_model.trim()}` : ''}{form.llm_reasoning_model.trim() ? ` · thinking: ${form.llm_reasoning_model.trim()}` : ''}</dd></div>
 				<!-- Key is NEVER rendered in full — set/not-set plus a last-4 mask only. -->
 				<div class="flex justify-between"><dt class="opacity-60">LLM API key</dt><dd data-testid="review-llm-key">{form.llm_api_key.trim() ? `set (…${form.llm_api_key.trim().slice(-4)})` : 'not set'}</dd></div>
 			</dl>
