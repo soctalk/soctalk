@@ -11,6 +11,7 @@ See `soctalk.config.LLMConfig`.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -115,18 +116,34 @@ async def ainvoke_structured(
         return result["parsed"]
 
     parsing_error = result.get("parsing_error")
+    feedback = (
+        f"Your previous response failed validation against the "
+        f"{getattr(schema, '__name__', 'output')} schema: {parsing_error}. "
+        "Respond again, following the schema exactly."
+    )
     retry_messages = list(messages)
     if raw is not None:
         retry_messages.append(raw)
-    retry_messages.append(
-        HumanMessage(
-            content=(
-                f"Your previous response failed validation against the "
-                f"{getattr(schema, '__name__', 'output')} schema: {parsing_error}. "
-                "Respond again, following the schema exactly."
-            )
+        # invalid_tool_calls covers truncated/malformed calls (e.g. max_tokens cut a
+        # tool call mid-JSON) — those still put a tool_use block in the turn and
+        # still demand a tool_result.
+        tool_calls = (getattr(raw, "tool_calls", None) or []) + (
+            getattr(raw, "invalid_tool_calls", None) or []
         )
-    )
+        if tool_calls:
+            # Structured output rides on tool calling: an assistant turn carrying
+            # tool_use blocks MUST be followed by matching tool_result blocks
+            # (newer Claude models reject the request otherwise). Deliver the
+            # validation feedback as the tool results.
+            from langchain_core.messages import ToolMessage
+
+            retry_messages.extend(
+                ToolMessage(content=feedback, tool_call_id=tc["id"]) for tc in tool_calls
+            )
+        else:
+            retry_messages.append(HumanMessage(content=feedback))
+    else:
+        retry_messages.append(HumanMessage(content=feedback))
     result = await structured.ainvoke(retry_messages)
     raw = result.get("raw")
     if raw is not None and on_response is not None:
@@ -135,6 +152,19 @@ async def ainvoke_structured(
         return result["parsed"]
 
     raise SchemaValidationError(str(result.get("parsing_error")))
+
+
+# Newer Claude models (Opus 4.7/4.8, Sonnet 5, Fable/Mythos 5) removed the `temperature`
+# sampling parameter — requests carrying it are rejected with a 400 ("`temperature` is
+# deprecated for this model"). The correct client behavior is to omit it entirely for
+# those models; older models (Sonnet 4.x, Opus 4.6 and earlier, Haiku) still accept it.
+_NO_TEMPERATURE_MODELS = re.compile(r"opus-4-[789]|sonnet-5|fable|mythos")
+
+
+def _sampling_kwargs(model: str, temperature: float) -> dict[str, Any]:
+    if _NO_TEMPERATURE_MODELS.search(model):
+        return {}
+    return {"temperature": temperature}
 
 
 def create_chat_model(
@@ -176,7 +206,7 @@ def create_chat_model(
         anthropic_kwargs: dict[str, Any] = {
             "model": model,
             "api_key": llm_config.anthropic_api_key,
-            "temperature": temperature,
+            **_sampling_kwargs(model, temperature),
             "max_tokens": max_tokens,
             # Bounded transport behavior: the SDK default timeout is 600s
             # and it already retries 408/429/5xx with backoff — we bound
@@ -197,7 +227,7 @@ def create_chat_model(
             return ChatAnthropic(
                 model=model,
                 api_key=llm_config.anthropic_api_key,
-                temperature=temperature,
+                **_sampling_kwargs(model, temperature),
                 max_tokens=max_tokens,
                 **kwargs,
             )
