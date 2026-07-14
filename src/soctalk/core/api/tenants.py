@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from soctalk.core.llm_provider import (
     infer_provider_from_key,
     normalize_provider,
+    reconcile_provider_base_url,
     reconcile_provider_model,
 )
 from soctalk.core.provisioning import TenantController
@@ -362,6 +363,7 @@ async def onboard_tenant(
     # runs-worker. The raw key is NEVER logged or echoed in any response.
     llm_provider = payload.llm_provider  # already normalized by the validator
     llm_model: str = payload.llm_model
+    llm_base_url: str = payload.llm_base_url
     # Optional per-tenant overrides (blank already normalized to None by the
     # schema validator). Omitted overrides stay None — never defaulted to a
     # concrete model — so the columns stay NULL and render falls back to
@@ -389,8 +391,28 @@ async def onboard_tenant(
                 env_model = os.getenv("SOCTALK_LLM_MODEL_DEFAULT", "").strip()
                 if env_model:
                     llm_model = env_model
+            # Same sentinel-swap for the endpoint: the wizard prefills the
+            # OpenAI base_url even when the operator never opened "LLM
+            # (advanced)", so a provider that fell through to the install
+            # default (e.g. anthropic) would otherwise persist
+            # ``https://api.openai.com/v1`` on the row. Harmless at runtime
+            # (the anthropic client uses ANTHROPIC_BASE_URL, not this field)
+            # but confusing in the tenant detail UI — replace it with the
+            # install's own base_url default so the stored row is coherent.
+            if llm_base_url == "https://api.openai.com/v1":
+                env_base_url = os.getenv("SOCTALK_LLM_BASE_URL_DEFAULT", "").strip()
+                if env_base_url:
+                    llm_base_url = env_base_url
     if llm_provider is not None:
         llm_model = reconcile_provider_model(llm_provider, llm_model) or llm_model
+        # Keep the endpoint consistent with the resolved provider. The env
+        # fallthrough above already prefers SOCTALK_LLM_BASE_URL_DEFAULT for
+        # the no-key inherit path; this ALSO covers the key-inferred path
+        # (an ``sk-ant-`` key → provider=anthropic while base_url is still the
+        # OpenAI sentinel), where a mismatched base_url would open the
+        # runs-worker egress NetworkPolicy for api.openai.com and drop the
+        # Anthropic call. No-op once base_url no longer equals the sentinel.
+        llm_base_url = reconcile_provider_base_url(llm_provider, llm_base_url)
         # Same only-flip-when-clearly-mismatched rule for the overrides: an
         # sk-ant- onboard carrying llm_fast_model=gpt-4o-mini must not render
         # an OpenAI model on the runs-worker, while a matching 'claude-*'
@@ -434,7 +456,7 @@ async def onboard_tenant(
         session.add_all([
             IntegrationConfig(
                 tenant_id=tenant.id,
-                llm_base_url=payload.llm_base_url,
+                llm_base_url=llm_base_url,
                 **llm_kwargs,
                 wazuh_indexer_url=siem.indexer_url if siem else None,
                 wazuh_indexer_username=siem.indexer_username if siem else None,

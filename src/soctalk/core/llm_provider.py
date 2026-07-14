@@ -17,6 +17,14 @@ from __future__ import annotations
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
 OPENAI_DEFAULT_MODEL = "gpt-4o"
 
+# The wizard prefills this OpenAI endpoint as ``llm_base_url`` even when the
+# operator never opened "LLM (advanced)"; it is the ``TenantOnboard`` /
+# ``IntegrationConfig`` column default too. Treated as the "unset" sentinel so
+# a base_url that is still exactly this can be reconciled to the resolved
+# provider (below), while any operator-customized endpoint is left untouched.
+OPENAI_SENTINEL_BASE_URL = "https://api.openai.com/v1"
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+
 # The canonical fallback provider. The tenant chart's values.schema.json
 # only admits ``openai-compatible`` or ``anthropic`` for ``llm.provider``
 # (the runs-worker template maps ``openai-compatible`` → the SDK's
@@ -85,3 +93,22 @@ def reconcile_provider_model(provider: str, model: str | None) -> str | None:
     if provider in ("openai", DEFAULT_PROVIDER) and is_anthropic_model(model):
         return OPENAI_DEFAULT_MODEL
     return model
+
+
+def reconcile_provider_base_url(provider: str, base_url: str) -> str:
+    """Keep the primary ``llm_base_url`` consistent with the resolved provider.
+
+    The onboard wizard prefills the OpenAI base_url. When the provider then
+    resolves to ``anthropic`` — either via the install default (no key) or
+    inferred from an ``sk-ant-`` key — but the base_url is still the OpenAI
+    sentinel, the render derives the runs-worker egress NetworkPolicy
+    (``allowedLlmHosts`` / ``llmEgressPort``) from that base_url. The policy
+    would then open ``api.openai.com`` while the Anthropic client actually
+    calls ``api.anthropic.com``, and the call is silently dropped. Swap the
+    sentinel to the canonical Anthropic endpoint so the egress host matches
+    the provider. Any operator-customized base_url (a proxy, a self-hosted
+    gateway) is preserved verbatim — only the exact unset sentinel is flipped.
+    """
+    if provider == "anthropic" and base_url == OPENAI_SENTINEL_BASE_URL:
+        return ANTHROPIC_DEFAULT_BASE_URL
+    return base_url
