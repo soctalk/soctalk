@@ -42,12 +42,17 @@ install:
 
 # Hybrid model chain for the demo: every new tenant's FAST/router tier runs on a
 # self-hosted Qwen3-32B (SGLang on Modal, scale-to-zero A100), while the
-# reasoning verdict stays on the primary provider (defaults.llm above). The
-# bearer key is NOT here — it lives in the Secret named below, created out of
-# band (kubectl create secret ... soctalk-qwen-fast-tier). See
+# reasoning verdict + chat run on the primary provider below. The install LLM
+# key is an Anthropic key (sk-ant-…), so the primary must be anthropic —
+# claude-sonnet-4-6 — otherwise gpt-4o calls 401 against the wrong-vendor key.
+# The Qwen bearer key is NOT here — it lives in the Secret named below, created
+# out of band (kubectl create secret ... soctalk-qwen-fast-tier). See
 # tenants.py::_install_default_llm_tiers.
 defaults:
   llm:
+    provider: anthropic
+    baseUrl: https://api.anthropic.com
+    model: claude-sonnet-4-6
     fastTier:
       provider: openai-compatible
       baseUrl: https://gbrigand--soctalk-sglang-qwen3-32b-serve.modal.run/v1
