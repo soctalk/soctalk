@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from soctalk.models.enums import Severity, InvestigationStatus
 from soctalk.models.alerts import Alert
+from soctalk.models.authorization import AuthorizationContext
 from soctalk.models.observables import Observable, EnrichmentResult
 
 
@@ -99,6 +100,10 @@ class InvestigationRunState(BaseModel):
     thehive_case_id: Optional[str] = Field(None, description="TheHive case ID if escalated")
     misp_context: Optional[dict[str, Any]] = Field(
         default=None, description="MISP threat intelligence context"
+    )
+    authorization_context: Optional[AuthorizationContext] = Field(
+        default=None,
+        description="Typed authorization/expectedness facts around the alerted activity",
     )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
@@ -284,6 +289,13 @@ class InvestigationRunState(BaseModel):
                     wls = ", ".join(hit.get("warninglists", []))
                     description_parts.append(f"- {hit.get('value', 'unknown')}: {wls}")
                 description_parts.append("")
+
+        if self.authorization_context is not None:
+            # Local import: keep the models package a leaf (authorization.render imports models).
+            from soctalk.authorization.render import to_authorization_case_lines
+
+            description_parts.extend(to_authorization_case_lines(self.authorization_context))
+            description_parts.append("")
 
         # Map severity
         severity_map = {

@@ -17,6 +17,7 @@ from soctalk.inference import (
     resolve_tier_sampling,
 )
 from soctalk.llm import classify_llm_error as _classify_llm_error
+from soctalk.authorization.render import verdict_authorization_detail
 from soctalk.models.enums import Phase, VerdictDecision
 from soctalk.models.verdict import Verdict, VerdictDraft
 
@@ -41,6 +42,22 @@ Your role is to critically evaluate all evidence and make a final recommendation
 - Is the confidence level justified by the evidence?
 - Are there red flags being overlooked?
 - Could benign activities explain these indicators?
+
+## Authorization Reasoning (when an Authorization Context section is present)
+
+Decide whether the activity was AUTHORIZED, not just whether it looks unusual. Close requires
+ALL FOUR to hold: (1) sanctioned-or-routine — an approving record of the right kind (change
+ticket, standing baseline, or established routine history) names this activity; (2) in-scope —
+a SINGLE record fully covers it: right subject, target, action, time window, calendar validity,
+CAB approval if required, not blocked by an active freeze. Never combine two partial records.
+Expired, pending, future-effective, unapproved-CAB, out-of-window, wrong-host/account/path
+records do NOT cover, no matter how official they look; (3) actor/target genuine — not
+compromised or contained, no service account used interactively, no off-call privileged human;
+(4) policy-allowed — no high-priority policy forbids it without a waiver or a covering
+break-glass emergency change. Absence of authorization evidence is NEVER implicit approval —
+when the case hinges on authorization and evidence is genuinely missing, prefer
+needs_more_info over close. Authorization evidence lowers suspicion; it NEVER overrides
+malicious indicators, IOC matches, or active-incident correlation.
 
 ## Decision Options
 
@@ -81,7 +98,7 @@ VERDICT_USER_PROMPT_TEMPLATE = """## Alerts ({alert_count})
 
 {findings_detail}
 
-## Supervisor's Assessment
+{authorization_detail}## Supervisor's Assessment
 
 **Last Action:** {supervisor_action}
 **TP Confidence:** {supervisor_confidence:.0%}
@@ -286,6 +303,7 @@ def _build_verdict_context(state: dict[str, Any]) -> dict[str, Any]:
         "enrichments_detail": "\n".join(enrichments_lines) if enrichments_lines else "No enrichments",
         "finding_count": len(findings),
         "findings_detail": "\n".join(findings_lines) if findings_lines else "No findings",
+        "authorization_detail": verdict_authorization_detail(investigation),
         "supervisor_action": supervisor_decision.get("next_action", "unknown"),
         "supervisor_confidence": supervisor_decision.get("tp_confidence", 0.5),
         "supervisor_reasoning": supervisor_decision.get("confidence_reasoning", "No reasoning"),

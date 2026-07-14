@@ -331,19 +331,27 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         })
         pending = []
 
+    investigation: dict[str, Any] = {
+        "id": claim["run_id"],
+        "alerts": supervisor_alerts,
+        "enrichments": enrichments,
+        "findings": findings,
+        "observables": observables,
+        "enriched_observables": [
+            e["observable"] for e in enrichments
+        ],
+        "misp_context": misp_context,
+    }
+    # Authorization context (epic M1, fixture-fed): a typed AuthorizationContext may ride in
+    # on the claim payload, or be seeded from a fixture file for demos/evals. Invalid payloads
+    # are dropped (bad evidence is no evidence) — never rendered half-parsed into a prompt.
+    authorization_context = _load_authorization_context(claim)
+    if authorization_context is not None:
+        investigation["authorization_context"] = authorization_context
+
     return {
         "investigation_id": claim["run_id"],
-        "investigation": {
-            "id": claim["run_id"],
-            "alerts": supervisor_alerts,
-            "enrichments": enrichments,
-            "findings": findings,
-            "observables": observables,
-            "enriched_observables": [
-                e["observable"] for e in enrichments
-            ],
-            "misp_context": misp_context,
-        },
+        "investigation": investigation,
         "alert": alert,
         "iteration_count": 0,
         "events": [alert],
@@ -369,6 +377,49 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
         #   3. Unset → ``token_budget.ensure`` falls back to $5.
         **_dollars_budget_kv(claim.get("dollars_budget")),
     }
+
+
+_AUTHZ_FIXTURE_CACHE: dict[str, dict[str, Any] | None] = {}
+
+
+def _load_authorization_context(claim: dict[str, Any]) -> dict[str, Any] | None:
+    """The fixture-fed M1 authorization seam: claim payload first, then the optional
+    SOCTALK_AUTHZ_FIXTURE file (a JSON/YAML AuthorizationContext applied to every run —
+    the authorization analogue of the demo-mode TI seeding above). Returns a validated
+    plain dict (the graph state is dict-shaped), or None."""
+    from pydantic import ValidationError
+
+    from soctalk.models.authorization import AuthorizationContext
+
+    raw = claim.get("authorization_context")
+    if raw is None:
+        fixture_path = os.environ.get("SOCTALK_AUTHZ_FIXTURE", "")
+        if not fixture_path:
+            return None
+        if fixture_path not in _AUTHZ_FIXTURE_CACHE:
+            try:
+                text = Path(fixture_path).read_text()
+                if fixture_path.endswith((".yaml", ".yml")):
+                    import yaml
+
+                    _AUTHZ_FIXTURE_CACHE[fixture_path] = yaml.safe_load(text)
+                else:
+                    _AUTHZ_FIXTURE_CACHE[fixture_path] = json.loads(text)
+            except (OSError, ValueError) as exc:
+                logging.getLogger(__name__).warning(
+                    "authorization fixture unreadable: %s (%s)", fixture_path, exc
+                )
+                _AUTHZ_FIXTURE_CACHE[fixture_path] = None
+        raw = _AUTHZ_FIXTURE_CACHE[fixture_path]
+    if raw is None:
+        return None
+    try:
+        return AuthorizationContext.model_validate(raw).model_dump(mode="json")
+    except ValidationError as exc:
+        logging.getLogger(__name__).warning(
+            "authorization_context invalid (%d errors) — dropping it", exc.error_count()
+        )
+        return None
 
 
 def _tokens_budget_kv(claim_tokens_budget: Any) -> dict[str, int]:

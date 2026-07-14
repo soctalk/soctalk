@@ -1,0 +1,2360 @@
+{
+  "config": {
+    "memory_scope": "ticket_terms",
+    "passes": 2,
+    "data_dirs": [
+      "/Users/gianlucabrigandi/Development/wa/soctalk-goldens/data_m0"
+    ]
+  },
+  "totals": {
+    "cases": 935,
+    "gold_close": 752,
+    "gold_escalate": 183,
+    "paraphrases_skipped": true
+  },
+  "stackless": {
+    "siem_only_close_rate": 0.05319148936170213,
+    "siem_only_closes": 40
+  },
+  "passes": [
+    {
+      "pass": 1,
+      "auto_close_rate": 0.8736702127659575,
+      "auto_close_gain": 0.8204787234042553,
+      "auto_close_rate_safety_adjusted": 0.922752808988764,
+      "false_negative_rate": 0.8633879781420765,
+      "false_negatives": 158,
+      "question_volume": 55,
+      "repeat_questions": 0,
+      "safety_override_escalations": 40,
+      "outcome_counts": {
+        "ask_yes": 55,
+        "close_memory": 815,
+        "escalate_no_ask": 65
+      },
+      "per_track": {
+        "account": {
+          "gold_close": 560,
+          "auto_close_rate": 0.8571428571428571,
+          "questions": 40
+        },
+        "fim": {
+          "gold_close": 192,
+          "auto_close_rate": 0.921875,
+          "questions": 15
+        }
+      }
+    },
+    {
+      "pass": 2,
+      "auto_close_rate": 0.9468085106382979,
+      "auto_close_gain": 0.8936170212765957,
+      "auto_close_rate_safety_adjusted": 1.0,
+      "false_negative_rate": 0.8633879781420765,
+      "false_negatives": 158,
+      "question_volume": 0,
+      "repeat_questions": 0,
+      "safety_override_escalations": 40,
+      "outcome_counts": {
+        "close_memory": 870,
+        "escalate_no_ask": 65
+      },
+      "per_track": {
+        "account": {
+          "gold_close": 560,
+          "auto_close_rate": 0.9285714285714286,
+          "questions": 0
+        },
+        "fim": {
+          "gold_close": 192,
+          "auto_close_rate": 1.0,
+          "questions": 0
+        }
+      }
+    }
+  ],
+  "memory": {
+    "facts_stored": 55,
+    "facts_reused": 55,
+    "pct_facts_reused": 1.0,
+    "reuse_rate": 30.636363636363637,
+    "questions_per_gold_close": 0.07313829787234043,
+    "cardinality_after_each_group": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55
+    ]
+  },
+  "closes_by_trust_tier": {
+    "analyst_asserted": 1605,
+    "telemetry_routine": 80
+  },
+  "false_negative_cases": [
+    {
+      "pass": 1,
+      "id": "03f9eb30de95",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "14d3706e63a6",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1ff88f7b352f",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0822b64826d4",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "4f8b5120b8e1",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "03a162e031b7",
+      "track": "fim",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0ffb0b54070f",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08b5a47128bf",
+      "track": "account",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "3391f2eed378",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "11b95c570b11",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0cc369884f9b",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "15b0f54440e7",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "017f0048ea9d",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0df3825e5d4e",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08aea95e58bd",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1d19429384af",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1d9fdb56512b",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0cd1434807ca",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0ea765845093",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "06ede3f39f05",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "14ccc51cdb68",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "18facd7d6d7b",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "12c4128b4540",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "04071ddceaf2",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "17c9261b9b73",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "2935d12175f3",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "02c6306d5ccf",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "3bb5ab8debbc",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "07d71fbd8fbd",
+      "track": "fim",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "15946e3f6ed5",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0d8ec2f59c4f",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08dcdd65f552",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "150f514925bb",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "15cb73971094",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "14a18d625dc9",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "14573bf00e50",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "059c0294407b",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "138e154a5847",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "16c170367e3b",
+      "track": "fim",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "034549115d5b",
+      "track": "fim",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "356df3b1a980",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0dd164307882",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "01e323e158ea",
+      "track": "account",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0da073d6e81b",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "03e29bc24669",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "187b8ef401d4",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0e7d93ca9a49",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0d9a047842aa",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "09962a0e4cbc",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0342c6232586",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1a84da1e68e7",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1a282919c2de",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0e90cca0bfa1",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "17fef0b30888",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08b66c22bd6d",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0bbebbe90cd6",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1346bea6ef9c",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "129704e0e6f3",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0879d33e960c",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "014c866714e7",
+      "track": "account",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1a8c0ae575f8",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "06155b3f87e1",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "43bc4b0a11b1",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "186ed9b09d03",
+      "track": "fim",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "034ba2695870",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0bf9231f467b",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "05741b15c5ae",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0c59d63674b5",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "095dabe23b44",
+      "track": "fim",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "01fc84670190",
+      "track": "account",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "16d3305ec16f",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "209238089007",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0476e978e9b8",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0134ebf49103",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "355f960001ee",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "09f5cb90b8c5",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0e7feba7bcee",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "452373cfac6f",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1c68bb88eb01",
+      "track": "fim",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1b5bf1c20c1d",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a86be81a931",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "03a31f320cef",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08515a3eb279",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "46d37cfc38ad",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "6b130b6b5af6",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "02b7ffe11371",
+      "track": "fim",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "087922101658",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "52b398bb8cb1",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0ea40078bd9b",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a51e8ad0172",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1a39986fd470",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1236469fe193",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0c871d53a29e",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "103b415bb120",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "26f2e5e12803",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "50fe182480a9",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "115011b613f0",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "10ca0a4d7383",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a872e5e4dc4",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a22c3abcefe",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0fe76a47bcf5",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a10ef7c3d75",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a26dedc773a",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1a2d50e0c9cf",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "00daeba98965",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "08c94b10840d",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0fec0c687eca",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1d2e99f2ff97",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "04305a719efe",
+      "track": "fim",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "06ad9ca1a9a9",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1fe1d9b00baf",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "037c21ed75ba",
+      "track": "fim",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "28131c7f0622",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "081c8bcb831e",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "19603dab13e0",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "04be515de394",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "123b9c45c9cb",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "039f7ab51292",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "02add4c697bb",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0e07dcdf0d03",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0048df35b0b5",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0b22dfb81835",
+      "track": "fim",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0954d80ae865",
+      "track": "fim",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "4e65c8fe1384",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "13fb2fde4768",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "04ad2b953945",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0de025aefe3a",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "21dc3aaa4e58",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0529b45071e6",
+      "track": "fim",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1621199424dc",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "00eb7391b85d",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0cd60e8336b4",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "23f6a2d8ab49",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a9b55dd1fc4",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "27aeb17228c4",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1ac559f0d8a1",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "12d12397794a",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0059933c0289",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "008182bda3d5",
+      "track": "fim",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "587452f3daac",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1aa22b595feb",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "3e818434af0f",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0a4ab78d38bb",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0040572ed279",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1f1b2e05db5f",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0fa6f16ab92a",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "02b0a257222a",
+      "track": "fim",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "14c55c79e7da",
+      "track": "fim",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "1ecbec02bfec",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0537a21f2552",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "153856046476",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "177d06b4b740",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0cb5c98f44f3",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "2aa55db2ed67",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "37b202e8b439",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "112c27a83cbc",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0efd90f14e9a",
+      "track": "fim",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 1,
+      "id": "0ab41c204ced",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "03f9eb30de95",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "14d3706e63a6",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1ff88f7b352f",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0822b64826d4",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "4f8b5120b8e1",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "03a162e031b7",
+      "track": "fim",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0ffb0b54070f",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08b5a47128bf",
+      "track": "account",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "3391f2eed378",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "11b95c570b11",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0cc369884f9b",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "15b0f54440e7",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "017f0048ea9d",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0df3825e5d4e",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08aea95e58bd",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1d19429384af",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1d9fdb56512b",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0cd1434807ca",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0ea765845093",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "06ede3f39f05",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "14ccc51cdb68",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "18facd7d6d7b",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "12c4128b4540",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "04071ddceaf2",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "17c9261b9b73",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "2935d12175f3",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "02c6306d5ccf",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "3bb5ab8debbc",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "07d71fbd8fbd",
+      "track": "fim",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "15946e3f6ed5",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0d8ec2f59c4f",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08dcdd65f552",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "150f514925bb",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "15cb73971094",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "14a18d625dc9",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "14573bf00e50",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "059c0294407b",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "138e154a5847",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "16c170367e3b",
+      "track": "fim",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "034549115d5b",
+      "track": "fim",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "356df3b1a980",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0dd164307882",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "01e323e158ea",
+      "track": "account",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0da073d6e81b",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "03e29bc24669",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "187b8ef401d4",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0e7d93ca9a49",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0d9a047842aa",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "09962a0e4cbc",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0342c6232586",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1a84da1e68e7",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1a282919c2de",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0e90cca0bfa1",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "17fef0b30888",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08b66c22bd6d",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0bbebbe90cd6",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1346bea6ef9c",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "129704e0e6f3",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0879d33e960c",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "014c866714e7",
+      "track": "account",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1a8c0ae575f8",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "06155b3f87e1",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "43bc4b0a11b1",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "186ed9b09d03",
+      "track": "fim",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "034ba2695870",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0bf9231f467b",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "05741b15c5ae",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0c59d63674b5",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "095dabe23b44",
+      "track": "fim",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "01fc84670190",
+      "track": "account",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "16d3305ec16f",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "209238089007",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0476e978e9b8",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0134ebf49103",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "355f960001ee",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "09f5cb90b8c5",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0e7feba7bcee",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "452373cfac6f",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1c68bb88eb01",
+      "track": "fim",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1b5bf1c20c1d",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a86be81a931",
+      "track": "account",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "03a31f320cef",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08515a3eb279",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "46d37cfc38ad",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "6b130b6b5af6",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "02b7ffe11371",
+      "track": "fim",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "087922101658",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "52b398bb8cb1",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0ea40078bd9b",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a51e8ad0172",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1a39986fd470",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1236469fe193",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0c871d53a29e",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "103b415bb120",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "26f2e5e12803",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "50fe182480a9",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "115011b613f0",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "10ca0a4d7383",
+      "track": "fim",
+      "dimension": "change_type_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a872e5e4dc4",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a22c3abcefe",
+      "track": "account",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0fe76a47bcf5",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a10ef7c3d75",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a26dedc773a",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1a2d50e0c9cf",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "00daeba98965",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "08c94b10840d",
+      "track": "account",
+      "dimension": "cross_tenant",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0fec0c687eca",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1d2e99f2ff97",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "04305a719efe",
+      "track": "fim",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "06ad9ca1a9a9",
+      "track": "fim",
+      "dimension": "lexical_bait",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1fe1d9b00baf",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "037c21ed75ba",
+      "track": "fim",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "28131c7f0622",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "081c8bcb831e",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "19603dab13e0",
+      "track": "account",
+      "dimension": "future_effective",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "04be515de394",
+      "track": "account",
+      "dimension": "pending_status",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "123b9c45c9cb",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "039f7ab51292",
+      "track": "account",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "02add4c697bb",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0e07dcdf0d03",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0048df35b0b5",
+      "track": "account",
+      "dimension": "account",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0b22dfb81835",
+      "track": "fim",
+      "dimension": "window",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0954d80ae865",
+      "track": "fim",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "4e65c8fe1384",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "13fb2fde4768",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "04ad2b953945",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0de025aefe3a",
+      "track": "account",
+      "dimension": "ioc_false_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "21dc3aaa4e58",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0529b45071e6",
+      "track": "fim",
+      "dimension": "policy",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1621199424dc",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "00eb7391b85d",
+      "track": "account",
+      "dimension": "ticket_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0cd60e8336b4",
+      "track": "account",
+      "dimension": "host",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "23f6a2d8ab49",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a9b55dd1fc4",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "27aeb17228c4",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1ac559f0d8a1",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "12d12397794a",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0059933c0289",
+      "track": "account",
+      "dimension": "off_call_privileged",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "008182bda3d5",
+      "track": "fim",
+      "dimension": "expiry",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "587452f3daac",
+      "track": "fim",
+      "dimension": "security_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1aa22b595feb",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "3e818434af0f",
+      "track": "account",
+      "dimension": "cab_not_approved",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0a4ab78d38bb",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0040572ed279",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1f1b2e05db5f",
+      "track": "account",
+      "dimension": "evidence_stale_owner",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0fa6f16ab92a",
+      "track": "account",
+      "dimension": "emergency_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "02b0a257222a",
+      "track": "fim",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "14c55c79e7da",
+      "track": "fim",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "1ecbec02bfec",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0537a21f2552",
+      "track": "account",
+      "dimension": "multi_record",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "153856046476",
+      "track": "account",
+      "dimension": "waiver_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "177d06b4b740",
+      "track": "account",
+      "dimension": "freezeexc_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0cb5c98f44f3",
+      "track": "account",
+      "dimension": "baseline_noncovering",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "2aa55db2ed67",
+      "track": "account",
+      "dimension": "asset_pci_forbidden",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "37b202e8b439",
+      "track": "fim",
+      "dimension": "cr_absent",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "112c27a83cbc",
+      "track": "fim",
+      "dimension": "path_mismatch",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0efd90f14e9a",
+      "track": "fim",
+      "dimension": "freeze_active",
+      "cause": "stale_memory"
+    },
+    {
+      "pass": 2,
+      "id": "0ab41c204ced",
+      "track": "fim",
+      "dimension": "baseline_frozen",
+      "cause": "stale_memory"
+    }
+  ],
+  "framing": "false_negative_rate measures stale-memory failure under manufactured drift (counterfactual worlds share one timestamp); it is not a steady-state FN rate. safety_override_escalations are \u00a78.2 guardrail intent, not model error."
+}
