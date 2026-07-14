@@ -153,6 +153,10 @@ def require_role(*allowed: str | Role) -> Callable[..., Callable[..., Any]]:
                 detail=f"role '{role}' not permitted here",
             )
 
+    # Expose the guard's allowed roles for introspection (OpenAPI/doc
+    # generation walks app.routes and reads this off the dependency).
+    _checker._soctalk_roles = tuple(sorted(allowed_values))  # type: ignore[attr-defined]
+    _checker._soctalk_scope = "mssp"  # type: ignore[attr-defined]
     return _checker
 
 
@@ -192,6 +196,8 @@ def require_tenant_role(*allowed: str | Role) -> Callable[..., Callable[..., Any
                 detail="tenant_id claim missing from token",
             )
 
+    _checker._soctalk_roles = tuple(sorted(allowed_values))  # type: ignore[attr-defined]
+    _checker._soctalk_scope = "tenant"  # type: ignore[attr-defined]
     return _checker
 
 
