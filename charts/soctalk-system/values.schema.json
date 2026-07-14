@@ -238,6 +238,26 @@
             },
             "model": {
               "type": "string"
+            },
+            "fastTier": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Optional install-wide default FAST (router) tier injected into every newly onboarded tenant's llm_tiers (hybrid: router on this backend, reasoning on the primary provider). Consumed by tenants.py::_install_default_llm_tiers. The API key rides an out-of-band Secret via apiKeySecret — never put it in values.",
+              "properties": {
+                "provider": { "enum": ["openai-compatible", "anthropic"] },
+                "baseUrl": { "type": "string", "format": "uri" },
+                "model": { "type": "string" },
+                "engine": { "enum": ["frontier", "openai_compatible", "vllm", "sglang"] },
+                "decodingMode": { "enum": ["auto", "none", "tool_use", "json_schema_strict", "json_object", "guided_json", "guided_grammar"] },
+                "apiKeySecret": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "type": "string" },
+                    "key": { "type": "string" }
+                  }
+                }
+              }
             }
           }
         }

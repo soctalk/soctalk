@@ -40,6 +40,23 @@ install:
     # email + password injected from secrets at deploy time (see header).
     {}
 
+# Hybrid model chain for the demo: every new tenant's FAST/router tier runs on a
+# self-hosted Qwen3-32B (SGLang on Modal, scale-to-zero A100), while the
+# reasoning verdict stays on the primary provider (defaults.llm above). The
+# bearer key is NOT here — it lives in the Secret named below, created out of
+# band (kubectl create secret ... soctalk-qwen-fast-tier). See
+# tenants.py::_install_default_llm_tiers.
+defaults:
+  llm:
+    fastTier:
+      provider: openai-compatible
+      baseUrl: https://gbrigand--soctalk-sglang-qwen3-32b-serve.modal.run/v1
+      model: Qwen/Qwen3-32B
+      engine: sglang
+      apiKeySecret:
+        name: soctalk-qwen-fast-tier
+        key: api_key
+
 postgres:
   enabled: true
   storage:

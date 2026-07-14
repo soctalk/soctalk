@@ -7,9 +7,10 @@ Every handler is guarded by :func:`require_role` on the 3 MSSP roles
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import httpx
@@ -275,6 +276,34 @@ def _llm_key_errors(llm_api_key: str | None) -> list[dict[str, object]]:
 # ----- Endpoints --------------------------------------------------------------
 
 
+def _install_default_llm_tiers() -> dict[str, Any] | None:
+    """Install-wide default per-tier LLM backends for newly onboarded tenants.
+
+    Reads ``SOCTALK_DEFAULT_FAST_TIER_*`` env (set from the chart's
+    ``defaults.llm.fastTier``). When a provider/base_url/model are all present,
+    returns a validated ``llm_tiers`` map routing the FAST (router) tier to that
+    backend — e.g. a self-hosted Qwen on Modal/sglang — leaving the reasoning
+    verdict on the tenant's primary provider. Returns None when unconfigured, so
+    installs without the env behave exactly as before (single-provider).
+    """
+    provider = os.getenv("SOCTALK_DEFAULT_FAST_TIER_PROVIDER", "").strip()
+    base_url = os.getenv("SOCTALK_DEFAULT_FAST_TIER_BASE_URL", "").strip()
+    model = os.getenv("SOCTALK_DEFAULT_FAST_TIER_MODEL", "").strip()
+    if not (provider and base_url and model):
+        return None
+    block: dict[str, Any] = {"provider": provider, "base_url": base_url, "model": model}
+    for env_key, field in (
+        ("SOCTALK_DEFAULT_FAST_TIER_ENGINE", "engine"),
+        ("SOCTALK_DEFAULT_FAST_TIER_DECODING_MODE", "decoding_mode"),
+        ("SOCTALK_DEFAULT_FAST_TIER_API_KEY", "api_key_plain"),
+    ):
+        val = os.getenv(env_key, "").strip()
+        if val:
+            block[field] = val
+    from soctalk.core.tenancy.models import validate_llm_tiers
+    return validate_llm_tiers({"fast": block})
+
+
 @router.post(
     "/onboard",
     response_model=TenantRead,
@@ -374,7 +403,7 @@ async def onboard_tenant(
             )
     # Only pass llm_provider when set so the column default
     # ('openai-compatible') applies for a provider-less, key-less onboard.
-    llm_kwargs: dict[str, str] = {"llm_model": llm_model}
+    llm_kwargs: dict[str, Any] = {"llm_model": llm_model}
     if llm_provider is not None:
         llm_kwargs["llm_provider"] = llm_provider
     if payload.llm_api_key is not None:
@@ -383,6 +412,16 @@ async def onboard_tenant(
         llm_kwargs["llm_fast_model"] = llm_fast_model
     if llm_reasoning_model is not None:
         llm_kwargs["llm_reasoning_model"] = llm_reasoning_model
+    # Install-wide default per-tier backend (issue #4/#12): when the install
+    # configures a default FAST tier (SOCTALK_DEFAULT_FAST_TIER_* env) and the
+    # onboard didn't specify its own tiers, every new tenant's router loop runs
+    # on that shared backend (e.g. a self-hosted Qwen on Modal/sglang) while the
+    # reasoning verdict stays on the primary frontier provider. Injected into the
+    # DB llm_tiers so the provisioning controller materializes the tier's own key
+    # into tenant-llm-key/fast_api_key.
+    default_tiers = _install_default_llm_tiers()
+    if default_tiers is not None:
+        llm_kwargs["llm_tiers"] = default_tiers
 
     async with tenant_context(session, tenant.id):
         # External SIEM connection material is only captured for the
