@@ -1373,12 +1373,24 @@ class TenantController:
             # under either ``anthropic-api-key`` or ``openai-api-key``
             # depending on ``llm.provider``. Try both — the explicit env
             # override still wins so operators can pin a specific key.
+            #
+            # Order the fallback by the TENANT's configured provider.
+            # install.sh's ``create_llm_secret`` populates BOTH sub-keys with
+            # the SAME value, so a fixed openai-first order picks
+            # ``openai-api-key`` for an anthropic tenant, then the block below
+            # flips it to ``openai-compatible`` and the runs-worker mounts the
+            # (Anthropic) key as ``OPENAI_API_KEY`` — every call then hits
+            # OpenAI's API with an ``sk-ant-`` key and 401s. Preferring the key
+            # that matches ``ctx.integration.llm_provider`` keeps a correctly
+            # onboarded anthropic tenant on anthropic; the reconcile below only
+            # fires when the install Secret genuinely lacks the tenant's key.
             explicit_key = os.getenv("SOCTALK_INSTALL_LLM_SECRET_KEY")
-            candidate_keys = (
-                [explicit_key]
-                if explicit_key
-                else ["openai-api-key", "anthropic-api-key"]
-            )
+            if explicit_key:
+                candidate_keys = [explicit_key]
+            elif ctx.integration.llm_provider == "anthropic":
+                candidate_keys = ["anthropic-api-key", "openai-api-key"]
+            else:
+                candidate_keys = ["openai-api-key", "anthropic-api-key"]
 
             api_key = None
             chosen_key_name = None
