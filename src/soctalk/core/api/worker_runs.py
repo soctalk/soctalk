@@ -125,7 +125,7 @@ class ClaimedRun(BaseModel):
     alerts: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class HeartbeatPayload(BaseModel):
+class WorkerHeartbeatPayload(BaseModel):
     lease_id: UUID
     tokens_used: int = Field(ge=0)
     # ``None`` preserves the stored value (see CompletePayload).
@@ -304,7 +304,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
 
 @router.post("/runs/{run_id}/heartbeat")
 async def heartbeat_run(
-    run_id: UUID, payload: HeartbeatPayload, request: Request
+    run_id: UUID, payload: WorkerHeartbeatPayload, request: Request
 ) -> dict[str, Any]:
     """Extend the lease and persist current ``tokens_used`` + ``dollars_used``.
 

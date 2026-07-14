@@ -29,7 +29,7 @@ logger = structlog.get_logger()
 router = APIRouter(prefix="/api/internal/adapter", tags=["internal-adapter"])
 
 
-class HeartbeatPayload(BaseModel):
+class AdapterHeartbeatPayload(BaseModel):
     tenant_id: UUID
     version: str
     health: str  # "ok" | "degraded" | "failing"
@@ -63,7 +63,7 @@ def _verify_adapter_jwt(request: Request) -> UUID:
 
 
 @router.post("/heartbeat")
-async def heartbeat(payload: HeartbeatPayload, request: Request) -> dict:
+async def heartbeat(payload: AdapterHeartbeatPayload, request: Request) -> dict:
     authed_tid = _verify_adapter_jwt(request)
     if authed_tid != payload.tenant_id:
         raise HTTPException(403, "adapter token tenant_id mismatch")
