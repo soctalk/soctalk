@@ -814,6 +814,65 @@ async def test_llm_anthropic_autoflip_leaves_null_overrides_null(
     assert rw["reasoningModel"] == ANTHROPIC_DEFAULT_MODEL
 
 
+async def test_llm_anthropic_tenant_prefers_anthropic_key_when_both_present(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    """Regression: an anthropic tenant on an install whose shared Secret holds
+    BOTH ``openai-api-key`` and ``anthropic-api-key`` (install.sh writes both
+    with the same value) must resolve the ANTHROPIC key and stay anthropic.
+
+    The old fixed openai-first fallback picked ``openai-api-key``, flipped the
+    tenant to ``openai-compatible``, and mounted the Anthropic key as
+    ``OPENAI_API_KEY`` — every runs-worker call then 401'd against OpenAI. The
+    candidate order now follows the tenant's configured provider so no flip
+    happens and the rendered primary stays anthropic.
+    """
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_NAME", raising=False)
+    monkeypatch.delenv("SOCTALK_INSTALL_LLM_SECRET_KEY", raising=False)
+
+    integ = (
+        await session.execute(
+            select(IntegrationConfig).where(
+                IntegrationConfig.tenant_id == seeded_tenant.id
+            )
+        )
+    ).scalar_one()
+    integ.llm_api_key_plain = None
+    integ.llm_provider = "anthropic"
+    integ.llm_model = "claude-sonnet-4-6"
+    integ.llm_base_url = "https://api.anthropic.com"
+    await session.commit()
+
+    fake_k8s = FakeK8s()
+    # BOTH sub-keys present, same value — the standard install.sh layout.
+    fake_k8s.secrets[(_INSTALL_LLM_NS, _INSTALL_LLM_SECRET)] = {
+        "openai-api-key": "sk-ant-install-SHARED-KEY",
+        "anthropic-api-key": "sk-ant-install-SHARED-KEY",
+    }
+
+    helm_values: list[dict] = []
+
+    async def rec_install_tenant(*_, values=None, **__):
+        helm_values.append(values or {})
+        return type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": "", "ok": True}
+        )()
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec_install_tenant)
+
+    controller = _llm_guard_controller(session, fake_k8s)
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+
+    # No flip: the primary stays anthropic/claude in the DB and the render.
+    await session.refresh(integ)
+    assert integ.llm_provider == "anthropic"
+    assert integ.llm_model == "claude-sonnet-4-6"
+    assert helm_values, "helm_install_tenant was not invoked"
+    assert helm_values[0]["llm"]["provider"] == "anthropic"
+    assert helm_values[0]["llm"]["model"] == "claude-sonnet-4-6"
+
+
 async def test_llm_key_provided_onboard_drives_tenant_llm_secret(
     session: AsyncSession, admin_session: AsyncSession, patched_helm, monkeypatch
 ):
