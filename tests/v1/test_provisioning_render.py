@@ -111,6 +111,20 @@ def test_poc_profile_wires_linuxep_wazuh_manager():
     assert "linuxep" not in v2
 
 
+def test_moving_latest_tag_pulls_always():
+    # A moving `latest` image tag MUST render pullPolicy=Always or the node caches
+    # stale code (the demo runs-worker/adapter ran weeks-old triage code).
+    t = _make_tenant("poc")
+    v = render_tenant_values(
+        tenant=t, integration=_make_integration(t.id), branding=_make_branding(t.id),
+        mssp_id=str(uuid4()), install_id=str(uuid4()),
+        llm_secret_name="tenant-x-llm", profile="poc",
+    )
+    assert v["runsWorker"]["image"]["tag"] == "latest"
+    assert v["runsWorker"]["image"]["pullPolicy"] == "Always"
+    assert v["adapter"]["image"]["pullPolicy"] == "Always"
+
+
 def test_persistent_profile_emits_larger_quota():
     t = _make_tenant("persistent")
     v = render_tenant_values(
