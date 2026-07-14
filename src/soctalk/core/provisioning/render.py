@@ -382,8 +382,13 @@ def render_tenant_values(
                     "SOCTALK_TENANT_ADAPTER_IMAGE_REPO",
                     "ghcr.io/soctalk/soctalk-adapter",
                 ),
-                "tag": os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "latest"),
-                "pullPolicy": "IfNotPresent",
+                "tag": (_adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "latest")),
+                # A moving `latest` tag MUST pull Always, or the node caches the
+                # first image it ever pulled and the tenant silently runs weeks-
+                # old code (IfNotPresent never re-pulls an unchanged tag) — the
+                # reason the demo runs-worker/adapter ran stale triage code. A
+                # pinned tag (SHA/version) is immutable, so IfNotPresent is fine.
+                "pullPolicy": "Always" if _adapter_tag == "latest" else "IfNotPresent",
             },
             "resources": {
                 "requests": {"cpu": "50m", "memory": "128Mi"},
@@ -430,10 +435,12 @@ def render_tenant_values(
                     "SOCTALK_TENANT_RUNS_WORKER_IMAGE_REPO",
                     "ghcr.io/soctalk/soctalk-orchestrator",
                 ),
-                "tag": os.getenv(
+                "tag": (_worker_tag := os.getenv(
                     "SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG", "latest"
-                ),
-                "pullPolicy": "IfNotPresent",
+                )),
+                # Always-pull a moving `latest` (see adapter above) — otherwise
+                # the runs-worker runs stale triage code cached on the node.
+                "pullPolicy": "Always" if _worker_tag == "latest" else "IfNotPresent",
             },
             "resources": {
                 # Lab tenants share a 4-CPU ResourceQuota with the
