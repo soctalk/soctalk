@@ -18,6 +18,7 @@ from soctalk.inference import (
     ainvoke_request,
     resolve_tier_sampling,
 )
+from soctalk.authorization.render import supervisor_authorization_lines
 from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
@@ -268,6 +269,10 @@ def _build_context_summary(state: dict[str, Any]) -> str:
             lines.append("")
             lines.append("### MISP Threat Intelligence")
             lines.append("**Not yet checked** - consider CONTEXTUALIZE action for threat attribution")
+
+    # Authorization context (epic M1): stable within a run, so it stays ahead of the
+    # volatile tail; renders nothing when the investigation carries no authorization key.
+    lines.extend(supervisor_authorization_lines(investigation))
 
     # Previous decision
     prev_decision = state.get("supervisor_decision")

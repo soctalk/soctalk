@@ -15,11 +15,34 @@ from soctalk.models.enums import (
 )
 from soctalk.models.observables import Observable, EnrichmentResult
 from soctalk.models.alerts import Alert, AlertSource
+from soctalk.models.authorization import (
+    AuthorizationActivity,
+    AuthorizationComponents,
+    AuthorizationContext,
+    AuthorizationFact,
+    AuthorizationSourceType,
+    AuthorizationTrack,
+    ChangeFreezeFact,
+    EntityContextFact,
+    GrantFact,
+    ProhibitionFact,
+)
 from soctalk.models.investigation import InvestigationRunState, Finding
 from soctalk.models.verdict import Verdict
 from soctalk.models.state import SupervisorDecision
 
 __all__ = [
+    # Authorization (epic M1)
+    "AuthorizationActivity",
+    "AuthorizationComponents",
+    "AuthorizationContext",
+    "AuthorizationFact",
+    "AuthorizationSourceType",
+    "AuthorizationTrack",
+    "ChangeFreezeFact",
+    "EntityContextFact",
+    "GrantFact",
+    "ProhibitionFact",
     # Enums
     "Severity",
     "ObservableType",

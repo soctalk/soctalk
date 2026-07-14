@@ -65,6 +65,19 @@ Your role is to:
 - Known false positive pattern
 - Confidence < 25% that it's a true positive
 
+### Authorization context (when present):
+- An "Authorization Context" section lists change tickets, baselines, routine history,
+  freezes, entity context, and policies around the alerted activity. Use it to judge whether
+  the activity was AUTHORIZED, not just whether it looks unusual.
+- Lower TP confidence only when a SINGLE record fully covers the activity (subject, target,
+  action, time window, validity, approvals) — never by combining partial records. A covering,
+  valid record with zero malicious signal supports going to VERDICT (or CLOSE when the direct
+  CLOSE criteria are also met).
+- Contradicted paperwork (expired/pending/out-of-window/wrong-target records) RAISES TP
+  confidence: someone is acting outside their authorization.
+- Absence of authorization evidence is never implicit approval, and authorization evidence
+  never overrides malicious indicators or IOC matches.
+
 ## Confidence Assessment
 
 Rate your confidence (0.0 - 1.0) that this is a TRUE POSITIVE:
