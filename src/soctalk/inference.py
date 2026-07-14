@@ -332,7 +332,7 @@ def _json_object_hint(schema: type) -> HumanMessage:
 
 async def _invoke_structured(
     llm: Any, schema: type, messages: list[Any], req: InferenceRequest,
-    *, mode: "DecodingMode" = None,  # type: ignore[assignment]
+    *, mode: DecodingMode = None,  # type: ignore[assignment]
 ) -> tuple[Any, Any, str | None, int]:
     """Schema-enforced invoke with one validation retry (the ainvoke_structured
     logic, inlined so the dispatcher owns tracking + attempt counting).
@@ -354,14 +354,32 @@ async def _invoke_structured(
 
     for _ in range(max(0, req.retry_schema_validation)):
         parsing_error = result.get("parsing_error")
-        retry = list(messages)
-        if raw is not None:
-            retry.append(raw)
-        retry.append(HumanMessage(content=(
+        feedback = (
             f"Your previous response failed validation against the "
             f"{getattr(schema, '__name__', 'output')} schema: {parsing_error}. "
             "Respond again, following the schema exactly."
-        )))
+        )
+        retry = list(messages)
+        if raw is not None:
+            retry.append(raw)
+            # Structured output rides on tool calling: an assistant turn carrying
+            # tool_use blocks MUST be followed by matching tool_result blocks —
+            # newer Claude models hard-reject the request otherwise. Deliver the
+            # feedback as the tool result(s); invalid_tool_calls covers calls
+            # truncated mid-JSON by max_tokens.
+            tool_calls = (getattr(raw, "tool_calls", None) or []) + (
+                getattr(raw, "invalid_tool_calls", None) or []
+            )
+            if tool_calls:
+                from langchain_core.messages import ToolMessage
+
+                retry.extend(
+                    ToolMessage(content=feedback, tool_call_id=tc["id"]) for tc in tool_calls
+                )
+            else:
+                retry.append(HumanMessage(content=feedback))
+        else:
+            retry.append(HumanMessage(content=feedback))
         result = await structured.ainvoke(retry)
         attempts += 1
         raw = result.get("raw")
