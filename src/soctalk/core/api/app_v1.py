@@ -196,6 +196,16 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
         ),
         version="0.1.0",
         lifespan=_lifespan,
+        # Serve the OpenAPI schema + interactive docs UNDER ``/api/`` so they
+        # are reachable through the public ingress, which routes ``/api/*`` to
+        # this service and everything else to the app-ui frontend. FastAPI's
+        # defaults (``/openapi.json`` / ``/docs`` / ``/redoc`` at the app root)
+        # land on the frontend via the ingress and 404. The prefix is NOT
+        # stripped by the ingress (the same reason ``/api/auth/*`` etc. resolve
+        # here), so the app must own the full ``/api/...`` path.
+        openapi_url="/api/openapi.json",
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
     )
 
     mode = get_auth_mode()
