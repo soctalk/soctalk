@@ -226,6 +226,19 @@ jobs:
           SMOKE_SLUG_PREFIX: ci
         run: python tests/e2e/smoke_onboard.py
 
+      # Dogfood the API descriptor: generate a Python client from the live
+      # /api/openapi.json and use it to read investigations. Fails if the
+      # published schema can't be turned into a working client (e.g. a
+      # duplicate model name) or the investigations models stopped matching.
+      - name: Run OpenAPI-client smoke test
+        env:
+          SMOKE_BASE_URL: ${{ vars.DEMO_BASE_URL || format('https://{0}', secrets.DEMO_HOST) }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
+        run: |
+          pip install 'openapi-python-client>=0.29' httpx
+          python tests/e2e/smoke_openapi_client.py
+
       # Also sweep AFTER — tears down this run's own tenant (pass or fail),
       # so nothing lingers between deploys even if the smoke's inline
       # decommission was skipped (e.g. it errored before reaching cleanup).
