@@ -74,6 +74,48 @@ async def _lease_reaper_loop(stop_event: asyncio.Event) -> None:
             pass
 
 
+async def _token_renewal_loop(stop_event: asyncio.Event) -> None:
+    """Re-mint tenant adapter/worker tokens before their TTL elapses.
+
+    Runs once immediately on startup (so an api restart heals any already-
+    expired tenants) then every ``SOCTALK_TOKEN_RENEWAL_INTERVAL_SECONDS``
+    (default 6h — comfortably inside the 7-day adapter TTL). See
+    :mod:`soctalk.core.tenancy.token_renewal` for why this exists.
+    """
+    from soctalk.core.provisioning.k8s import new_k8s_client
+    from soctalk.core.tenancy.token_renewal import renew_agent_tokens
+
+    default_interval = 6 * 3600.0
+    try:
+        interval = float(
+            os.getenv("SOCTALK_TOKEN_RENEWAL_INTERVAL_SECONDS", str(default_interval))
+        )
+    except ValueError:
+        logger.warning("token_renewal_bad_interval_env", falling_back_to=default_interval)
+        interval = default_interval
+    # Floor at 60s so a misconfigured 0/negative can never tight-loop Secret
+    # rewrites for every tenant.
+    interval = max(60.0, interval)
+    sm = tenancy_db.get_mssp_sessionmaker()
+    try:
+        k8s = new_k8s_client()
+    except Exception as e:  # noqa: BLE001 — no cluster access (e.g. local dev): skip
+        logger.warning("token_renewal_disabled_no_k8s", error=str(e))
+        return
+    while not stop_event.is_set():
+        try:
+            async with sm() as session:
+                n = await renew_agent_tokens(session, k8s)
+            if n:
+                logger.info("agent_tokens_renewed", count=n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("token_renewal_loop_error", error=str(e))
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info(
@@ -110,6 +152,16 @@ async def _lifespan(app: FastAPI):
         _lease_reaper_loop(reaper_stop), name="lease-reaper"
     )
 
+    # Agent-token renewal keeps long-lived tenants' adapter/worker auth from
+    # silently expiring. Gated with the provisioning worker: it mutates K8s
+    # Secrets, so it belongs on the same replica that owns cluster writes.
+    renewal_stop = asyncio.Event()
+    renewal_task: asyncio.Task | None = None
+    if _worker_enabled():
+        renewal_task = asyncio.create_task(
+            _token_renewal_loop(renewal_stop), name="token-renewal"
+        )
+
     try:
         yield
     finally:
@@ -118,6 +170,12 @@ async def _lifespan(app: FastAPI):
             await asyncio.wait_for(reaper_task, timeout=5)
         except asyncio.TimeoutError:
             reaper_task.cancel()
+        if renewal_task is not None:
+            renewal_stop.set()
+            try:
+                await asyncio.wait_for(renewal_task, timeout=5)
+            except asyncio.TimeoutError:
+                renewal_task.cancel()
         if worker is not None and worker_task is not None:
             await worker.stop()
             try:

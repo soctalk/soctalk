@@ -27,6 +27,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 VERSION = "0.2.0"
 
+# Startup durable-checkpoint load: retry with a freshly read token so a token
+# renewed just after pod start (see token_renewal) is picked up before we
+# ingest from a stale local cursor. ~60s total covers Secret projection; a
+# no-checkpoint tenant returns 200 (empty) and loads on the first try.
+CHECKPOINT_LOAD_MAX_ATTEMPTS = 10
+CHECKPOINT_LOAD_RETRY_SECONDS = 6.0
+
 
 def _read_token() -> str:
     path = Path(os.environ.get("ADAPTER_TOKEN_PATH", "/run/secrets/adapter/token"))
@@ -566,8 +573,27 @@ async def _ingest_loop() -> None:
         # Durable checkpoint resume (issue #17 fix 6): pull the server-side
         # cursor once at start so a pod restart continues instead of
         # replaying from the in-memory initial cursor.
-        await _load_checkpoint(api_client, api_url, tenant_id, token)
+        # Load the durable cursor BEFORE ingesting, retrying with a freshly
+        # read token each attempt. If the pod started with an about-to-expire
+        # token that the control plane then renewed, the first load 401s;
+        # proceeding from the local (epoch/now) cursor would replay weeks of
+        # alerts or skip history. Retry so we resume from the true checkpoint
+        # once the renewed token projects into the mounted Secret (~60s).
+        for _attempt in range(CHECKPOINT_LOAD_MAX_ATTEMPTS):
+            await _load_checkpoint(api_client, api_url, tenant_id, _read_token())
+            if _state.checkpoint_loaded:
+                break
+            await asyncio.sleep(CHECKPOINT_LOAD_RETRY_SECONDS)
+        else:
+            logger.warning(
+                "checkpoint_never_loaded attempts=%d — starting from local cursor",
+                CHECKPOINT_LOAD_MAX_ATTEMPTS,
+            )
         while True:
+            # Re-read the token each cycle so a renewed ``adapter-token`` Secret
+            # (the control plane re-mints it before the TTL elapses) is picked
+            # up without a pod restart — the mounted file updates in place.
+            token = _read_token()
             try:
                 hits = await _query_alerts(
                     wazuh_client, _state.last_alert_ts, _state.last_alert_id, batch_size
