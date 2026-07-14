@@ -218,7 +218,7 @@ jobs:
         with:
           name: soctalk-demo-qcow2
           path: infra/packer/build/dist/*.qcow2.xz
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload vmdk artifact (VMware / VirtualBox)
@@ -226,7 +226,7 @@ jobs:
         with:
           name: soctalk-demo-vmdk
           path: infra/packer/build/dist/*.vmdk.xz
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload vhdx artifact (Hyper-V)
@@ -234,7 +234,7 @@ jobs:
         with:
           name: soctalk-demo-vhdx
           path: infra/packer/build/dist/*.vhdx.xz
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload vhd artifact (Azure)
@@ -242,7 +242,7 @@ jobs:
         with:
           name: soctalk-demo-vhd
           path: infra/packer/build/dist/*.vhd.xz
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload raw artifact (generic cloud import)
@@ -250,7 +250,7 @@ jobs:
         with:
           name: soctalk-demo-raw
           path: infra/packer/build/dist/*.raw.xz
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload SHA256SUMS
@@ -258,7 +258,7 @@ jobs:
         with:
           name: soctalk-demo-checksums
           path: infra/packer/build/dist/SHA256SUMS.txt
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
       - name: Attach all formats to GitHub Release (on v* tag)
