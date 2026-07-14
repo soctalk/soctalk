@@ -204,6 +204,20 @@ jobs:
           pip install playwright
           python -m playwright install --with-deps chromium
 
+      # Decommission any ci-* tenants left over from prior runs BEFORE
+      # onboarding this run's tenant. A failed provision leaves a degraded
+      # tenant whose partial Wazuh stack keeps holding node memory; left to
+      # pile up they exhaust the single-node demo and make the next run's
+      # wazuh-dashboard time out — a self-reinforcing cycle. Best-effort
+      # (the script never exits non-zero), so it never blocks a deploy.
+      - name: Sweep stale ci-* tenants
+        env:
+          SMOKE_BASE_URL: ${{ vars.DEMO_BASE_URL || format('https://{0}', secrets.DEMO_HOST) }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
+          SMOKE_SLUG_PREFIX: ci
+        run: python tests/e2e/sweep_ci_tenants.py
+
       - name: Run smoke test
         env:
           SMOKE_BASE_URL: ${{ vars.DEMO_BASE_URL || format('https://{0}', secrets.DEMO_HOST) }}
@@ -211,6 +225,18 @@ jobs:
           SMOKE_ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
           SMOKE_SLUG_PREFIX: ci
         run: python tests/e2e/smoke_onboard.py
+
+      # Also sweep AFTER — tears down this run's own tenant (pass or fail),
+      # so nothing lingers between deploys even if the smoke's inline
+      # decommission was skipped (e.g. it errored before reaching cleanup).
+      - name: Sweep ci-* tenants (post, always)
+        if: always()
+        env:
+          SMOKE_BASE_URL: ${{ vars.DEMO_BASE_URL || format('https://{0}', secrets.DEMO_HOST) }}
+          SMOKE_ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
+          SMOKE_ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
+          SMOKE_SLUG_PREFIX: ci
+        run: python tests/e2e/sweep_ci_tenants.py
 
       - name: Upload screenshots on failure
         if: failure()
