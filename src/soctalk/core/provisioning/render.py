@@ -519,6 +519,12 @@ def render_tenant_values(
             tenant,
             wazuh_manager_host=f"wazuh-{tenant.slug}-wazuh-manager",
             authd_secret_name=f"wazuh-{tenant.slug}-wazuh-creds",
+            # The wazuh chart stores the authd password under key AUTHD_PASS
+            # (charts/wazuh secrets.yaml); render_linux_ep_values defaults to
+            # 'wazuh_authd_secret', a key that doesn't exist in that Secret — the
+            # linuxep pod's secretKeyRef then can't resolve, the pod never starts,
+            # and wait_workloads times out on tenant-<slug>-linuxep-0.
+            authd_secret_key="AUTHD_PASS",
         )
 
     if is_provided:
