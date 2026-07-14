@@ -59,6 +59,29 @@ _FAST = {"provider": "openai-compatible", "base_url": "http://sglang.internal:80
 # ---------------------------------------------------------------- validation
 
 
+def test_install_default_fast_tier_from_env(monkeypatch):
+    # Install-wide default FAST tier (demo: Qwen router). Env → validated
+    # llm_tiers; unconfigured → None (no behaviour change for other installs).
+    from soctalk.core.api.tenants import _install_default_llm_tiers
+
+    for k in ("PROVIDER", "BASE_URL", "MODEL", "ENGINE", "DECODING_MODE", "API_KEY"):
+        monkeypatch.delenv(f"SOCTALK_DEFAULT_FAST_TIER_{k}", raising=False)
+    assert _install_default_llm_tiers() is None  # unconfigured
+
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_BASE_URL", "http://sglang:8000/v1")
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_MODEL", "Qwen/Qwen3-32B")
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_ENGINE", "sglang")
+    monkeypatch.setenv("SOCTALK_DEFAULT_FAST_TIER_API_KEY", "sk-qwen")
+    out = _install_default_llm_tiers()
+    assert out["fast"]["model"] == "Qwen/Qwen3-32B"
+    assert out["fast"]["engine"] == "sglang"
+    assert out["fast"]["api_key_plain"] == "sk-qwen"
+    # A partial config (no model) is ignored, not half-applied.
+    monkeypatch.delenv("SOCTALK_DEFAULT_FAST_TIER_MODEL")
+    assert _install_default_llm_tiers() is None
+
+
 def test_validate_llm_tiers_ok_normalizes():
     out = validate_llm_tiers({"fast": _FAST})
     assert out["fast"]["provider"] == "openai-compatible"

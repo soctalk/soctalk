@@ -72,6 +72,10 @@ defaults:
     provider: openai-compatible
     baseUrl: https://api.openai.com/v1
     model: gpt-4o
+    # Optional install-wide default FAST (router) tier — off by default. When
+    # set (see deploy/demo-values.yaml) every new tenant routes its supervisor
+    # loop to this backend while reasoning stays on the primary provider.
+    fastTier: {}
 # Install-shared LLM credentials. The L1 controller mirrors this key
 # into each tenant namespace at provisioning (Secret name
 # ``tenant-llm-key``), so every L2 runs-worker resolves the LLM

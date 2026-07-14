@@ -268,6 +268,40 @@ spec:
               value: {{ .Values.defaults.llm.baseUrl | quote }}
             - name: SOCTALK_LLM_MODEL_DEFAULT
               value: {{ .Values.defaults.llm.model | quote }}
+            {{- /*
+              Install-wide default FAST (router) tier — every newly onboarded
+              tenant routes its high-volume supervisor loop to this backend
+              (e.g. a self-hosted Qwen on Modal/sglang) while the reasoning
+              verdict stays on the primary provider. Consumed by
+              tenants.py::_install_default_llm_tiers at onboard. The API key
+              rides an out-of-band Secret (never committed to values).
+            */}}
+            {{- with .Values.defaults.llm.fastTier }}
+            {{- if .model }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_PROVIDER
+              value: {{ .provider | default "openai-compatible" | quote }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_BASE_URL
+              value: {{ .baseUrl | quote }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_MODEL
+              value: {{ .model | quote }}
+            {{- if .engine }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_ENGINE
+              value: {{ .engine | quote }}
+            {{- end }}
+            {{- if .decodingMode }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_DECODING_MODE
+              value: {{ .decodingMode | quote }}
+            {{- end }}
+            {{- with .apiKeySecret }}
+            - name: SOCTALK_DEFAULT_FAST_TIER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name | quote }}
+                  key: {{ .key | quote }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- end }}
             # Tenant chart refs default to the bundled local paths inside
             # the api image. Operators with a published chart can override
             # these via values to point at OCI refs (the chart envs flow
