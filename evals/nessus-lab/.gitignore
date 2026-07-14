@@ -1,0 +1,4 @@
+.env
+*.log
+capture.err
+nessus_scan_alerts.ndjson

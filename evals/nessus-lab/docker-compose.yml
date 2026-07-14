@@ -1,0 +1,76 @@
+# Dedicated Nessus capture lab (run on a throwaway host, e.g. the NUC).
+#
+# Purpose: produce REAL Wazuh alerts from a REAL Nessus vulnerability-scan
+# CAMPAIGN across MULTIPLE hosts, so they can be captured once into a versioned
+# corpus (evals/nessus_scan_alerts.ndjson) and replayed into the SocTalk
+# correlation + triage pipeline as needed. A multi-host campaign is the
+# realistic case: every alert shares the scanner's source IP, spread across
+# several target hosts — which is exactly what stresses entity correlation
+# (host-key grouping per target vs. scanner-IP grouping across targets, and the
+# conditional-key hub demotion that kicks in for a busy scanner IP).
+#
+#   docker compose up -d --build
+#   # activate Nessus + run a scan (see README.md), then:
+#   SCANNER_IP=<ip> ./capture.sh > ../nessus_scan_alerts.ndjson
+#   docker compose down -v
+#
+# Wazuh is manager-only (no indexer/dashboard) — alerts are captured straight
+# from the manager's alerts.json, which keeps the lab lean.
+name: nessus-lab
+
+networks:
+  lab:
+    driver: bridge
+
+# Shared config for every scan target (a small web/SSH host with a Wazuh agent).
+x-target: &target
+  build: ./target
+  networks: [lab]
+  depends_on:
+    wazuh-manager:
+      condition: service_started
+
+services:
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.9.2
+    hostname: wazuh-manager
+    networks: [lab]
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    # No volume over /var/ossec/logs — a named-volume mount there lands
+    # root-owned and blocks analysisd from creating logs/archives. Alerts are
+    # captured with `docker exec cat .../alerts.json`, so persistence isn't needed.
+    healthcheck:
+      test: ["CMD-SHELL", "/var/ossec/bin/wazuh-control status | grep -q wazuh-analysisd"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  # Campaign targets. Each enrolls as a distinct agent (name = hostname); the
+  # scanner hits all of them, so alerts span hosts but share one src IP.
+  target-1:
+    <<: *target
+    hostname: nessus-target-1
+  target-2:
+    <<: *target
+    hostname: nessus-target-2
+  target-3:
+    <<: *target
+    hostname: nessus-target-3
+
+  nessus:
+    image: tenable/nessus:latest-ubuntu
+    hostname: nessus
+    networks: [lab]
+    ports:
+      - "8834:8834"   # Nessus UI/API, reachable from the NUC for scan driving
+    environment:
+      ACTIVATION_CODE: "${NESSUS_ACTIVATION_CODE}"
+      USERNAME: "${NESSUS_USER:-admin}"
+      PASSWORD: "${NESSUS_PASSWORD}"
+      MANAGED: "false"
+    volumes:
+      - nessus-data:/opt/nessus/var/nessus
+
+volumes:
+  nessus-data:
