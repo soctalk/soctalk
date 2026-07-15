@@ -377,3 +377,41 @@ async def score_alert_shadow(
         excluded=result["excluded"],
     )
     return result
+
+
+async def authorization_context_for_alert(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    source: str | None,
+    rule_id: str | None,
+    entities: list[dict[str, Any]] | None,
+    ts: datetime,
+) -> dict[str, Any] | None:
+    """Store-primary: build the AuthorizationContext for a live account-track alert from the
+    durable fact store, reusing the shadow entity extraction (host from entities, account from
+    the ``user`` entity, action from the rule). Returns a plain dict for the run state, or None
+    when no activity can be extracted (no host) or the tenant has no facts — in which case the
+    fixture/claim path still applies. Injected facts fail safe: a non-covering fact is ignored,
+    and a should-cover-but-doesn't yields escalate (never an unsafe close — the floor guards that).
+    """
+    from soctalk.core.ir.authorization_store import list_current_facts
+    from soctalk.models.authorization import AuthorizationContext
+
+    scope = _discriminating_entities(entities)
+    host = _first_value(scope, "host")
+    if not host:
+        return None
+    facts = await list_current_facts(db, tenant_id=tenant_id)
+    if not facts:
+        return None
+    activity = AuthorizationActivity(
+        track=AuthorizationTrack.ACCOUNT,
+        host=host,
+        account=_first_value(scope, "user") or "",
+        action=rule_id or "unknown",
+        time=ts,
+    )
+    return AuthorizationContext(
+        tenant=str(tenant_id), activity=activity, facts=facts
+    ).model_dump(mode="json")
