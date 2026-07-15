@@ -44,7 +44,7 @@ function authoredRow(id: string) {
 	};
 }
 
-test.describe('Playbooks page', () => {
+test.describe('Triage Policies page', () => {
 	test.beforeEach(async ({ page }) => {
 		// authored store, mutated by POST so the create flow round-trips
 		const authored = [authoredRow('existing-pb')];
@@ -67,14 +67,14 @@ test.describe('Playbooks page', () => {
 				})
 			});
 		});
-		await page.route('**/api/mssp/playbooks', async (route) => {
+		await page.route('**/api/mssp/triage-policies', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
 				body: JSON.stringify(BUILTINS)
 			});
 		});
-		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+		await page.route('**/api/mssp/tenants/*/triage-policies', async (route) => {
 			const req = route.request();
 			if (req.method() === 'POST') {
 				const body = JSON.parse(req.postData() || '{}');
@@ -96,8 +96,8 @@ test.describe('Playbooks page', () => {
 	});
 
 	test('renders the built-in playbooks with status + source', async ({ page }) => {
-		await page.goto('/playbooks');
-		await expect(page).toHaveTitle(/Playbooks/);
+		await page.goto('/triage-policies');
+		await expect(page).toHaveTitle(/Triage Policies/);
 		await expect(page.getByText('dual-use-privileged-exec')).toBeVisible();
 		await expect(page.getByText('agent-health-operational')).toBeVisible();
 		// source + status badges render
@@ -105,7 +105,7 @@ test.describe('Playbooks page', () => {
 	});
 
 	test('expands a built-in to show its gates', async ({ page }) => {
-		await page.goto('/playbooks');
+		await page.goto('/triage-policies');
 		await page.getByText('dual-use-privileged-exec').click();
 		await expect(page.getByText('Required steps before verdict:')).toBeVisible();
 		await expect(page.getByText('gather_authorization_context')).toBeVisible();
@@ -113,14 +113,14 @@ test.describe('Playbooks page', () => {
 	});
 
 	test('lists authored playbooks for the pinned tenant', async ({ page }) => {
-		await page.goto('/playbooks');
-		await expect(page.getByRole('heading', { name: 'Authored playbooks' })).toBeVisible();
+		await page.goto('/triage-policies');
+		await expect(page.getByRole('heading', { name: 'Authored triage policies' })).toBeVisible();
 		await expect(page.getByText('existing-pb')).toBeVisible();
 		await expect(page.getByRole('button', { name: '+ New playbook' })).toBeVisible();
 	});
 
 	test('creates an authored playbook via the editor', async ({ page }) => {
-		await page.goto('/playbooks');
+		await page.goto('/triage-policies');
 		await page.getByRole('button', { name: '+ New playbook' }).click();
 		const editor = page.locator('textarea');
 		await expect(editor).toBeVisible();
@@ -133,7 +133,7 @@ test.describe('Playbooks page', () => {
 
 	test('activates an authored playbook (governs) and shows the rollout note', async ({ page }) => {
 		let active = false;
-		await page.route('**/api/mssp/tenants/*/playbooks/*/activate', async (route) => {
+		await page.route('**/api/mssp/tenants/*/triage-policies/*/activate', async (route) => {
 			active = true;
 			await route.fulfill({
 				status: 200,
@@ -141,14 +141,14 @@ test.describe('Playbooks page', () => {
 				body: JSON.stringify({ ...authoredRow('existing-pb'), status: 'active' })
 			});
 		});
-		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+		await page.route('**/api/mssp/tenants/*/triage-policies', async (route) => {
 			await route.fulfill({
 				status: 200,
 				contentType: 'application/json',
 				body: JSON.stringify([{ ...authoredRow('existing-pb'), status: active ? 'active' : 'shadow' }])
 			});
 		});
-		await page.goto('/playbooks');
+		await page.goto('/triage-policies');
 		await page.getByRole('button', { name: 'Activate' }).click();
 		await expect(page.getByText(/worker rollout was queued/)).toBeVisible();
 		await expect(page.getByRole('button', { name: 'Deactivate' })).toBeVisible();
@@ -156,7 +156,7 @@ test.describe('Playbooks page', () => {
 
 	test('surfaces a server validation error', async ({ page }) => {
 		// override POST to reject
-		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+		await page.route('**/api/mssp/tenants/*/triage-policies', async (route) => {
 			if (route.request().method() === 'POST') {
 				await route.fulfill({
 					status: 400,
@@ -167,10 +167,39 @@ test.describe('Playbooks page', () => {
 				await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
 			}
 		});
-		await page.goto('/playbooks');
+		await page.goto('/triage-policies');
 		await page.getByRole('button', { name: '+ New playbook' }).click();
 		await page.locator('textarea').fill(JSON.stringify({ id: 'x', priority: 5 }));
 		await page.getByRole('button', { name: 'Save', exact: true }).click();
 		await expect(page.getByText('priority must be >= 60')).toBeVisible();
 	});
+
+	test('visual editor creates a policy at /triage-policies/editor', async ({ page }) => {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		let captured: any = null;
+		await page.route('**/api/mssp/tenants/*/triage-policies', async (route) => {
+			if (route.request().method() === 'POST') {
+				captured = JSON.parse(route.request().postData() || '{}');
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({
+						playbook_id: captured?.definition?.id,
+						revision: 1,
+						status: 'shadow',
+						definition: captured?.definition
+					})
+				});
+			} else {
+				await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+			}
+		});
+		await page.goto('/triage-policies/editor');
+		await page.getByPlaceholder('my-triage-policy').fill('editor-smoke-pb');
+		await page.getByPlaceholder('sudo, su').fill('authentication_success, sshd');
+		await page.getByRole('button', { name: /Create \(shadow\)/ }).click();
+		await expect.poll(() => captured?.definition?.id).toBe('editor-smoke-pb');
+		expect(captured?.definition?.applies_to?.rule_groups).toContain('authentication_success');
+	});
+
 });

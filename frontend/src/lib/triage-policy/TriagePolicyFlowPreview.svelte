@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Read-only projection of a playbook definition onto the guard pipeline.
+	// Read-only projection of a triage-policy definition onto the guard pipeline.
 	// The document is the source of truth; this canvas is derived, never edited
 	// directly (Windmill/Kestra pattern). Clicking a guardrail node emits
 	// `focus` so the editor can scroll to that rule's form. Positions come from
@@ -148,7 +148,7 @@
 			chainNode('alert', { title: 'Intake → LLM verdict draft', kind: 'verdict' });
 		} else {
 			chainNode('alert', {
-				title: 'Alert matches playbook',
+				title: 'Alert matches policy',
 				subtitle: matchSummary(def),
 				kind: 'alert'
 			});

@@ -35,7 +35,7 @@
 	let loaded = false;
 	let loadError: string | null = null;
 
-	let pid = 'my-playbook';
+	let pid = 'my-triage-policy';
 	let priority = 70;
 	let version = 1;
 	let lifecycleStatus: 'draft' | 'shadow' = 'shadow';
@@ -212,12 +212,12 @@
 			// listAuthored + find: there is no single-get endpoint yet.
 			const all = await api.triagePolicies.listAuthored(tid);
 			const row = all.find((p) => p.playbook_id === id);
-			if (!row) throw new Error(`playbook '${id}' not found for this tenant`);
+			if (!row) throw new Error(`triage policy '${id}' not found for this tenant`);
 			lifecycleStatus = row.status === 'draft' ? 'draft' : 'shadow';
 			loadDefinition(row.definition);
 			loaded = true;
 		} catch (e) {
-			loadError = e instanceof Error ? e.message : 'Failed to load playbook';
+			loadError = e instanceof Error ? e.message : 'Failed to load triage policy';
 		}
 	}
 
@@ -370,7 +370,7 @@
 			const doc = definition as unknown as Record<string, unknown>;
 			if (mode === 'create') await api.triagePolicies.createAuthored(tenantId, doc, lifecycleStatus);
 			else await api.triagePolicies.updateAuthored(tenantId, editId!, doc, lifecycleStatus);
-			goto('/playbooks');
+			goto('/triage-policies');
 		} catch (e) {
 			saveError = e instanceof Error ? e.message : 'Save failed.';
 		} finally {
@@ -393,7 +393,7 @@
 	<h1 class="h2">{mode === 'edit' ? `Edit triage policy` : 'New triage policy'}</h1>
 	<div class="flex gap-2">
 		<button class="btn btn-sm variant-soft" on:click={openJson}>View as JSON</button>
-		<a class="btn btn-sm variant-soft" href="/playbooks">Cancel</a>
+		<a class="btn btn-sm variant-soft" href="/triage-policies">Cancel</a>
 		<button
 			class="btn btn-sm variant-filled-primary"
 			on:click={save}
@@ -404,7 +404,7 @@
 	</div>
 </div>
 <p class="opacity-60 text-sm mb-4">
-	Authored playbooks run in shadow: matched and evaluated for audit, enforcing nothing, until
+	Authored triage policies run in shadow: matched and evaluated for audit, enforcing nothing, until
 	promoted. The safety floor (IOC / contradicted-authorization vetoes) always applies and cannot
 	be weakened here — guardrails can only raise suspicion, never suppress it.
 </p>
@@ -448,7 +448,7 @@
 			<section class="card p-4 space-y-3">
 				<h3 class="h4">Which alerts does it own?</h3>
 				<p class="text-xs opacity-60">
-					Criteria are OR'd — the playbook applies when any one matches.
+					Criteria are OR'd — the triage policy applies when any one matches.
 				</p>
 				<label class="label text-sm">
 					<span class="opacity-70">Wazuh rule groups (comma-separated)</span>
@@ -666,7 +666,7 @@
 			<section class="card p-4 space-y-2">
 				<h3 class="h4">Try it</h3>
 				<p class="text-xs opacity-60">
-					Set a sample verdict context and see what this playbook would do.
+					Set a sample verdict context and see what this triage policy would do.
 				</p>
 				<div class="grid grid-cols-2 gap-2 text-sm">
 					<label class="label">

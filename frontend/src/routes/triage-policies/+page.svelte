@@ -3,7 +3,7 @@
 	import { api, type TriagePolicy, type AuthoredTriagePolicy } from '$lib/api/client';
 	import { currentTenantId } from '$lib/stores';
 
-	let playbooks: TriagePolicy[] = [];
+	let policies: TriagePolicy[] = [];
 	let loading = true;
 	let error: string | null = null;
 	let expanded = new Set<string>();
@@ -129,13 +129,13 @@
 				: 'variant-soft';
 	}
 
-	onMount(loadPlaybooks);
+	onMount(loadPolicies);
 
-	async function loadPlaybooks() {
+	async function loadPolicies() {
 		loading = true;
 		error = null;
 		try {
-			playbooks = await api.triagePolicies.list();
+			policies = await api.triagePolicies.list();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load triage policies';
 		} finally {
@@ -165,8 +165,8 @@
 		return parts.join('  ·  ') || '—';
 	}
 
-	$: activeCount = playbooks.filter((p) => p.status === 'active').length;
-	$: shadowCount = playbooks.filter((p) => p.status === 'shadow').length;
+	$: activeCount = policies.filter((p) => p.status === 'active').length;
+	$: shadowCount = policies.filter((p) => p.status === 'shadow').length;
 </script>
 
 <svelte:head>
@@ -175,7 +175,7 @@
 
 <div class="flex items-center justify-between mb-2">
 	<h1 class="h2">Triage Policies</h1>
-	<button class="btn variant-soft btn-sm" on:click={loadPlaybooks} disabled={loading}>
+	<button class="btn variant-soft btn-sm" on:click={loadPolicies} disabled={loading}>
 		{#if loading}
 			<span
 				class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"
@@ -196,13 +196,13 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error"><span>Error: {error}</span></div>
-{:else if playbooks.length === 0}
+{:else if policies.length === 0}
 	<div class="card p-8 text-center opacity-60">No triage policies configured.</div>
 {:else}
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
 		<div class="card p-3">
 			<h4 class="text-xs opacity-60 uppercase tracking-wide">Total</h4>
-			<p class="text-2xl font-bold">{playbooks.length}</p>
+			<p class="text-2xl font-bold">{policies.length}</p>
 		</div>
 		<div class="card p-3">
 			<h4 class="text-xs opacity-60 uppercase tracking-wide">Active</h4>
@@ -215,7 +215,7 @@
 	</div>
 
 	<div class="grid gap-3">
-		{#each playbooks as pb (pb.id)}
+		{#each policies as pb (pb.id)}
 			{@const isOpen = expanded.has(pb.id)}
 			<div class="card">
 				<button
@@ -349,7 +349,7 @@
 		<h2 class="h3">Authored triage policies</h2>
 		{#if tenantId}
 			<div class="flex gap-2">
-				<a class="btn btn-sm variant-filled-primary" href="/triage-policies/editor">+ New playbook</a>
+				<a class="btn btn-sm variant-filled-primary" href="/triage-policies/editor">+ New triage policy</a>
 				<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">
 					JSON
 				</button>
