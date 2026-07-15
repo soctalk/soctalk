@@ -1,4 +1,4 @@
-"""Authored playbooks: DB-backed shadow/draft CRUD + export (#44 follow-on).
+"""Authored triage policies: DB-backed shadow/draft CRUD + export (#44 follow-on).
 
 Round-trip against Postgres via the route handlers, fail-closed validation, and the role
 gate (read = ANALYST+, write = admin-only).
@@ -172,7 +172,7 @@ async def test_activate_deactivate_governs_and_reconciles(
 async def test_edit_active_playbook_stays_active(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """Editing an active playbook must keep it governing (not silently drop to shadow) and
+    """Editing an active triage policy must keep it governing (not silently drop to shadow) and
     re-roll — the Codex-flagged footgun."""
     t, _ = seed_two_tenants
     req = _req(mssp_session)
@@ -213,7 +213,7 @@ async def test_edit_id_mismatch_and_unknown(mssp_session: AsyncSession, seed_two
     with pytest.raises(HTTPException) as ei:  # id in body != path
         await update_authored_triage_policy_route(t.tenant_id, "path-id", _valid(id="body-id"), req)
     assert ei.value.status_code == 400
-    with pytest.raises(HTTPException) as ei2:  # editing a non-existent playbook
+    with pytest.raises(HTTPException) as ei2:  # editing a non-existent triage policy
         await update_authored_triage_policy_route(t.tenant_id, "ghost", _valid(id="ghost"), req)
     assert ei2.value.status_code == 404
 

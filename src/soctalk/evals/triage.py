@@ -57,14 +57,20 @@ def load_cases(path: Path | str = DEFAULT_GOLDEN_PATH) -> list[GoldenCase]:
     cases = []
     for c in raw["cases"]:
         kind = c.get("kind", "both")
-        if kind not in ("routing", "verdict", "both", "playbook"):
+        # "triage policy" is the deprecated alias of the canonical "triage_policy" kind.
+        if kind not in ("routing", "verdict", "both", "playbook", "triage_policy"):
             raise ValueError(f"case {c.get('id')}: invalid kind {kind!r}")
         if kind in ("routing", "both") and not c.get("expect", {}).get("routing_actions"):
             raise ValueError(f"case {c.get('id')}: routing case needs expect.routing_actions")
         if kind in ("verdict", "both") and not c.get("expect", {}).get("verdict_decisions"):
             raise ValueError(f"case {c.get('id')}: verdict case needs expect.verdict_decisions")
-        if kind == "playbook" and not c.get("expect", {}).get("playbook_route"):
-            raise ValueError(f"case {c.get('id')}: playbook case needs expect.playbook_route")
+        if kind in ("playbook", "triage_policy") and not (
+            c.get("expect", {}).get("triage_policy_route")
+            or c.get("expect", {}).get("playbook_route")
+        ):
+            raise ValueError(
+                f"case {c.get('id')}: triage_policy case needs expect.triage_policy_route"
+            )
         cases.append(
             GoldenCase(
                 id=c["id"],
@@ -128,12 +134,12 @@ def score_routing(case: GoldenCase, action: str) -> TrialResult:
 
 
 def score_triage_policy(case: GoldenCase) -> TrialResult:
-    """Deterministic playbook-layer scoring (issue #43) — no LLM, no tokens.
+    """Deterministic triage policy-layer scoring (issue #43) — no LLM, no tokens.
 
-    Runs the resolver match + the resolve-playbook route over the fabricated
+    Runs the resolver match + the resolve-triage policy route over the fabricated
     investigation and scores the route (``operational_close`` = the deterministic
     disposition fired and the case never reaches the model; ``supervisor`` = full
-    triage). ``expect.triage_policy_id`` optionally pins WHICH playbook matched. This
+    triage). ``expect.triage_policy_id`` optionally pins WHICH triage policy matched. This
     keeps "class X never reaches the LLM" pinned in the same golden set that
     scores the LLM's own judgment.
     """
@@ -146,18 +152,21 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
         state["triage_policy"] = state["playbook"] = triage_policy.model_dump()
     route = route_from_resolve_triage_policy(state)
 
-    expected = [str(r) for r in case.expect["playbook_route"]]
+    expected = [
+        str(r)
+        for r in (case.expect.get("triage_policy_route") or case.expect["playbook_route"])
+    ]
     expected_id = case.expect.get("triage_policy_id")
     matched_id = triage_policy.id if triage_policy else None
     passed = route in expected and (expected_id is None or matched_id == expected_id)
     detail = ""
     if expected_id is not None and matched_id != expected_id:
-        detail = f"matched playbook {matched_id!r}, expected {expected_id!r}"
+        detail = f"matched triage policy {matched_id!r}, expected {expected_id!r}"
     return TrialResult(
         case_id=case.id,
-        kind="playbook",
+        kind="triage_policy",
         passed=passed,
-        got=f"{route} ({matched_id or 'no-playbook'})",
+        got=f"{route} ({matched_id or 'no-triage-policy'})",
         expected=expected,
         detail=detail,
     )
@@ -182,7 +191,7 @@ def score_verdict(case: GoldenCase, decision: str, confidence: float) -> TrialRe
 
 def summarize(results: list[TrialResult]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for kind in ("routing", "verdict", "playbook"):
+    for kind in ("routing", "verdict", "triage_policy"):
         subset = [r for r in results if r.kind == kind]
         if subset:
             # A trial whose `got` starts with ERROR: crashed rather than
@@ -208,12 +217,12 @@ def summarize(results: list[TrialResult]) -> dict[str, Any]:
 
 
 async def _run_routing_trial(case: GoldenCase, config: Any) -> TrialResult:
-    from soctalk.triage_policy.registry import match_triage_policy
     from soctalk.supervisor.node import _build_context_summary, _get_supervisor_decision
+    from soctalk.triage_policy.registry import match_triage_policy
 
     state = build_supervisor_state(case)
-    # Production-equivalence (#45): resolve the playbook exactly as the graph's
-    # entry node would, so a playbook-matched case runs with the same narrowed
+    # Production-equivalence (#45): resolve the triage policy exactly as the graph's
+    # entry node would, so a triage policy-matched case runs with the same narrowed
     # action schema production uses. Without this, the harness could score an
     # action production can no longer sample.
     triage_policy = match_triage_policy(case.investigation)
@@ -254,7 +263,9 @@ async def run_evals(
 
     # Triage-policy cases are deterministic (no LLM): score once, outside the
     # semaphore/trials machinery — repeated trials of a pure function are noise.
-    deterministic = [score_triage_policy(c) for c in cases if c.kind == "playbook"]
+    deterministic = [
+        score_triage_policy(c) for c in cases if c.kind in ("playbook", "triage_policy")
+    ]
 
     tasks = []
     for case in cases:
@@ -337,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         ok = False
     # Triage-policy cases are deterministic — anything below 100% is a code regression,
     # not model variance, so there is no tunable threshold.
-    if "playbook" in summary and summary["playbook"]["accuracy"] < 1.0:
+    if "triage_policy" in summary and summary["triage_policy"]["accuracy"] < 1.0:
         ok = False
     return 0 if ok else 1
 

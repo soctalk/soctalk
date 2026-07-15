@@ -696,7 +696,7 @@ def test_render_triage_policy_values_env_gated_and_validated(tmp_path, monkeypat
     assert list(out) == ["good.yaml"], "invalid + foreign files must not ship"
     assert "custom-ops-noise" in out["good.yaml"]
 
-    # and render_tenant_values threads it into runsWorker.playbooks
+    # and render_tenant_values threads it into runsWorker.triagePolicies
     v = _values_with_triage_policies()
     assert list(v["runsWorker"]["triagePolicies"]) == ["good.yaml"]
 
@@ -773,7 +773,7 @@ def test_render_triage_policy_values_codex_fixes(tmp_path, monkeypatch):
     monkeypatch.setenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", str(tmp_path))
 
     out = render_triage_policy_values("acme", tenant_id)
-    assert "byid.yaml" in out, "UUID-scoped playbook must ship to its tenant"
+    assert "byid.yaml" in out, "UUID-scoped triage policy must ship to its tenant"
     assert "odd.yamml" not in out, "schema-rejected filename must be skipped"
     total = sum(len(v.encode()) for v in out.values())
     assert total <= 800 * 1024, "total payload must respect the ConfigMap budget"

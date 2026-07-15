@@ -1,7 +1,7 @@
 """TriagePolicy layer (issue #43) — the guardrails, in code, DB-free.
 
 Covers the pure decision surface case-for-case (same discipline as the expectedness
-parity test): playbook matching, the pre-verdict gate, the guard-result classifier,
+parity test): triage policy matching, the pre-verdict gate, the guard-result classifier,
 the post-verdict guard node, the worker-plane safety floor, and a stubbed-LLM
 end-to-end run of the compiled graph proving the reroute + override actually wire.
 The IR-plane floor (DB lookups) is covered by the integration triage tests.
@@ -62,8 +62,8 @@ from soctalk.triage_policy.operational import (
     operational_close_vetoes,
 )
 from soctalk.triage_policy.registry import (
-    AGENT_HEALTH_PLAYBOOK,
-    PRIVILEGED_EXEC_PLAYBOOK,
+    AGENT_HEALTH_TRIAGE_POLICY,
+    PRIVILEGED_EXEC_TRIAGE_POLICY,
     match_triage_policy,
 )
 
@@ -145,14 +145,14 @@ def _sudo_investigation(ctx: AuthorizationContext | None = None) -> dict[str, An
 
 def test_match_playbook_on_sudo_rule_groups():
     pb = match_triage_policy(_sudo_investigation())
-    assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert pb is not None and pb.id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
 
 
 def test_match_playbook_on_account_track_context():
     inv = _sudo_investigation(_context([]))
     inv["alerts"][0]["rule_groups"] = ["fim"]  # no group match — track carries it
     pb = match_triage_policy(inv)
-    assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert pb is not None and pb.id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
 
 
 def test_match_playbook_none_for_unrelated_alert():
@@ -171,7 +171,7 @@ def _gate_state(steps_run: list[str] | None = None, playbook: bool = True) -> di
         "supervisor_decision": {"next_action": "VERDICT"},
     }
     if playbook:
-        state["playbook"] = PRIVILEGED_EXEC_PLAYBOOK.model_dump()
+        state["playbook"] = PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump()
     if steps_run is not None:
         state["playbook_steps_run"] = steps_run
     return state
@@ -209,7 +209,7 @@ def test_unknown_required_step_is_skipped_not_deadlocked():
 def test_gate_reroutes_supervisor_close_too():
     """Codex round-1 blocker + #45: the supervisor's auto-FP CLOSE maps to
     close_fp downstream, so it must not skip the required evidence step — and
-    for the dual-use playbook CLOSE is not even a legal action: it remaps to
+    for the dual-use triage policy CLOSE is not even a legal action: it remaps to
     VERDICT, so the reasoning tier makes the call after the evidence step."""
     state = _gate_state()
     state["supervisor_decision"] = {"next_action": "CLOSE"}
@@ -333,7 +333,7 @@ def test_guard_never_touches_absent_or_non_close():
 async def test_resolve_playbook_node_writes_state():
     state = {"investigation": _sudo_investigation()}
     state = await resolve_triage_policy_node(state)
-    assert state["playbook"]["id"] == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert state["playbook"]["id"] == PRIVILEGED_EXEC_TRIAGE_POLICY.id
     state2 = await resolve_triage_policy_node(
         {"investigation": {"alerts": [{"rule_groups": ["web"]}]}}
     )
@@ -362,7 +362,7 @@ async def test_gather_node_stamps_engine_components():
 async def test_verdict_guard_node_overrides_contradicted_close_with_audit():
     expired = _ticket(valid_until=datetime(2026, 7, 13, tzinfo=UTC))
     state = {
-        "playbook": PRIVILEGED_EXEC_PLAYBOOK.model_dump(),
+        "playbook": PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump(),
         "investigation": _sudo_investigation(_context([expired])),
         "verdict": _verdict("close"),
     }
@@ -371,7 +371,7 @@ async def test_verdict_guard_node_overrides_contradicted_close_with_audit():
     assert state["verdict_overridden_by_guard"] is True
     assert state["verdict"]["recommendation"].startswith("[GUARD OVERRIDE")
     (audit,) = state["playbook_audit"]
-    assert audit["triage_policy"] == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert audit["triage_policy"] == PRIVILEGED_EXEC_TRIAGE_POLICY.id
     assert audit["llm_draft_decision"] == "close"
     assert audit["final_decision"] == "escalate"
     assert audit["authz_class"] == "contradicted"
@@ -527,8 +527,8 @@ async def test_graph_reroutes_gather_then_guard_overrides_close(monkeypatch):
 
 async def test_graph_supervisor_close_floor_backstop_without_playbook(monkeypatch):
     """Codex round-1 blocker, end-to-end: the supervisor short-circuits with CLOSE
-    on a NON-playbook run carrying a contradicted FIM-track authorization context
-    (a playbook-governed run can no longer CLOSE at all — #45 legal_actions). No
+    on a NON-triage policy run carrying a contradicted FIM-track authorization context
+    (a triage policy-governed run can no longer CLOSE at all — #45 legal_actions). No
     verdict guard runs (no verdict), so the worker floor is the last line: it
     turns the close_fp into an escalate on the contradicted paperwork."""
     from soctalk.models.authorization import ChangeKind
@@ -561,13 +561,13 @@ async def test_graph_supervisor_close_floor_backstop_without_playbook(monkeypatc
     )
     ctx = AuthorizationContext(activity=fim_activity, facts=[expired_cr])
     inv = _sudo_investigation()
-    inv["alerts"][0]["rule_groups"] = ["ossec", "syscheck"]  # no playbook match
+    inv["alerts"][0]["rule_groups"] = ["ossec", "syscheck"]  # no triage policy match
     inv["authorization_context"] = ctx.model_dump(mode="json")
 
     graph = build_secops_graph()
     final = await graph.ainvoke({"investigation": inv}, {"recursion_limit": 50})
 
-    assert "playbook" not in final  # FIM track matches no built-in playbook
+    assert "playbook" not in final  # FIM track matches no built-in triage policy
     assert calls == ["supervisor"]
     assert "verdict" not in final or not final.get("verdict")
 
@@ -604,7 +604,7 @@ async def test_graph_without_playbook_goes_straight_to_verdict(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# agent-health-operational playbook (the representative second playbook)
+# agent-health-operational triage policy (the representative second triage policy)
 # ---------------------------------------------------------------------------
 
 
@@ -632,21 +632,21 @@ def _flooding_investigation(**alert_overrides: Any) -> dict[str, Any]:
 
 def test_match_playbook_agent_health_by_group_and_rule_id():
     pb = match_triage_policy(_flooding_investigation())
-    assert pb is not None and pb.id == AGENT_HEALTH_PLAYBOOK.id
-    # rule id alone still ROUTES to the playbook when the groups drift — but the
+    assert pb is not None and pb.id == AGENT_HEALTH_TRIAGE_POLICY.id
+    # rule id alone still ROUTES to the triage policy when the groups drift — but the
     # deterministic close then fails class attestation (tested below), so the
-    # only effect is playbook governance, never a close
+    # only effect is triage policy governance, never a close
     pb2 = match_triage_policy(_flooding_investigation(rule_groups=["wazuh"]))
-    assert pb2 is not None and pb2.id == AGENT_HEALTH_PLAYBOOK.id
+    assert pb2 is not None and pb2.id == AGENT_HEALTH_TRIAGE_POLICY.id
 
 
 def test_security_playbook_outranks_operational_on_double_match():
     inv = _flooding_investigation(rule_groups=["sudo", "agent_flooding"])
     pb = match_triage_policy(inv)
-    assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert pb is not None and pb.id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
 
 
-_CLASS_GROUPS = AGENT_HEALTH_PLAYBOOK.applies_to.rule_groups
+_CLASS_GROUPS = AGENT_HEALTH_TRIAGE_POLICY.applies_to.rule_groups
 
 
 def test_operational_vetoes_mirror_security_indicators():
@@ -687,7 +687,7 @@ def test_operational_close_requires_every_alert_to_attest_the_class():
     )
     assert VETO_UNATTESTED_CLASS in operational_close_vetoes(mixed, _CLASS_GROUPS)
     assert route_from_resolve_triage_policy(
-        {"playbook": AGENT_HEALTH_PLAYBOOK.model_dump(), "investigation": mixed}
+        {"playbook": AGENT_HEALTH_TRIAGE_POLICY.model_dump(), "investigation": mixed}
     ) == "supervisor"
 
     id_only = _flooding_investigation(rule_groups=["wazuh"])
@@ -699,7 +699,7 @@ def test_operational_close_requires_every_alert_to_attest_the_class():
 
 def test_route_from_resolve_playbook_fails_closed_toward_triage():
     clean = {
-        "playbook": AGENT_HEALTH_PLAYBOOK.model_dump(),
+        "playbook": AGENT_HEALTH_TRIAGE_POLICY.model_dump(),
         "investigation": _flooding_investigation(),
     }
     assert route_from_resolve_triage_policy(clean) == "operational_close"
@@ -707,27 +707,27 @@ def test_route_from_resolve_playbook_fails_closed_toward_triage():
     vetoed = dict(clean)
     vetoed["investigation"] = _flooding_investigation(mitre={"ids": ["T1499"]})
     assert route_from_resolve_triage_policy(vetoed) == "supervisor"
-    # no playbook / no disposition / unknown capability name -> full triage
+    # no triage policy / no disposition / unknown capability name -> full triage
     assert route_from_resolve_triage_policy({"investigation": {}}) == "supervisor"
     no_disp = dict(clean)
-    no_disp["playbook"] = PRIVILEGED_EXEC_PLAYBOOK.model_dump()
+    no_disp["playbook"] = PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump()
     assert route_from_resolve_triage_policy(no_disp) == "supervisor"
     unknown = dict(clean)
-    unknown["playbook"] = {**AGENT_HEALTH_PLAYBOOK.model_dump(),
+    unknown["playbook"] = {**AGENT_HEALTH_TRIAGE_POLICY.model_dump(),
                            "deterministic_disposition": "wipe_all_alerts"}
     assert route_from_resolve_triage_policy(unknown) == "supervisor"
 
 
 async def test_operational_close_node_writes_close_and_audit():
     state = {
-        "playbook": AGENT_HEALTH_PLAYBOOK.model_dump(),
+        "playbook": AGENT_HEALTH_TRIAGE_POLICY.model_dump(),
         "investigation": _flooding_investigation(),
     }
     state = await operational_close_node(state)
     assert state["supervisor_decision"]["next_action"] == "CLOSE"
     assert state["operational_close"] is True
     (audit,) = state["playbook_audit"]
-    assert audit["triage_policy"] == AGENT_HEALTH_PLAYBOOK.id
+    assert audit["triage_policy"] == AGENT_HEALTH_TRIAGE_POLICY.id
     assert audit["disposition"] == CLOSE_OPERATIONAL
 
 
@@ -843,7 +843,7 @@ def test_playbook_phase_flips_on_required_steps():
 
 
 def test_legal_actions_unknown_names_drop_and_void():
-    """Unknown action names in playbook data are dropped; a set that drops to
+    """Unknown action names in triage policy data are dropped; a set that drops to
     empty voids the constraint entirely — authoring errors degrade to full
     triage, never to a wedged run."""
     from soctalk.triage_policy.gate import legal_actions_for
@@ -966,7 +966,7 @@ async def test_verdict_guard_node_interrupt_keeps_draft_and_flags(monkeypatch):
     from soctalk.graph.builder import route_from_verdict
 
     state = {
-        "playbook": PRIVILEGED_EXEC_PLAYBOOK.model_dump(),
+        "playbook": PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump(),
         "investigation": _sudo_investigation(_context([_ticket(), _pci_asset()])),
         "verdict": _verdict("close"),
     }
@@ -1020,7 +1020,7 @@ async def test_verdict_guard_clears_stale_interrupt_on_retry():
     """A prior pass's interrupt must not survive into a later, uninterrupted
     verdict (human MORE_INFO -> supervisor -> new verdict path)."""
     state = {
-        "playbook": PRIVILEGED_EXEC_PLAYBOOK.model_dump(),
+        "playbook": PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump(),
         "investigation": _sudo_investigation(_context([_ticket(), _pci_asset()])),
         "verdict": _verdict("close"),
     }
@@ -1144,7 +1144,7 @@ def test_registry_loads_validates_and_shadow_defaults(tmp_path, monkeypatch):
     )
     # an invalid file is rejected whole and must not disturb the rest
     _write_playbook_yaml(tmp_path, "bad.yaml", "id: broken\nnot_a_field: true\n")
-    # a foreign-tenant playbook is skipped
+    # a foreign-tenant triage policy is skipped
     _write_playbook_yaml(
         tmp_path, "foreign.yaml",
         "id: foreign-pb\ntenant: someone-else\napplies_to:\n  rule_groups: [webnoise]\n",
@@ -1155,14 +1155,14 @@ def test_registry_loads_validates_and_shadow_defaults(tmp_path, monkeypatch):
     reset_registry_cache()
     try:
         inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
-        # shadow playbooks never govern...
+        # shadow triage policies never govern...
         assert match_triage_policy(inv) is None
         # ...but they are matched for audit
         shadow = match_shadow_triage_policies(inv)
         assert [p.id for p in shadow] == ["custom-web-noise"]
         # built-ins unaffected by the file registry
         pb = match_triage_policy(_sudo_investigation())
-        assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert pb is not None and pb.id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
     finally:
         reset_registry_cache()
 
@@ -1179,9 +1179,9 @@ def test_registry_active_file_playbook_governs(tmp_path, monkeypatch):
         inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
         pb = match_triage_policy(inv)
         assert pb is not None and pb.id == "custom-web-noise"
-        # priority: built-in security playbook still outranks it on double match
+        # priority: built-in security triage policy still outranks it on double match
         both = {"alerts": [{"rule_groups": ["webnoise", "sudo"]}]}
-        assert match_triage_policy(both).id == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert match_triage_policy(both).id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
     finally:
         reset_registry_cache()
 
@@ -1259,9 +1259,9 @@ def test_declarative_interrupt_and_confidence_condition():
 
 
 async def test_shadow_playbook_guardrails_audit_only(tmp_path, monkeypatch):
-    """End-to-end shadow: a shadow playbook matches, its guardrail WOULD fire on
+    """End-to-end shadow: a shadow triage policy matches, its guardrail WOULD fire on
     the contradicted close, the audit records it — and the enforced outcome is
-    exactly what the active built-in playbook dictates, untouched by shadow."""
+    exactly what the active built-in triage policy dictates, untouched by shadow."""
     from soctalk.triage_policy.registry import reset_registry_cache
 
     _write_playbook_yaml(tmp_path, "shadow-sudo.yaml", """
@@ -1283,12 +1283,12 @@ guardrails:
         state = {"investigation": _sudo_investigation(_context([_ticket()]))}
         state = await resolve_triage_policy_node(state)
         # shadow status: despite outranking priority it does NOT govern
-        assert state["playbook"]["id"] == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert state["playbook"]["id"] == PRIVILEGED_EXEC_TRIAGE_POLICY.id
         assert state["playbook_shadow"][0]["id"] == "shadow-sudo-strict"
 
         state["verdict"] = _verdict("close")
         state = await verdict_guard_node(state)
-        # enforced result: covered close commits (active playbook has no such rule)
+        # enforced result: covered close commits (active triage policy has no such rule)
         assert state["verdict"]["decision"] == "close"
         assert state.get("verdict_overridden_by_guard") is None
         # shadow result: recorded, attributable, non-binding
@@ -1314,8 +1314,8 @@ def test_validate_cli(tmp_path, capsys):
 
 
 def test_file_playbook_priority_floor_rejected(tmp_path, monkeypatch):
-    """A file playbook may never outrank the built-ins: priority below the floor
-    rejects the file, so an authored sudo playbook cannot strip the dual-use
+    """A file triage policy may never outrank the built-ins: priority below the floor
+    rejects the file, so an authored sudo triage policy cannot strip the dual-use
     protections by winning the match."""
     from soctalk.triage_policy.registry import match_triage_policy, reset_registry_cache
 
@@ -1331,7 +1331,7 @@ applies_to:
     reset_registry_cache()
     try:
         pb = match_triage_policy(_sudo_investigation())
-        assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert pb is not None and pb.id == PRIVILEGED_EXEC_TRIAGE_POLICY.id
     finally:
         reset_registry_cache()
 
@@ -1371,7 +1371,7 @@ async def test_guard_manufactured_nmi_counts_as_retry():
         "effect": "override", "to": "needs_more_info", "reason": "second look",
     }]
     state = {
-        "playbook": {**PRIVILEGED_EXEC_PLAYBOOK.model_dump(), "guardrails": rules},
+        "playbook": {**PRIVILEGED_EXEC_TRIAGE_POLICY.model_dump(), "guardrails": rules},
         "investigation": _sudo_investigation(_context([_ticket()])),
         "verdict": _verdict("close"),
     }
@@ -1395,7 +1395,7 @@ def test_condition_list_literal_cap():
 
 def test_shadow_audit_mirrors_active_semantics():
     """Codex #44 finding: shadow evidence must match what the rule would do when
-    active — non-raising overrides are skipped, first match wins per playbook."""
+    active — non-raising overrides are skipped, first match wins per triage policy."""
     from soctalk.triage_policy.guard import shadow_guardrail_audits
 
     ctx = {"verdict": "escalate", "authz": {"class": "covered"}}

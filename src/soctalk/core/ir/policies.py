@@ -18,7 +18,6 @@ import yaml
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 # ---------------------------------------------------------------------------
 # Install defaults
 # ---------------------------------------------------------------------------
@@ -32,7 +31,7 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     "reopen_window_days": 30,
     # Safety-floor members (issue #46) — enforced by the executor at every
     # auto-close site (rules band, memoized close, worker close_fp incl. the
-    # playbook operational disposition), never expressible in playbook data:
+    # triage policy operational disposition), never expressible in triage policy data:
     # ``auto_close_kill`` — per-tenant kill switch: True flips every automatic
     #   close to promote/escalate, no rollout needed (the install-wide analogue
     #   is the SOCTALK_AUTO_CLOSE_KILL env on the API).

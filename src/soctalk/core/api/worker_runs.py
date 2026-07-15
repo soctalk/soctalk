@@ -82,7 +82,11 @@ async def _record_verdict_memo(
 # chat handler can enforce the same ceiling. Re-export for back-compat.
 from soctalk.core.cost import (  # noqa: E402
     assert_tenant_daily_cap_ok,
+)
+from soctalk.core.cost import (
     tenant_daily_dollar_cap as _tenant_daily_dollar_cap,
+)
+from soctalk.core.cost import (
     tenant_daily_token_cap as _tenant_daily_token_cap,
 )
 
@@ -557,7 +561,7 @@ async def complete_run(
             )
             case_changed = (r.rowcount or 0) > 0
 
-            # Persist the graph-plane playbook audit trail for closes (issue #43):
+            # Persist the graph-plane triage policy audit trail for closes (issue #43):
             # escalates carry it into pending_reviews via enrichments, but a close
             # has no review row — without this, a deterministic operational close
             # would leave only free-text close_reason behind.
@@ -567,11 +571,11 @@ async def complete_run(
                 import json as _json
 
                 from soctalk.core.observability.audit import log_audit
-                from soctalk.triage_policy.floor import PLAYBOOK_AUDIT_ACTION
+                from soctalk.triage_policy.floor import TRIAGE_POLICY_AUDIT_ACTION
 
                 await log_audit(
                     db,
-                    action=PLAYBOOK_AUDIT_ACTION,
+                    action=TRIAGE_POLICY_AUDIT_ACTION,
                     actor_principal="system",
                     actor_id="worker_runs",
                     tenant_id=tenant_id,

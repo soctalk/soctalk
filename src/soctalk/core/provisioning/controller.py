@@ -1002,7 +1002,7 @@ class TenantController:
             f"{self.settings.api_service_name}."
             f"{self.settings.soctalk_system_namespace}.svc.cluster.local"
         )
-        # Materialize DB-authored ACTIVE playbooks into the tenant chart values (#44).
+        # Materialize DB-authored ACTIVE triage policies into the tenant chart values (#44).
         # Fail-closed: an invalid/oversized active row raises here → the reconcile step
         # fails → the job surfaces the failure (never a silent "active but not governing").
         from soctalk.triage_policy.authoring import render_active_authored_values

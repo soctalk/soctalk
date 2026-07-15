@@ -127,10 +127,10 @@ _TRIAGE_POLICIES_TOTAL_BUDGET = 800 * 1024
 
 
 def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
-    """Triage-policy files to inject into a tenant's ``runsWorker.playbooks`` (#44).
+    """Triage-policy files to inject into a tenant's ``runsWorker.triagePolicies`` (#44).
 
     Source: ``SOCTALK_TENANT_PLAYBOOKS_DIR`` on the controller/API process — an
-    operator-mounted directory of declarative playbook YAMLs (install-level
+    operator-mounted directory of declarative triage policy YAMLs (install-level
     config, e.g. a ConfigMap on the api pod). Each file is read ONCE and that
     exact text is both validated (the worker registry's own fail-closed parser:
     schema, conditions, priority floor, no deterministic dispositions) and
@@ -180,7 +180,7 @@ def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[s
         if total + size > _TRIAGE_POLICIES_TOTAL_BUDGET:
             log.error(
                 "tenant_triage_policy_rejected", file=str(path),
-                error=f"per-tenant playbook budget ({_TRIAGE_POLICIES_TOTAL_BUDGET}B) exceeded",
+                error=f"per-tenant triage policy budget ({_TRIAGE_POLICIES_TOTAL_BUDGET}B) exceeded",
             )
             continue
         total += size
@@ -535,7 +535,7 @@ def render_tenant_values(
             "reasoningModel": (
                 integration.llm_reasoning_model or integration.llm_model
             ),
-            # Declarative playbooks (#44): validated install-level files scoped
+            # Declarative triage policies (#44): validated install-level files scoped
             # to this tenant; {} when SOCTALK_TENANT_PLAYBOOKS_DIR is unset.
             "triagePolicies": render_triage_policy_values(tenant.slug, str(tenant.id)),
         },
@@ -625,24 +625,24 @@ def render_tenant_values(
     for k, v in _profile_tenant_overrides(profile).items():
         values[k] = v
 
-    # Merge DB-authored ACTIVE playbooks (#44) alongside the operator file playbooks,
-    # into the same runsWorker.playbooks ConfigMap. Fail closed on a filename collision
-    # so an authored playbook can never silently overwrite an operator file (or vice
+    # Merge DB-authored ACTIVE triage policies (#44) alongside the operator file triage policies,
+    # into the same runsWorker.triagePolicies ConfigMap. Fail closed on a filename collision
+    # so an authored triage policy can never silently overwrite an operator file (or vice
     # versa) — the reconcile fails and the UI shows activation failed.
     if authored_triage_policies:
         file_pb = values["runsWorker"].setdefault("triagePolicies", {})
         for filename, text in authored_triage_policies.items():
             if filename in file_pb:
                 raise ValueError(
-                    f"authored playbook '{filename}' collides with a file playbook"
+                    f"authored triage policy '{filename}' collides with a file triage policy"
                 )
             file_pb[filename] = text
-        # Enforce the per-tenant budget across BOTH file and authored playbooks — the
+        # Enforce the per-tenant budget across BOTH file and authored triage policies — the
         # file-only check in render_triage_policy_values can't see the authored additions.
         total = sum(len(t.encode()) for t in file_pb.values())
         if total > _TRIAGE_POLICIES_TOTAL_BUDGET:
             raise ValueError(
-                f"combined playbook payload ({total}B) exceeds the per-tenant budget "
+                f"combined triage policy payload ({total}B) exceeds the per-tenant budget "
                 f"({_TRIAGE_POLICIES_TOTAL_BUDGET}B)"
             )
     return values
