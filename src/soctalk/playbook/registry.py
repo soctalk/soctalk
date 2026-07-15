@@ -188,6 +188,17 @@ def reset_registry_cache() -> None:
     _registry.cache_clear()
 
 
+def all_playbooks() -> tuple[Playbook, ...]:
+    """Every playbook the process governs by — built-ins plus validated file
+    playbooks, priority-sorted. Read-only view for governance/observability
+    surfaces; reflects THIS process's SOCTALK_PLAYBOOK_DIR + tenant scoping."""
+    return _registry()
+
+
+def is_builtin(playbook_id: str) -> bool:
+    return any(playbook_id == b.id for b in BUILTIN_PLAYBOOKS)
+
+
 def _alert_rule_groups(investigation: dict[str, Any]) -> set[str]:
     groups: set[str] = set()
     for alert in investigation.get("alerts") or []:

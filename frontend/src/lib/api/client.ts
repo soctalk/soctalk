@@ -407,6 +407,35 @@ export interface AnalyticsSummary {
 	outcomes: OutcomeMetrics;
 }
 
+export interface PlaybookGuardrail {
+	when: Record<string, unknown>;
+	effect: string;
+	to: string;
+	reason: string;
+}
+
+export interface PlaybookMatch {
+	rule_groups: string[];
+	rule_ids: string[];
+	authorization_tracks: string[];
+}
+
+export interface Playbook {
+	id: string;
+	version: number;
+	tenant: string;
+	status: 'active' | 'shadow';
+	priority: number;
+	source: 'built-in' | 'file';
+	applies_to: PlaybookMatch;
+	required_steps: string[];
+	decision_modules: string[];
+	deterministic_disposition: string | null;
+	legal_actions: Record<string, string[]>;
+	close_signoff_data_classes: string[];
+	guardrails: PlaybookGuardrail[];
+}
+
 // API methods
 export const api = {
 	auth: {
@@ -731,6 +760,10 @@ export const api = {
 			request<MsspHeatmapResponse>(
 				`/mssp/analytics/heatmap?dimension=${dimension}&days=${days}`
 			)
+	},
+
+	playbooks: {
+		list: () => request<Playbook[]>('/mssp/playbooks')
 	}
 	};
 

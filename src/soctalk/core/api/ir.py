@@ -29,6 +29,7 @@ from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
 from soctalk.core.tenancy.models import Role
+from soctalk.playbook.registry import BUILTIN_PLAYBOOKS
 
 mssp_investigations_router = APIRouter(prefix="/api/mssp/investigations", tags=["ir-mssp"])
 tenant_investigations_router = APIRouter(prefix="/api/tenant/investigations", tags=["ir-tenant"])
@@ -38,6 +39,7 @@ integrations_router = APIRouter(
     prefix="/api/mssp/tenants", tags=["ir-integrations"]
 )
 engagements_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-engagements"])
+playbooks_router = APIRouter(prefix="/api/mssp/playbooks", tags=["ir-playbooks"])
 
 
 # ---------------------------------------------------------------------------
@@ -897,11 +899,84 @@ async def revoke_engagement_route(
     return {"ok": "revoked"}
 
 
+# ---------------------------------------------------------------------------
+# Playbooks (read-only governance view) — #43/#44
+# ---------------------------------------------------------------------------
+
+
+class PlaybookGuardrailDTO(BaseModel):
+    when: dict[str, Any]
+    effect: str
+    to: str
+    reason: str
+
+
+class PlaybookMatchDTO(BaseModel):
+    rule_groups: list[str]
+    rule_ids: list[str]
+    authorization_tracks: list[str]
+
+
+class PlaybookDTO(BaseModel):
+    id: str
+    version: int
+    tenant: str
+    status: str  # active | shadow
+    priority: int
+    source: str  # built-in | file
+    applies_to: PlaybookMatchDTO
+    required_steps: list[str]
+    decision_modules: list[str]
+    deterministic_disposition: str | None
+    legal_actions: dict[str, list[str]]
+    close_signoff_data_classes: list[str]
+    guardrails: list[PlaybookGuardrailDTO]
+
+
+@playbooks_router.get(
+    "",
+    response_model=list[PlaybookDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def list_playbooks_route(request: Request) -> list[PlaybookDTO]:
+    """The compiled-in (built-in) playbooks that govern triage. Deliberately
+    scoped to built-ins: file playbooks (``SOCTALK_PLAYBOOK_DIR``) load per-PROCESS
+    in the runs-worker, so the API can't truthfully report which govern — listing
+    the API process's own files would show playbooks that no worker enforces (and
+    hide tenant-scoped ones that do). Read-only; built-ins are vetted code."""
+    return [
+        PlaybookDTO(
+            id=pb.id,
+            version=pb.version,
+            tenant=pb.tenant,
+            status=pb.status,
+            priority=pb.priority,
+            source="built-in",
+            applies_to=PlaybookMatchDTO(
+                rule_groups=list(pb.applies_to.rule_groups),
+                rule_ids=list(pb.applies_to.rule_ids),
+                authorization_tracks=list(pb.applies_to.authorization_tracks),
+            ),
+            required_steps=list(pb.required_steps),
+            decision_modules=list(pb.decision_modules),
+            deterministic_disposition=pb.deterministic_disposition,
+            legal_actions={k: list(v) for k, v in pb.legal_actions.items()},
+            close_signoff_data_classes=list(pb.close_signoff_data_classes),
+            guardrails=[
+                PlaybookGuardrailDTO(when=g.when, effect=g.effect, to=g.to, reason=g.reason)
+                for g in pb.guardrails
+            ],
+        )
+        for pb in sorted(BUILTIN_PLAYBOOKS, key=lambda p: p.priority)
+    ]
+
+
 __all__ = [
     "alerts_router",
     "engagements_router",
     "integrations_router",
     "mssp_investigations_router",
+    "playbooks_router",
     "proposals_router",
     "tenant_investigations_router",
 ]

@@ -274,6 +274,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(ir_routes.proposals_router)
     app.include_router(ir_routes.integrations_router)
     app.include_router(ir_routes.engagements_router)
+    app.include_router(ir_routes.playbooks_router)
 
     # Auth endpoints only exist in internal mode. In proxy mode, they 404.
     if mode is AuthMode.INTERNAL:
