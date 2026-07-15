@@ -131,6 +131,41 @@ async def test_revoke_soft_deletes_and_survives(mssp_session: AsyncSession, seed
 
 
 @integration
+async def test_context_for_alert_binds_store_facts(mssp_session: AsyncSession, seed_two_tenants):
+    """Store-primary consumption: the claim-time helper builds an AuthorizationContext from the
+    stored facts + the activity extracted from the alert's entities."""
+    from datetime import datetime, timezone
+
+    from soctalk.core.ir.authz_shadow import authorization_context_for_alert
+
+    a, _ = seed_two_tenants
+    for fact in _sample_facts():
+        await store_fact(mssp_session, tenant_id=a.tenant_id, fact=fact)
+    await mssp_session.commit()
+
+    ctx = await authorization_context_for_alert(
+        mssp_session,
+        tenant_id=a.tenant_id,
+        source="wazuh",
+        rule_id="5402",
+        entities=[{"type": "host", "value": "db-01"}, {"type": "user", "value": "svc-deploy"}],
+        ts=datetime.now(timezone.utc),
+    )
+    assert ctx is not None
+    assert ctx["activity"]["host"] == "db-01"
+    assert ctx["activity"]["account"] == "svc-deploy"
+    assert ctx["activity"]["action"] == "5402"
+    assert {f["id"] for f in ctx["facts"]} == {"G1", "P1", "F1", "E1"}
+
+    # no host entity -> no activity -> None (the fixture path applies instead)
+    none_ctx = await authorization_context_for_alert(
+        mssp_session, tenant_id=a.tenant_id, source="wazuh", rule_id="r",
+        entities=[{"type": "user", "value": "x"}], ts=datetime.now(timezone.utc),
+    )
+    assert none_ctx is None
+
+
+@integration
 async def test_resubmit_upserts_and_unrevokes(mssp_session: AsyncSession, seed_two_tenants):
     a, _ = seed_two_tenants
     fact = _sample_facts()[0]  # G1
