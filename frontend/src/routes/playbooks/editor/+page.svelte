@@ -69,7 +69,10 @@
 		/** null = the condition isn't representable in the builder → JSON mode. */
 		builder: RuleGroup | null;
 		rawWhen: string;
+		/** Blocking problem (invalid JSON) — disables save. */
 		rawError: string | null;
+		/** Informational note (e.g. not representable visually) — never blocks. */
+		rawNotice: string | null;
 	}
 	let guardrails: GuardrailState[] = [];
 
@@ -185,7 +188,11 @@
 			reason: g.reason,
 			builder: conditionToGroup(g.when),
 			rawWhen: JSON.stringify(g.when, null, 2),
-			rawError: null
+			rawError: null,
+			rawNotice:
+				conditionToGroup(g.when) === null
+					? 'this condition uses shapes the visual builder cannot show — editing as JSON'
+					: null
 		}));
 	}
 
@@ -226,7 +233,8 @@
 				reason: '',
 				builder: g,
 				rawWhen: '',
-				rawError: null
+				rawError: null,
+				rawNotice: null
 			}
 		];
 	}
@@ -261,12 +269,14 @@
 			const parsed = JSON.parse(g.rawWhen);
 			const group = conditionToGroup(parsed);
 			if (group === null) {
-				g.rawError = 'this condition uses shapes the visual builder cannot show (e.g. ! / !!) — keep editing it as JSON';
+				g.rawNotice =
+					'this condition uses shapes the visual builder cannot show (e.g. ! / !!) — keep editing it as JSON';
 				guardrails = guardrails;
 				return;
 			}
 			g.builder = group;
 			g.rawError = null;
+			g.rawNotice = null;
 		} catch {
 			g.rawError = 'invalid JSON';
 		}
@@ -336,6 +346,11 @@
 	};
 
 	$: simResult = simulateGuard(definition, simCtx);
+
+	$: firedNodeId =
+		simResult.stage === 'guardrail'
+			? `guardrail-${simResult.index}`
+			: simResult.stage; // 'floor' | 'signoff' | 'commit' match the node ids
 
 	const SIM_BADGE: Record<string, string> = {
 		close: 'variant-filled-success',
@@ -584,6 +599,9 @@
 								{#if g.rawError}
 									<div class="text-xs text-error-500">{g.rawError}</div>
 								{/if}
+								{#if g.rawNotice}
+									<div class="text-xs text-warning-500">{g.rawNotice}</div>
+								{/if}
 								<button class="anchor text-xs mt-1" on:click={() => toBuilderMode(g)}>
 									back to visual builder
 								</button>
@@ -627,7 +645,7 @@
 					Projection of this document onto the triage pipeline — click a guardrail to jump to it.
 				</p>
 				<div class="h-[26rem]">
-					<PlaybookFlowPreview {definition} on:focus={focusGuardrail} />
+					<PlaybookFlowPreview {definition} {firedNodeId} on:focus={focusGuardrail} />
 				</div>
 			</section>
 
@@ -660,6 +678,20 @@
 					<label class="label">
 						<span class="opacity-70 text-xs">Asset data classification</span>
 						<input class="input !py-1" bind:value={sim.dataClass} placeholder="pci" />
+					</label>
+					<label class="label">
+						<span class="opacity-70 text-xs">Asset criticality</span>
+						<select class="select !py-1" bind:value={sim.criticality}>
+							<option value="">unknown</option>
+							<option value="critical">critical</option>
+							<option value="high">high</option>
+							<option value="medium">medium</option>
+							<option value="low">low</option>
+						</select>
+					</label>
+					<label class="label">
+						<span class="opacity-70 text-xs">Asset environment</span>
+						<input class="input !py-1" bind:value={sim.environment} placeholder="production" />
 					</label>
 					<label class="flex items-center gap-2">
 						<input class="checkbox" type="checkbox" bind:checked={sim.ioc} />

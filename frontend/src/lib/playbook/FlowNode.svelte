@@ -21,6 +21,8 @@
 		hasNext?: boolean;
 		/** Chain input above. */
 		hasTarget?: boolean;
+		/** The Try-it simulation says this node disposes the draft. */
+		fired?: boolean;
 	};
 
 	const KIND_CLASSES: Record<string, string> = {
@@ -47,7 +49,14 @@
 			: KIND_CLASSES[data.kind];
 </script>
 
-<div class="rounded-lg border-2 px-3 py-2 max-w-[15rem] text-left {cls}">
+<div
+	class="rounded-lg border-2 px-3 py-2 max-w-[15rem] text-left {cls} {data.fired
+		? 'ring-2 ring-warning-400 shadow-lg shadow-warning-500/20'
+		: ''}"
+>
+	{#if data.fired}
+		<div class="text-[9px] font-bold uppercase tracking-wide text-warning-500">would fire</div>
+	{/if}
 	{#if data.hasTarget}
 		<Handle type="target" position={Position.Top} class="!bg-surface-400" />
 	{/if}
