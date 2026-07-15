@@ -131,6 +131,12 @@ export const CONDITION_MAX_LIST = 32;
 export const KNOWN_STEP_NODES = ['gather_authorization_context'] as const;
 export const KNOWN_DECISION_MODULES = ['authorization_engine'] as const;
 export const KNOWN_PHASES = ['triage', 'decide'] as const;
+/** Actions an authored policy may GRANT in legal_actions. CLOSE is deliberately
+ * absent (mirrors authoring.py): granting it adds nothing over an unconstrained
+ * phase, and a set like {decide: [CLOSE]} would remap every proposal to a forced
+ * verdict-less close. */
+export const GRANTABLE_ACTIONS = ['ENRICH', 'CONTEXTUALIZE', 'INVESTIGATE', 'VERDICT'] as const;
+
 export const SUPERVISOR_ACTIONS = [
 	'ENRICH',
 	'CONTEXTUALIZE',
@@ -256,6 +262,9 @@ function parseNode(node: unknown): RuleGroup | RuleRow | null {
 	const [op, args] = entries[0];
 	if (op === 'and' || op === 'or') {
 		const list = Array.isArray(args) ? args : [args];
+		// An EMPTY group is backend-valid (and:[] is truthy, or:[] is falsy) but the
+		// builder would silently drop it on save, changing semantics — JSON mode instead.
+		if (list.length === 0) return null;
 		const children: (RuleGroup | RuleRow)[] = [];
 		for (const a of list) {
 			const child = parseNode(a);
@@ -269,6 +278,10 @@ function parseNode(node: unknown): RuleGroup | RuleRow | null {
 		const [lhs, rhs] = args;
 		const field = varPath(lhs);
 		if (field === null || !CONTRACT_PATHS.has(field)) return null;
+		// Boolean fields render as a bare is-true/is-false control that hides the
+		// operator — a backend-valid `!=` would display (and re-save) inverted.
+		// Only `==` is representable; everything else stays in JSON mode.
+		if (contractField(field)?.type === 'boolean' && op !== '==') return null;
 		if (op === 'in') {
 			if (!Array.isArray(rhs) || !rhs.every(isScalar)) return null;
 			return { kind: 'rule', field, op, value: rhs as RuleRow['value'] };
@@ -394,6 +407,11 @@ export function validateDefinition(def: Record<string, unknown>): string[] {
 		for (const a of actions ?? []) {
 			if (!(SUPERVISOR_ACTIONS as readonly string[]).includes(String(a))) {
 				errors.push(`unknown action '${String(a)}' in phase '${phase}'`);
+			} else if (!(GRANTABLE_ACTIONS as readonly string[]).includes(String(a))) {
+				errors.push(
+					`CLOSE cannot be granted in phase '${phase}' — leave the phase unconstrained ` +
+						'or route terminal decisions through VERDICT'
+				);
 			}
 		}
 	}
@@ -495,7 +513,11 @@ export interface SimOutcome {
 	/** Index into guardrails when stage === 'guardrail'. */
 	index?: number;
 	effect?: 'override' | 'interrupt';
+	/** The decision that stands. On an interrupt this is the UNCHANGED draft —
+	 * the backend keeps the verdict and sets interrupted; a human disposes. */
 	finalDecision: string;
+	/** True when the draft is held for human sign-off (interrupt semantics). */
+	heldForReview?: boolean;
 	reason: string;
 }
 
@@ -537,7 +559,8 @@ export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>
 			stage: 'guardrail',
 			index: i,
 			effect: 'interrupt',
-			finalDecision: 'human_review',
+			finalDecision: verdict, // draft stands — routed to review, not rewritten
+			heldForReview: true,
 			reason: g.reason
 		};
 	}
@@ -547,7 +570,8 @@ export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>
 		return {
 			stage: 'signoff',
 			effect: 'interrupt',
-			finalDecision: 'human_review',
+			finalDecision: verdict, // draft stands — held for sign-off
+			heldForReview: true,
 			reason: `close on a ${dataClass}-classified asset requires human sign-off`
 		};
 	}

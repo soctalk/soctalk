@@ -123,7 +123,12 @@
 					id,
 					type: 'pb',
 					position: { x: 0, y: 0 },
-					data: { title: OUTCOME_META[accent].title, kind: 'outcome', accent },
+					// A mid-edit JSON `to` can be any string — never crash the projection.
+					data: {
+						title: OUTCOME_META[accent]?.title ?? `invalid target: ${accent || '(empty)'}`,
+						kind: 'outcome',
+						accent
+					},
 					draggable: false,
 					connectable: false
 				});

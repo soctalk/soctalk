@@ -31,6 +31,12 @@ from soctalk.triage_policy.registry import BUILTIN_TRIAGE_POLICIES, FILE_PRIORIT
 # Only the authorization engine exists as a decision module today (registry.py).
 KNOWN_DECISION_MODULES = frozenset({"authorization_engine"})
 _VALID_ACTIONS = frozenset(a.value for a in SupervisorAction)
+# CLOSE may not be GRANTED by an authored policy (Codex review, High): listing it
+# adds nothing over an unconstrained phase (the baseline already permits the router
+# close), but a constrained set like {decide: [CLOSE]} would make the illegal-action
+# remap rewrite EVERY proposal to CLOSE — a forced close with no reasoning-tier
+# verdict, standing only on the floor. Leave the phase unconstrained instead.
+_UNGRANTABLE_ACTIONS = frozenset({"CLOSE"})
 # The only phases the gate reads (soctalk.triage_policy.gate); an unknown phase key would
 # fail open (unconstrained) if promoted, so reject it at author time.
 KNOWN_PHASES = frozenset({"triage", "decide"})
@@ -87,7 +93,7 @@ def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
             "deterministic_disposition is a built-in-only capability and cannot be authored"
         )
     if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
-        raise TriagePolicyValidationError(f"id '{pb.id}' collides with a built-in playbook")
+        raise TriagePolicyValidationError(f"id '{pb.id}' collides with a built-in triage policy")
 
     bad_steps = [s for s in pb.required_steps if s not in KNOWN_STEP_NODES]
     if bad_steps:
@@ -100,6 +106,12 @@ def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
         if bad:
             raise TriagePolicyValidationError(
                 f"unknown legal_actions in phase '{phase}': {', '.join(bad)}"
+            )
+        granted_close = [a for a in actions if a in _UNGRANTABLE_ACTIONS]
+        if granted_close:
+            raise TriagePolicyValidationError(
+                f"CLOSE cannot be granted in phase '{phase}' — leave the phase "
+                "unconstrained or route terminal decisions through VERDICT"
             )
     return pb
 

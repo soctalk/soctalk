@@ -147,7 +147,9 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
     route = route_from_resolve_triage_policy(state)
 
     expected = [str(r) for r in case.expect["playbook_route"]]
-    expected_id = case.expect.get("triage_policy_id")
+    # Accept both keys: local fixtures are renamed, but the external
+    # soctalk-goldens corpus still ships the legacy ``playbook_id``.
+    expected_id = case.expect.get("triage_policy_id", case.expect.get("playbook_id"))
     matched_id = playbook.id if playbook else None
     passed = route in expected and (expected_id is None or matched_id == expected_id)
     detail = ""

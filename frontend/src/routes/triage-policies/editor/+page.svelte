@@ -14,7 +14,7 @@
 		KNOWN_STEP_NODES,
 		MAX_GUARDRAILS,
 		STATE_CONTRACT,
-		SUPERVISOR_ACTIONS,
+		GRANTABLE_ACTIONS,
 		conditionToGroup,
 		emptyGroup,
 		emptyRule,
@@ -39,6 +39,9 @@
 	let priority = 70;
 	let version = 1;
 	let lifecycleStatus: 'draft' | 'shadow' = 'shadow';
+	// The stored row's status when editing ('active' included). The PUT route
+	// preserves active + queues a rollout; the UI must say so, not imply shadow.
+	let existingStatus: string | null = null;
 
 	let ruleGroupsText = '';
 	let ruleIdsText = '';
@@ -54,10 +57,10 @@
 	let constrainTriage = false;
 	let constrainDecide = false;
 	let triageActions: Record<string, boolean> = Object.fromEntries(
-		SUPERVISOR_ACTIONS.map((a) => [a, a !== 'CLOSE'])
+		GRANTABLE_ACTIONS.map((a) => [a, true])
 	);
 	let decideActions: Record<string, boolean> = Object.fromEntries(
-		SUPERVISOR_ACTIONS.map((a) => [a, a !== 'CLOSE'])
+		GRANTABLE_ACTIONS.map((a) => [a, true])
 	);
 
 	let signoffText = '';
@@ -118,8 +121,8 @@
 		const modules = KNOWN_DECISION_MODULES.filter((m) => moduleChecked[m]);
 		if (modules.length) def.decision_modules = modules;
 		const legal: Record<string, string[]> = {};
-		if (constrainTriage) legal.triage = SUPERVISOR_ACTIONS.filter((a) => triageActions[a]);
-		if (constrainDecide) legal.decide = SUPERVISOR_ACTIONS.filter((a) => decideActions[a]);
+		if (constrainTriage) legal.triage = GRANTABLE_ACTIONS.filter((a) => triageActions[a]);
+		if (constrainDecide) legal.decide = GRANTABLE_ACTIONS.filter((a) => decideActions[a]);
 		if (Object.keys(legal).length) def.legal_actions = legal;
 		if (csv(signoffText).length) def.close_signoff_data_classes = csv(signoffText);
 		if (guardrails.length) {
@@ -177,10 +180,10 @@
 		constrainTriage = Array.isArray(legal.triage);
 		constrainDecide = Array.isArray(legal.decide);
 		triageActions = Object.fromEntries(
-			SUPERVISOR_ACTIONS.map((a) => [a, (legal.triage ?? []).includes(a)])
+			GRANTABLE_ACTIONS.map((a) => [a, (legal.triage ?? []).includes(a)])
 		);
 		decideActions = Object.fromEntries(
-			SUPERVISOR_ACTIONS.map((a) => [a, (legal.decide ?? []).includes(a)])
+			GRANTABLE_ACTIONS.map((a) => [a, (legal.decide ?? []).includes(a)])
 		);
 		signoffText = ((def.close_signoff_data_classes as string[]) ?? []).join(', ');
 		guardrails = (((def.guardrails as GuardrailDef[]) ?? []) || []).map((g) => ({
@@ -201,22 +204,37 @@
 		if (!editId) loaded = true;
 	});
 
-	let loadStarted = false;
-	$: if (editId && tenantId && !loadStarted) {
-		loadStarted = true;
-		loadExisting(tenantId, editId);
+	// Keyed load (Codex High): SvelteKit reuses this component across ?id=
+	// navigations and the tenant pin can change mid-session — a one-shot flag
+	// left stale form data behind. Reload whenever (tenant, id) changes and
+	// discard responses that arrive for a key we've since navigated away from.
+	let loadedKey = '';
+	$: loadKey = editId && tenantId ? `${tenantId}|${editId}` : '';
+	$: if (loadKey && loadKey !== loadedKey) {
+		loadedKey = loadKey;
+		loaded = false;
+		loadError = null;
+		existingStatus = null;
+		loadExisting(tenantId!, editId!, loadKey);
+	}
+	$: if (!loadKey && loadedKey) {
+		loadedKey = ''; // back to create mode in the same component instance
+		loaded = true;
 	}
 
-	async function loadExisting(tid: string, id: string) {
+	async function loadExisting(tid: string, id: string, key: string) {
 		try {
 			// listAuthored + find: there is no single-get endpoint yet.
 			const all = await api.triagePolicies.listAuthored(tid);
+			if (key !== loadedKey) return; // stale response — a newer load owns the form
 			const row = all.find((p) => p.triage_policy_id === id);
 			if (!row) throw new Error(`triage policy '${id}' not found for this tenant`);
+			existingStatus = row.status;
 			lifecycleStatus = row.status === 'draft' ? 'draft' : 'shadow';
 			loadDefinition(row.definition);
 			loaded = true;
 		} catch (e) {
+			if (key !== loadedKey) return;
 			loadError = e instanceof Error ? e.message : 'Failed to load triage policy';
 		}
 	}
@@ -438,11 +456,21 @@
 						<input class="input" type="number" min={FILE_PRIORITY_FLOOR} bind:value={priority} />
 					</label>
 				</div>
-				<label class="flex items-center gap-2 text-sm">
-					<input class="checkbox" type="checkbox" checked={lifecycleStatus === 'draft'}
-						on:change={(e) => (lifecycleStatus = e.currentTarget.checked ? 'draft' : 'shadow')} />
-					<span>Keep as draft (not yet shadow-evaluated against live runs)</span>
-				</label>
+				{#if existingStatus === 'active'}
+					<div class="flex items-center gap-2 text-sm">
+						<span class="badge variant-filled-success text-xs">active</span>
+						<span class="opacity-70">
+							This policy currently governs triage — saving a revision keeps it active and
+							queues a worker rollout with the new definition.
+						</span>
+					</div>
+				{:else}
+					<label class="flex items-center gap-2 text-sm">
+						<input class="checkbox" type="checkbox" checked={lifecycleStatus === 'draft'}
+							on:change={(e) => (lifecycleStatus = e.currentTarget.checked ? 'draft' : 'shadow')} />
+						<span>Keep as draft (not yet shadow-evaluated against live runs)</span>
+					</label>
+				{/if}
 			</section>
 
 			<section class="card p-4 space-y-3">
@@ -508,7 +536,7 @@
 								<span class="font-mono text-xs">{phase}</span>
 							</label>
 							{#if phase === 'triage' ? constrainTriage : constrainDecide}
-								{#each SUPERVISOR_ACTIONS as a}
+								{#each GRANTABLE_ACTIONS as a}
 									<label class="flex items-center gap-1">
 										<input
 											class="checkbox"
@@ -717,11 +745,16 @@
 					</label>
 				</div>
 				<div class="card variant-soft p-3 text-sm space-y-1">
-					<div class="flex items-center gap-2">
+					<div class="flex items-center gap-2 flex-wrap">
 						<span class="opacity-60 text-xs">outcome</span>
 						<span class="badge {SIM_BADGE[simResult.finalDecision] ?? 'variant-soft'} text-xs">
 							{simResult.finalDecision}
 						</span>
+						{#if simResult.heldForReview}
+							<span class="badge variant-filled-tertiary text-xs">
+								draft held — human review disposes
+							</span>
+						{/if}
 						{#if simResult.stage === 'guardrail'}
 							<span class="text-xs opacity-70">
 								guardrail {(simResult.index ?? 0) + 1} fired ({simResult.effect})

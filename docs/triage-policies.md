@@ -77,18 +77,19 @@ GRC-flavored.)
 
 ## Terminology & legacy-name map
 
-| Concept | Current name | Legacy names still in the code (unchanged) |
+| Concept | Current name | Legacy names |
 |---|---|---|
-| The policy kind | **Triage Policy** | "playbook" everywhere below |
+| The policy kind | **Triage Policy** | "playbook" |
 | API (canonical) | `/api/mssp/triage-policies`, `/api/mssp/tenants/{id}/triage-policies[/…]` | `/api/mssp/playbooks*` (deprecated aliases, one release) |
 | UI route | `/triage-policies` (+ `/editor`) | `/playbooks*` → 308 redirect |
-| DB table | *(unchanged)* | `authored_playbook_revisions` |
-| Python package | *(unchanged)* | `soctalk.playbook.*` |
-| Worker env / ConfigMap | *(unchanged)* | `SOCTALK_PLAYBOOK_DIR`, `soctalk-playbooks`, `authored-*.yaml` |
+| Wire field | `triage_policy_id` | `playbook_id` served as a deprecated mirror on ALL authored responses (canonical and alias), one release |
+| DB table | `authored_triage_policy_revisions` (migration `v1_0035`, reversible) | `authored_playbook_revisions` |
+| Python package | `soctalk.triage_policy.*` | `soctalk.playbook.*` (gone; no shim) |
+| Worker env / ConfigMap | *(unchanged, deliberate)* | `SOCTALK_PLAYBOOK_DIR`, `soctalk-playbooks`, `authored-*.yaml` |
 
-The DB table, alembic history, Python package, and worker rollout contract keep their
-legacy `playbook` names deliberately (deferred, out of scope for the rename). Wire JSON
-field names (including `playbook_id`) are unchanged for compatibility.
+The worker rollout contract keeps its legacy `playbook` names deliberately — renaming it
+is a chart/worker coordinated rollout, deferred. Everything else is renamed with the
+compatibility bridges listed above.
 
 **Reserved:** `playbook` — for the future post-disposition **Response Playbooks**. Do not
 use it for the triage-policy kind.

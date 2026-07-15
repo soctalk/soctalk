@@ -118,6 +118,10 @@ async def test_duplicate_create_conflicts(mssp_session: AsyncSession, seed_two_t
         {"legal_actions": {"triage": ["NOT_AN_ACTION"]}},      # unknown action
         {"decision_modules": ["made_up_module"]},              # unknown module
         {"legal_actions": {"triag": ["VERDICT"]}},             # unknown phase (typo)
+        # CLOSE may not be granted (Codex High): {decide:[CLOSE]} would remap every
+        # proposal to a forced verdict-less close; unconstrained already permits CLOSE.
+        {"legal_actions": {"decide": ["CLOSE"]}},
+        {"legal_actions": {"triage": ["VERDICT", "CLOSE"]}},
         {"id": "Bad_Slug"},                                    # invalid slug charset
         {"applies_to": {"rule_groups": ["g"]}, "guardrails": [
             {"when": {"bogus_op": [1, 2]}, "effect": "override",
