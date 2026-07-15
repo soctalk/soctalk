@@ -13,6 +13,9 @@ Three plain LangGraph nodes — no LLM calls, no I/O beyond state:
   rewrites the decision, appends the audit record to ``state["playbook_audit"]``,
   and annotates the recommendation so the analyst sees both the LLM draft and why
   it did not stand.
+- ``operational_close_node``: the ``close_operational`` deterministic disposition —
+  closes an operational-class alert without any LLM call, reached only when
+  ``route_from_resolve_playbook`` found no security-indicator veto.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import structlog
 from soctalk.authorization.engine import evaluate_authorization
 from soctalk.authorization.render import has_malicious_signal, parse_authorization_context
 from soctalk.playbook.guard import decision_value, evaluate_guard
-from soctalk.playbook.models import GATHER_AUTHORIZATION_CONTEXT
+from soctalk.playbook.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
 from soctalk.playbook.registry import match_playbook
 
 logger = structlog.get_logger()
@@ -84,6 +87,41 @@ async def gather_authorization_context_node(state: dict[str, Any]) -> dict[str, 
         facts=len(ctx.facts),
         engine_decision=components.decision,
     )
+    return state
+
+
+async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
+    """Deterministically close an operational-class alert — no LLM involved.
+
+    Reached only via ``route_from_resolve_playbook`` after the security-indicator
+    check came back clean. Writes a supervisor-shaped CLOSE decision (the worker's
+    disposition mapping and the close node already understand that shape) plus a
+    playbook_audit record, so the close reason and the audit trail both say this
+    was a playbook disposition, not a model judgment. The terminal safety floor in
+    the runs-worker still applies to the resulting ``close_fp``, unchanged.
+    """
+    playbook = state.get("playbook") or {}
+    reasoning = (
+        f"playbook {playbook.get('id')}: operational alert class (agent health) "
+        "with no security indicators — deterministic close, no LLM invoked"
+    )
+    state["supervisor_decision"] = {
+        "next_action": "CLOSE",
+        "action_reasoning": reasoning,
+        "tp_confidence": 0.0,
+        "confidence_reasoning": "deterministic playbook disposition",
+    }
+    state.setdefault("playbook_audit", []).append(
+        {
+            "at": datetime.now(UTC).isoformat(),
+            "playbook": playbook.get("id"),
+            "effect": "deterministic_disposition",
+            "disposition": CLOSE_OPERATIONAL,
+            "reason": reasoning,
+        }
+    )
+    state["operational_close"] = True
+    logger.info("operational_close_applied", playbook=playbook.get("id"))
     return state
 
 

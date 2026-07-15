@@ -71,7 +71,6 @@ async def _close_floor_veto(
     tenant_id: UUID,
     initial_iocs: list[dict[str, Any]],
     keys: list[tuple[str, str, str]],
-    correlation_already_checked: bool,
 ) -> str | None:
     """Non-overridable safety floor on the ingest auto-close plane (issue #43).
 
@@ -79,14 +78,14 @@ async def _close_floor_veto(
     investigation, must never be auto-closed — by memoization or by the rules
     band — regardless of policy flags. Returns the veto reason, or None.
 
-    ``correlation_already_checked``: when entity correlation is enabled, the attach
-    check already ran this ingest with the same keys and found nothing (a match
-    returns before any close path), so the lookup is skipped rather than repeated.
+    The active-incident lookup runs HERE, at the close site, even when the
+    entity-correlation attach check already ran earlier in this ingest: a sibling
+    can promote between the two points under concurrent ingest, and the floor must
+    see it (skipping "because correlation already checked" was a race). The
+    residual check-then-close window is the same one the attach path itself has.
     """
     if initial_iocs:
         return VETO_IOC
-    if correlation_already_checked:
-        return None
     if await find_correlated_investigation(db, tenant_id=tenant_id, keys=keys) is not None:
         return VETO_ACTIVE_INCIDENT
     return None
@@ -932,7 +931,6 @@ async def triage_event(
     # Safety floor over BOTH ingest auto-close paths below (issue #43): IOC or
     # active-incident overlap vetoes the close and the alert falls through to
     # promotion — a real triage run looks at it instead of a silent close.
-    _correlation_checked = bool(policy.get("entity_correlation_enabled", False))
 
     # 3a. Verdict memoization (issue #29): a recurring high-confidence-FP
     #     shape closes by reference — AFTER the entity-correlation check so it
@@ -963,8 +961,7 @@ async def triage_event(
                 #     also suppresses the cruder high-conf-FP fallback below, so authz still
                 #     protects the low-severity attacker-shares-template case.
                 veto = await _close_floor_veto(
-                    db, tenant_id=tenant_id, initial_iocs=initial_iocs,
-                    keys=keys, correlation_already_checked=_correlation_checked,
+                    db, tenant_id=tenant_id, initial_iocs=initial_iocs, keys=keys,
                 )
                 if veto is not None:
                     await _audit_floor_veto(
@@ -1030,8 +1027,7 @@ async def triage_event(
         and confidence >= policy.get("auto_close_threshold", 0.90)
     ):
         veto = await _close_floor_veto(
-            db, tenant_id=tenant_id, initial_iocs=initial_iocs,
-            keys=keys, correlation_already_checked=_correlation_checked,
+            db, tenant_id=tenant_id, initial_iocs=initial_iocs, keys=keys,
         )
         if veto is not None:
             await _audit_floor_veto(

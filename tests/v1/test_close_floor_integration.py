@@ -199,3 +199,54 @@ async def test_worker_close_floor_sees_sibling_active_investigation(
         mssp_session, tenant_id=tenant_a.tenant_id,
         investigation_id=UUID(lone["investigation_id"]),
     ) is None
+
+
+async def test_close_fp_floor_veto_helper_end_to_end(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """The extracted complete_run veto (issue #43, Codex full-module finding 5):
+    an active investigation with an active key-sharing sibling is vetoed (audit
+    row written); a non-active investigation is never vetoed even with a sibling
+    (the close path's WHERE status='active' no-op owns that case)."""
+    from uuid import UUID
+
+    from soctalk.core.api.worker_runs import close_fp_floor_veto
+
+    tenant_a, _ = seed_two_tenants
+    ids = []
+    for n in (1, 2):
+        r = await triage_event(
+            mssp_session, tenant_id=tenant_a.tenant_id,
+            source="wazuh", rule_id=f"58{n}0", severity=9,
+            asset_ids=["floor-veto-1"], initial_iocs=[],
+            source_event_id=f"floor-veto-{n}", ts=datetime.now(UTC),
+            description=f"incident {n}",
+            evidence={"entities": [{"type": "host", "value": "floor-veto-1",
+                                    "role": "target"}],
+                      "mitre": {}, "schema_version": 2},
+        )
+        await mssp_session.commit()
+        assert r["action"] == "promoted"
+        ids.append(UUID(r["investigation_id"]))
+
+    other = await close_fp_floor_veto(
+        mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=ids[0]
+    )
+    await mssp_session.commit()
+    assert other == ids[1]
+    audits = await _floor_audit_rows(mssp_session, tenant_a.tenant_id)
+    assert any(
+        '"blocked":"worker_close_fp"' in a["notes"]
+        and a["resource_id"] == str(ids[0])
+        for a in audits
+    )
+
+    # Close the investigation out from under the worker: the veto must stand down.
+    await mssp_session.execute(
+        text("UPDATE investigations SET status = 'auto_closed_fp', closed_at = now() "
+             "WHERE id = :c"),
+        {"c": str(ids[0])},
+    )
+    assert await close_fp_floor_veto(
+        mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=ids[0]
+    ) is None

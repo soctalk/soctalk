@@ -6,14 +6,19 @@ The pattern, everywhere: the LLM proposes and a deterministic gate disposes —
 
 The judgment stays declarative and reasoned (authorization facts + the expectedness
 engine); the playbook is procedural — what must run, in what order, which gates apply.
-A playbook never decides a disposition from surface features; it wraps the engine.
+A playbook never decides a SECURITY disposition from surface features; that judgment
+belongs to the engine and the model. The one deterministic disposition a playbook may
+carry (``close_operational``) is a CLASS decision — "this is agent-health/ops noise,
+not a security event" — and it applies only when every alert attests the class and no
+security indicator is present; any indicator routes to full LLM triage instead.
 
-First increment (see the issue for the full design): one built-in playbook for the
-dual-use privileged-exec class, a ``gather_authorization_context`` required step with a
-pre-verdict reroute, a post-verdict guard enforcing contradicted→escalate and
-IOC→escalate with an audit record per override, and a non-overridable safety floor
-(IOC / active incident) on both auto-close planes. No tenant registry and no condition
-language yet — those land when a second playbook justifies them.
+Built-ins today: ``dual-use-privileged-exec`` (a ``gather_authorization_context``
+required step with a pre-decision reroute, plus the post-verdict guard enforcing
+contradicted→escalate and IOC→escalate with an audit record per override) and
+``agent-health-operational`` (the deterministic operational close). Underneath both
+sits the non-overridable safety floor (IOC / contradicted authorization / active
+incident) on every auto-close plane. No tenant-authored playbooks and no sandboxed
+condition language yet — the schema is the contract either way.
 """
 
 from soctalk.playbook.models import Playbook, PlaybookMatch

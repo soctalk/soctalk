@@ -27,8 +27,9 @@ VETO_UNVERIFIED_IOC = "ioc_unverified"
 VETO_ACTIVE_INCIDENT = "active_incident"
 VETO_AUTHZ_CONTRADICTED = "authorization_contradicted"
 
-# Audit action for floor vetoes on the API/IR planes (queried like other ir.* rows).
+# Audit actions on the API/IR planes (queried like other ir.* rows).
 FLOOR_AUDIT_ACTION = "ir.playbook.close_floor_veto"
+PLAYBOOK_AUDIT_ACTION = "ir.playbook.audit"
 
 
 def worker_close_vetoes(final_state: dict[str, Any]) -> list[str]:
