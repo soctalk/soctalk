@@ -770,11 +770,11 @@ export const api = {
 	},
 
 	triagePolicies: {
-		list: () => request<TriagePolicy[]>('/mssp/playbooks'),
+		list: () => request<TriagePolicy[]>('/mssp/triage-policies'),
 		listAuthored: (tenantId: string) =>
-			request<AuthoredTriagePolicy[]>(`/mssp/tenants/${tenantId}/playbooks`),
+			request<AuthoredTriagePolicy[]>(`/mssp/tenants/${tenantId}/triage-policies`),
 		createAuthored: (tenantId: string, definition: Record<string, unknown>, status = 'shadow') =>
-			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/playbooks`, {
+			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/triage-policies`, {
 				method: 'POST',
 				body: JSON.stringify({ definition, status })
 			}),
@@ -784,26 +784,26 @@ export const api = {
 			definition: Record<string, unknown>,
 			status = 'shadow'
 		) =>
-			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
+			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/triage-policies/${playbookId}`, {
 				method: 'PUT',
 				body: JSON.stringify({ definition, status })
 			}),
 		retireAuthored: (tenantId: string, playbookId: string) =>
-			request<{ ok: string }>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
+			request<{ ok: string }>(`/mssp/tenants/${tenantId}/triage-policies/${playbookId}`, {
 				method: 'DELETE'
 			}),
 		exportAuthored: (tenantId: string, playbookId: string) =>
 			request<{ playbook_id: string; yaml: string }>(
-				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/export`
+				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/export`
 			),
 		activateAuthored: (tenantId: string, playbookId: string) =>
 			request<AuthoredTriagePolicy>(
-				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/activate`,
+				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/activate`,
 				{ method: 'POST' }
 			),
 		deactivateAuthored: (tenantId: string, playbookId: string) =>
 			request<AuthoredTriagePolicy>(
-				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/deactivate`,
+				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/deactivate`,
 				{ method: 'POST' }
 			)
 	},

@@ -10,8 +10,8 @@ This is the production API entrypoint (served as ``soctalk.core.api.app_v1:app``
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
@@ -19,15 +19,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from soctalk.core.agents import api as agents_routes
 from soctalk.core.api import adapter as adapter_routes
-from soctalk.core.api import authorization as authorization_routes
 from soctalk.core.api import auth as auth_routes
+from soctalk.core.api import authorization as authorization_routes
 from soctalk.core.api import branding as branding_routes
 from soctalk.core.api import chat as chat_routes
 from soctalk.core.api import health as health_routes
-from soctalk.core.api import ir as ir_routes
-from soctalk.core.api import llm_config as llm_routes
 from soctalk.core.api import investigations_bridge as investigations_bridge_routes
+from soctalk.core.api import ir as ir_routes
 from soctalk.core.api import legacy_stubs as legacy_stubs_routes
+from soctalk.core.api import llm_config as llm_routes
 from soctalk.core.api import metrics_bridge as metrics_bridge_routes
 from soctalk.core.api import mssp_analytics as mssp_analytics_routes
 from soctalk.core.api import mssp_dashboard as mssp_dashboard_routes
@@ -38,8 +38,8 @@ from soctalk.core.auth.config import AuthMode, get_auth_mode
 from soctalk.core.auth.middleware import internal_session_middleware
 from soctalk.core.observability.metrics import metrics_router
 from soctalk.core.provisioning import ProvisioningWorker
-from soctalk.core.tenancy.auth import ingress_handoff_middleware
 from soctalk.core.tenancy import db as tenancy_db
+from soctalk.core.tenancy.auth import ingress_handoff_middleware
 
 logger = structlog.get_logger()
 
@@ -71,7 +71,7 @@ async def _lease_reaper_loop(stop_event: asyncio.Event) -> None:
             logger.warning("lease_reaper_error", error=str(e))
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=30)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 
@@ -113,7 +113,7 @@ async def _token_renewal_loop(stop_event: asyncio.Event) -> None:
             logger.warning("token_renewal_loop_error", error=str(e))
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
 
@@ -169,13 +169,13 @@ async def _lifespan(app: FastAPI):
         reaper_stop.set()
         try:
             await asyncio.wait_for(reaper_task, timeout=5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             reaper_task.cancel()
         if renewal_task is not None:
             renewal_stop.set()
             try:
                 await asyncio.wait_for(renewal_task, timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 renewal_task.cancel()
         if worker is not None and worker_task is not None:
             await worker.stop()
@@ -183,7 +183,7 @@ async def _lifespan(app: FastAPI):
                 # Worker respects stop_event and should exit within one
                 # poll interval; give it a bounded grace period.
                 await asyncio.wait_for(worker_task, timeout=10)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 worker_task.cancel()
         await tenancy_db.dispose_engines()
         logger.info("soctalk_v1_api_stop")
@@ -278,6 +278,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(ir_routes.integrations_router)
     app.include_router(ir_routes.engagements_router)
     app.include_router(ir_routes.playbooks_router)
+    app.include_router(ir_routes.triage_policies_router)
     app.include_router(ir_routes.authored_playbooks_router)
 
     # Auth endpoints only exist in internal mode. In proxy mode, they 404.
