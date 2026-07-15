@@ -22,12 +22,43 @@ from soctalk.authorization.render import supervisor_authorization_lines
 from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
+from soctalk.playbook.gate import legal_actions_for
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
 
 logger = structlog.get_logger()
 
 # Maximum iterations before forcing verdict
 MAX_ITERATIONS = 10
+
+# Narrowed structured-output schemas per legal-action set (#45): when the active
+# playbook restricts the supervisor's legal actions, the restriction is applied
+# BEFORE the call — an illegal action cannot even be sampled. Cached because the
+# handful of distinct legal sets is tiny and model classes are heavy to build.
+_CONSTRAINED_SCHEMAS: dict[frozenset[str], type[SupervisorDecision]] = {}
+
+
+def constrained_decision_schema(legal: frozenset[str]) -> type[SupervisorDecision]:
+    """A SupervisorDecision subclass whose ``next_action`` accepts only the legal
+    set. String Literal values keep ``model_dump()`` output identical to the base
+    schema's (its config already dumps enum values as plain strings)."""
+    cached = _CONSTRAINED_SCHEMAS.get(legal)
+    if cached is not None:
+        return cached
+    from typing import Literal
+
+    from pydantic import Field, create_model
+
+    ordered = tuple(sorted(legal))
+    model = create_model(
+        "ConstrainedSupervisorDecision",
+        __base__=SupervisorDecision,
+        next_action=(
+            Literal[ordered],  # type: ignore[valid-type]
+            Field(..., description=f"Next action: {', '.join(ordered)}"),
+        ),
+    )
+    _CONSTRAINED_SCHEMAS[legal] = model
+    return model
 
 
 async def supervisor_node(
@@ -311,10 +342,19 @@ async def _get_supervisor_decision(
     error fed back, then fails the run loudly via SchemaValidationError. Every
     raw response is funnelled through budget.track by the dispatcher.
     """
+    # Pre-call legal-action narrowing (#45): the playbook's legal set for the
+    # current phase becomes the schema's action enum. The routing gate re-checks
+    # after the call (defense in depth for state-written decisions).
+    schema: type[SupervisorDecision] = SupervisorDecision
+    if state is not None:
+        legal = legal_actions_for(state)
+        if legal is not None:
+            schema = constrained_decision_schema(legal)
+
     req = InferenceRequest(
         tier=InferenceTier.ROUTER,
         metadata=InferenceAccounting(producer="supervisor.router", budget_state=state),
-        output_schema=SupervisorDecision,
+        output_schema=schema,
         system=SUPERVISOR_SYSTEM_PROMPT,
         messages=[HumanMessage(
             content=SUPERVISOR_USER_PROMPT_TEMPLATE.format(context_summary=context_summary)

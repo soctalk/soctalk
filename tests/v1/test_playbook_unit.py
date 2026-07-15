@@ -207,13 +207,15 @@ def test_unknown_required_step_is_skipped_not_deadlocked():
 
 
 def test_gate_reroutes_supervisor_close_too():
-    """Codex round-1 blocker: the supervisor's auto-FP CLOSE maps to close_fp
-    downstream, so it must not skip the playbook's required evidence step."""
+    """Codex round-1 blocker + #45: the supervisor's auto-FP CLOSE maps to
+    close_fp downstream, so it must not skip the required evidence step — and
+    for the dual-use playbook CLOSE is not even a legal action: it remaps to
+    VERDICT, so the reasoning tier makes the call after the evidence step."""
     state = _gate_state()
     state["supervisor_decision"] = {"next_action": "CLOSE"}
     assert route_from_supervisor(state) == GATHER_AUTHORIZATION_CONTEXT
     state["playbook_steps_run"] = [GATHER_AUTHORIZATION_CONTEXT]
-    assert route_from_supervisor(state) == "close_investigation"
+    assert route_from_supervisor(state) == "verdict"
 
 
 def test_gate_exempts_budget_terminated_close():
@@ -523,11 +525,13 @@ async def test_graph_reroutes_gather_then_guard_overrides_close(monkeypatch):
     assert _disposition_from_final(final, "completed") == "escalate"
 
 
-async def test_graph_supervisor_close_gathers_then_floor_escalates(monkeypatch):
-    """Codex round-1 blocker, end-to-end: the supervisor never proposes VERDICT —
-    it CLOSEs a playbook-matched sudo alert whose only ticket is expired. The gate
-    still forces the evidence step first, and even though no verdict guard runs
-    (no verdict), the worker floor turns the close_fp into an escalate."""
+async def test_graph_supervisor_close_floor_backstop_without_playbook(monkeypatch):
+    """Codex round-1 blocker, end-to-end: the supervisor short-circuits with CLOSE
+    on a NON-playbook run carrying a contradicted FIM-track authorization context
+    (a playbook-governed run can no longer CLOSE at all — #45 legal_actions). No
+    verdict guard runs (no verdict), so the worker floor is the last line: it
+    turns the close_fp into an escalate on the contradicted paperwork."""
+    from soctalk.models.authorization import ChangeKind
 
     calls: list[str] = []
 
@@ -535,22 +539,36 @@ async def test_graph_supervisor_close_gathers_then_floor_escalates(monkeypatch):
         calls.append("supervisor")
         state["supervisor_decision"] = {
             "next_action": "CLOSE",
-            "action_reasoning": "looks like routine admin",
+            "action_reasoning": "looks like routine config management",
             "tp_confidence": 0.1,
         }
         return state
 
     monkeypatch.setattr(builder, "supervisor_node", fake_supervisor)
 
-    expired = _ticket(valid_until=datetime(2026, 7, 13, tzinfo=UTC))
-    graph = build_secops_graph()
-    final = await graph.ainvoke(
-        {"investigation": _sudo_investigation(_context([expired]))},
-        {"recursion_limit": 50},
+    fim_activity = AuthorizationActivity(
+        track=AuthorizationTrack.FIM,
+        path="/etc/app/app.conf",
+        change_type=ChangeKind.MODIFY,
+        time=T,
     )
+    expired_cr = GrantFact(
+        id="CR-77",
+        track=AuthorizationTrack.FIM,
+        scope=FactScope(target="/etc/app/*", change_type=ChangeKind.ANY),
+        grant_class=GrantClass.CHANGE_TICKET,
+        valid_until=datetime(2026, 7, 13, tzinfo=UTC),
+    )
+    ctx = AuthorizationContext(activity=fim_activity, facts=[expired_cr])
+    inv = _sudo_investigation()
+    inv["alerts"][0]["rule_groups"] = ["ossec", "syscheck"]  # no playbook match
+    inv["authorization_context"] = ctx.model_dump(mode="json")
 
-    assert final["playbook_steps_run"] == [GATHER_AUTHORIZATION_CONTEXT]
-    assert calls == ["supervisor", "supervisor"]
+    graph = build_secops_graph()
+    final = await graph.ainvoke({"investigation": inv}, {"recursion_limit": 50})
+
+    assert "playbook" not in final  # FIM track matches no built-in playbook
+    assert calls == ["supervisor"]
     assert "verdict" not in final or not final.get("verdict")
 
     disposition = _disposition_from_final(final, "completed")
@@ -805,3 +823,213 @@ def test_volume_cap_policy_parse_rejects_booleans_and_garbage():
     assert _int_policy({"auto_close_volume_cap": "junk"}, "auto_close_volume_cap", 500) == 500
     # explicit 0 / negative = operator intent to disable (passed through)
     assert _int_policy({"auto_close_volume_cap": 0}, "auto_close_volume_cap", 500) == 0
+
+
+# ---------------------------------------------------------------------------
+# issue #45: legal_actions + interrupt effect
+# ---------------------------------------------------------------------------
+
+
+def test_playbook_phase_flips_on_required_steps():
+    from soctalk.playbook.gate import legal_actions_for, playbook_phase
+
+    state = _gate_state()
+    assert playbook_phase(state) == "triage"
+    assert "VERDICT" in legal_actions_for(state)
+    assert "CLOSE" not in legal_actions_for(state)
+    state["playbook_steps_run"] = [GATHER_AUTHORIZATION_CONTEXT]
+    assert playbook_phase(state) == "decide"
+    assert "CLOSE" not in legal_actions_for(state)
+
+
+def test_legal_actions_unknown_names_drop_and_void():
+    """Unknown action names in playbook data are dropped; a set that drops to
+    empty voids the constraint entirely — authoring errors degrade to full
+    triage, never to a wedged run."""
+    from soctalk.playbook.gate import legal_actions_for
+
+    state = _gate_state()
+    state["playbook"]["legal_actions"] = {"triage": ["VERDICT", "SELF_DESTRUCT"]}
+    assert legal_actions_for(state) == frozenset({"VERDICT"})
+    state["playbook"]["legal_actions"] = {"triage": ["SELF_DESTRUCT"]}
+    assert legal_actions_for(state) is None
+    assert legal_actions_for({"investigation": {}}) is None
+
+
+def test_route_remaps_illegal_action_with_exemptions():
+    """Post-call defense in depth: an illegal action is remapped to a legal one;
+    the budget short-circuit and the max-iterations forced VERDICT (and only
+    VERDICT — Codex #45 finding: a stray CLOSE at max iterations must still be
+    remapped, or it bypasses the verdict/sign-off path) are exempt."""
+    state = _gate_state(steps_run=[GATHER_AUTHORIZATION_CONTEXT])
+    state["supervisor_decision"] = {"next_action": "CLOSE"}
+    assert route_from_supervisor(state) == "verdict"
+
+    budget = dict(state)
+    budget["budget_terminated"] = True
+    assert route_from_supervisor(budget) == "close_investigation"
+
+    # forced VERDICT at max iterations is exempt even when VERDICT is illegal
+    forced = dict(state)
+    forced["iteration_count"] = 10
+    forced["playbook"] = dict(state["playbook"])
+    forced["playbook"]["legal_actions"] = {"decide": ["ENRICH"]}
+    forced["supervisor_decision"] = {"next_action": "VERDICT"}
+    assert route_from_supervisor(forced) == "verdict"
+
+    # ...but a CLOSE at max iterations is NOT exempt: remapped to a legal action
+    stray = dict(state)
+    stray["iteration_count"] = 10
+    stray["supervisor_decision"] = {"next_action": "CLOSE"}
+    assert route_from_supervisor(stray) == "verdict"
+
+
+def test_constrained_decision_schema_rejects_illegal_actions():
+    import pydantic
+
+    from soctalk.supervisor.node import constrained_decision_schema
+
+    legal = frozenset({"ENRICH", "VERDICT"})
+    schema = constrained_decision_schema(legal)
+    ok = schema(next_action="VERDICT", action_reasoning="x")
+    assert ok.model_dump()["next_action"] == "VERDICT"
+    try:
+        schema(next_action="CLOSE", action_reasoning="x")
+        raise AssertionError("constrained schema accepted an illegal action")
+    except pydantic.ValidationError:
+        pass
+    assert constrained_decision_schema(legal) is schema  # cached
+
+
+def _pci_asset() -> EntityContextFact:
+    return EntityContextFact(
+        id="ENT-PCI",
+        track=AuthorizationTrack.ACCOUNT,
+        entity_type=AuthorizationEntityKind.ASSET,
+        name="db-01",
+        environment="prod",
+        data_classification="pci",
+    )
+
+
+def test_guard_interrupts_covered_close_on_signoff_asset():
+    """The #43 worked example, enforced: a fully covered close on a PCI asset is
+    interrupted for human sign-off — the draft stands, a human disposes."""
+    from soctalk.playbook.guard import GUARDRAIL_SIGNOFF_CLOSE
+
+    result = evaluate_guard(
+        verdict_decision="close",
+        context=_context([_ticket(), _pci_asset()]),
+        malicious_signal=False,
+        close_signoff_data_classes=["pci"],
+    )
+    assert result.interrupted is True
+    assert result.final_decision == "close"  # draft intact
+    assert not result.overridden
+    (o,) = result.overrides
+    assert o.guardrail == GUARDRAIL_SIGNOFF_CLOSE
+    assert o.effect == "interrupt" and o.to_decision == "human_review"
+
+
+def test_guard_interrupt_yields_to_overrides_and_scope():
+    """Override edges outrank the interrupt (a contradicted PCI close escalates,
+    not sign-offs); non-close drafts, non-listed classes, and unknown assets
+    never interrupt."""
+    contradicted = evaluate_guard(
+        verdict_decision="close",
+        context=_context([
+            _ticket(valid_until=datetime(2026, 7, 13, tzinfo=UTC)), _pci_asset(),
+        ]),
+        malicious_signal=False,
+        close_signoff_data_classes=["pci"],
+    )
+    assert contradicted.overridden and not contradicted.interrupted
+
+    escalate = evaluate_guard(
+        verdict_decision="escalate",
+        context=_context([_ticket(), _pci_asset()]),
+        malicious_signal=False,
+        close_signoff_data_classes=["pci"],
+    )
+    assert not escalate.overrides and escalate.final_decision == "escalate"
+
+    non_pci = evaluate_guard(
+        verdict_decision="close",
+        context=_context([_ticket()]),  # no asset record: classification unknown
+        malicious_signal=False,
+        close_signoff_data_classes=["pci"],
+    )
+    assert not non_pci.overrides and non_pci.final_decision == "close"
+
+
+async def test_verdict_guard_node_interrupt_keeps_draft_and_flags(monkeypatch):
+    from soctalk.graph.builder import route_from_verdict
+
+    state = {
+        "playbook": PRIVILEGED_EXEC_PLAYBOOK.model_dump(),
+        "investigation": _sudo_investigation(_context([_ticket(), _pci_asset()])),
+        "verdict": _verdict("close"),
+    }
+    state = await verdict_guard_node(state)
+    assert state["verdict"]["decision"] == "close"  # draft untouched
+    assert state.get("verdict_overridden_by_guard") is None
+    assert state["verdict_interrupted"] is True
+    (audit,) = state["playbook_audit"]
+    assert audit["overrides"][0]["effect"] == "interrupt"
+    # routing honors the interrupt over the close decision
+    assert route_from_verdict(state) == "human_review"
+    # and the worker maps the interrupted close to the sign-off queue
+    assert _disposition_from_final(state, "completed") == "escalate"
+
+
+async def test_graph_covered_pci_close_interrupts_end_to_end(monkeypatch):
+    """Full graph: covered sudo close on a PCI asset — verdict drafts close, the
+    guard interrupts, human_review is reached with the draft intact, and the
+    worker disposition is escalate (the pending_reviews sign-off queue)."""
+
+    async def fake_supervisor(state: dict[str, Any]) -> dict[str, Any]:
+        state["iteration_count"] = state.get("iteration_count", 0) + 1
+        state["supervisor_decision"] = {"next_action": "VERDICT"}
+        return state
+
+    async def fake_verdict(state: dict[str, Any]) -> dict[str, Any]:
+        state["verdict"] = _verdict("close")
+        return state
+
+    async def fake_human_review(state: dict[str, Any]) -> dict[str, Any]:
+        state["human_review_reached"] = True
+        return state
+
+    monkeypatch.setattr(builder, "supervisor_node", fake_supervisor)
+    monkeypatch.setattr(builder, "verdict_node", fake_verdict)
+    monkeypatch.setattr(builder, "human_review_node", fake_human_review)
+
+    graph = build_secops_graph()
+    final = await graph.ainvoke(
+        {"investigation": _sudo_investigation(_context([_ticket(), _pci_asset()]))},
+        {"recursion_limit": 50},
+    )
+
+    assert final["verdict"]["decision"] == "close"
+    assert final["verdict_interrupted"] is True
+    assert final["human_review_reached"] is True
+    assert _disposition_from_final(final, "completed") == "escalate"
+
+
+async def test_verdict_guard_clears_stale_interrupt_on_retry():
+    """A prior pass's interrupt must not survive into a later, uninterrupted
+    verdict (human MORE_INFO -> supervisor -> new verdict path)."""
+    state = {
+        "playbook": PRIVILEGED_EXEC_PLAYBOOK.model_dump(),
+        "investigation": _sudo_investigation(_context([_ticket(), _pci_asset()])),
+        "verdict": _verdict("close"),
+    }
+    state = await verdict_guard_node(state)
+    assert state["verdict_interrupted"] is True
+
+    # second pass: model now says needs_more_info — no interrupt applies
+    state["verdict"] = _verdict("needs_more_info")
+    state = await verdict_guard_node(state)
+    assert state.get("verdict_interrupted") is None
+    from soctalk.graph.builder import route_from_verdict
+    assert route_from_verdict(state) == "supervisor"

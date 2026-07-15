@@ -18,14 +18,21 @@ parity test.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from soctalk.authorization.engine import evaluate_authorization, select_facts
+from soctalk.authorization.engine import (
+    evaluate_authorization,
+    resolved_entity,
+    select_facts,
+)
 from soctalk.models.authorization import (
     AuthorizationComponents,
     AuthorizationContext,
+    AuthorizationEntityKind,
+    AuthorizationTrack,
     GrantFact,
 )
 
@@ -33,13 +40,21 @@ AuthzClass = Literal["covered", "contradicted", "absent"]
 
 GUARDRAIL_AUTHZ_CONTRADICTED = "authorization_contradicted_close"
 GUARDRAIL_IOC_OVER_CLOSE = "ioc_over_close"
+# Sign-off scope note (#45): this rule governs LLM-close COMMITS in the graph
+# plane, where asset data classification is knowable (authorization facts). The
+# ingest plane cannot apply it — no facts exist at ingest — so a memoized close
+# cached BEFORE the rule existed can still replay for a sensitive shape until
+# its TTL. Forward-protected: an interrupted close memoizes as ``escalate``, so
+# post-rule recurrences of a sign-off shape always reach review. Full ingest
+# coverage arrives with shape provenance / CMDB classification (M2 Phase b).
+GUARDRAIL_SIGNOFF_CLOSE = "sensitive_asset_close_signoff"
 
 
 class GuardOverride(BaseModel):
-    """One fired guardrail — the audit record of an override."""
+    """One fired guardrail — the audit record of an override or interrupt."""
 
     guardrail: str
-    effect: Literal["override"] = "override"
+    effect: Literal["override", "interrupt"] = "override"
     from_decision: str
     to_decision: str
     reason: str
@@ -50,10 +65,13 @@ class GuardResult(BaseModel):
     authz_class: AuthzClass | None = None
     components: AuthorizationComponents | None = None
     overrides: list[GuardOverride] = []
+    # interrupt (#45): the draft decision stands, but a human signs off before it
+    # takes effect — distinct from an override in both routing and audit.
+    interrupted: bool = False
 
     @property
     def overridden(self) -> bool:
-        return bool(self.overrides)
+        return any(o.effect == "override" for o in self.overrides)
 
 
 def derive_authz_class(
@@ -87,21 +105,42 @@ def derive_authz_class(
     return "absent", components
 
 
+def asset_data_classification(context: AuthorizationContext | None) -> str | None:
+    """The trust-resolved data classification of the activity's asset, or None
+    when unknown (no context, FIM track, or no asset record). Uses the engine's
+    own selection + resolution so the sign-off rule and the evaluation can never
+    disagree about which record speaks for the asset."""
+    if context is None or context.activity.track != AuthorizationTrack.ACCOUNT:
+        return None
+    if not context.activity.host:
+        return None
+    selected = select_facts(context.facts, context.activity.track, context.tenant)
+    asset = resolved_entity(selected, AuthorizationEntityKind.ASSET, context.activity.host)
+    if asset is None or asset.data_classification is None:
+        return None
+    return str(asset.data_classification).lower()
+
+
 def evaluate_guard(
     *,
     verdict_decision: str,
     context: AuthorizationContext | None,
     malicious_signal: bool,
+    close_signoff_data_classes: Sequence[str] = (),
 ) -> GuardResult:
     """The guard's whole decision, as a pure function.
 
     Only a ``close`` draft is ever touched; escalate and needs_more_info always commit
     (the guard only ever RAISES suspicion, mirroring the engine, which only ever lowers
     it by finding covering evidence). The IOC edge is checked first — the floor always
-    outranks authorization reasoning.
+    outranks authorization reasoning. A close that would otherwise COMMIT is
+    interrupted for human sign-off when the activity's asset carries one of the
+    playbook's ``close_signoff_data_classes`` (#45): the draft stays intact, a human
+    disposes — even a fully covered close on such an asset is not automatic.
     """
     authz_class, components = derive_authz_class(context)
     overrides: list[GuardOverride] = []
+    interrupted = False
     if verdict_decision == "close" and malicious_signal:
         overrides.append(
             GuardOverride(
@@ -126,11 +165,33 @@ def evaluate_guard(
                 ),
             )
         )
+    elif verdict_decision == "close" and close_signoff_data_classes:
+        data_class = asset_data_classification(context)
+        if data_class is not None and data_class in {
+            str(c).lower() for c in close_signoff_data_classes
+        }:
+            interrupted = True
+            overrides.append(
+                GuardOverride(
+                    guardrail=GUARDRAIL_SIGNOFF_CLOSE,
+                    effect="interrupt",
+                    from_decision="close",
+                    to_decision="human_review",
+                    reason=(
+                        f"close on a {data_class}-classified asset requires human "
+                        "sign-off — the draft stands, a human disposes"
+                    ),
+                )
+            )
     return GuardResult(
-        final_decision="escalate" if overrides else verdict_decision,
+        final_decision=(
+            "escalate" if any(o.effect == "override" for o in overrides)
+            else verdict_decision
+        ),
         authz_class=authz_class,
         components=components,
         overrides=overrides,
+        interrupted=interrupted,
     )
 
 

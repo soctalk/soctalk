@@ -504,6 +504,18 @@ def select_facts(
     return _select(facts, track, tenant)
 
 
+def resolved_entity(
+    facts: Sequence[AuthorizationFact],
+    entity_type: AuthorizationEntityKind,
+    name: str,
+) -> EntityContextFact | None:
+    """The trust-resolved entity record for a name — the exact resolution the
+    evaluation uses (highest trust, deterministic tiebreak), public so callers
+    (the playbook guard's sign-off rule reads asset data_classification) can never
+    disagree with the engine about which record speaks for an entity."""
+    return _resolved_entity(facts, entity_type, name)
+
+
 def evaluate_authorization(
     activity: AuthorizationActivity,
     facts: Sequence[AuthorizationFact],

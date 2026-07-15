@@ -53,3 +53,15 @@ class Playbook(BaseModel):
     # security-indicator veto fires (see soctalk.playbook.operational). The class
     # decision is deterministic; the model is invoked only for the ambiguous rest.
     deterministic_disposition: str | None = None
+    # Legal supervisor actions per phase ("triage" until required_steps ran, then
+    # "decide"), from the fixed SupervisorAction enum only (#45). Enforced twice:
+    # the supervisor's structured-output enum is narrowed BEFORE the call, and the
+    # routing gate remaps an illegal action after it. An unlisted phase is
+    # unconstrained. Include VERDICT in a triage set — proposing it is what
+    # triggers the required-step reroute.
+    legal_actions: dict[str, list[str]] = Field(default_factory=dict)
+    # A committing LLM close whose activity's asset carries one of these data
+    # classifications is INTERRUPTED for human sign-off instead (#45): the draft
+    # stays intact, the case routes to human review. The #43 worked example's
+    # "a close on a PCI asset requires human sign-off", as data.
+    close_signoff_data_classes: list[str] = Field(default_factory=list)

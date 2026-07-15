@@ -11,10 +11,10 @@ from langgraph.graph import END, StateGraph
 from soctalk.graph.close import close_investigation_node
 from soctalk.graph.hil import human_review_node
 from soctalk.models.enums import HumanDecision, VerdictDecision
+from soctalk.playbook.gate import legal_actions_for, missing_required_steps
 from soctalk.playbook.models import (
     GATHER_AUTHORIZATION_CONTEXT,
     KNOWN_DISPOSITIONS,
-    KNOWN_STEP_NODES,
 )
 from soctalk.playbook.nodes import (
     gather_authorization_context_node,
@@ -23,7 +23,7 @@ from soctalk.playbook.nodes import (
     verdict_guard_node,
 )
 from soctalk.playbook.operational import operational_close_vetoes
-from soctalk.supervisor.node import supervisor_node
+from soctalk.supervisor.node import MAX_ITERATIONS, supervisor_node
 from soctalk.supervisor.verdict import verdict_node
 from soctalk.workers.cortex import cortex_worker_node
 from soctalk.workers.misp import misp_worker_node
@@ -31,31 +31,6 @@ from soctalk.workers.thehive import thehive_worker_node
 from soctalk.workers.wazuh import wazuh_worker_node
 
 logger = structlog.get_logger()
-
-
-def missing_required_steps(state: dict[str, Any]) -> list[str]:
-    """Playbook-required deterministic steps that have not run yet (pure).
-
-    Only step names the graph actually has nodes for count — an unknown name in a
-    playbook is logged and skipped rather than deadlocking the run (there is nowhere
-    to route to, and the post-verdict guard still enforces the floor edges).
-    """
-    playbook = state.get("playbook") or {}
-    required = playbook.get("required_steps") or []
-    done = set(state.get("playbook_steps_run") or [])
-    missing = []
-    for step in required:
-        if step in done:
-            continue
-        if step not in KNOWN_STEP_NODES:
-            logger.warning(
-                "playbook_unknown_required_step",
-                playbook=playbook.get("id"),
-                step=step,
-            )
-            continue
-        missing.append(step)
-    return missing
 
 
 def route_from_resolve_playbook(state: dict[str, Any]) -> Literal[
@@ -123,6 +98,31 @@ def route_from_supervisor(state: dict[str, Any]) -> Literal[
     decision = state.get("supervisor_decision", {})
     action = decision.get("next_action", "ENRICH")
 
+    # Post-call legal-action gate (#45), defense in depth behind the pre-call
+    # schema narrowing: an action outside the playbook's legal set for the
+    # current phase is remapped to a legal one (VERDICT when available — the
+    # decide-phase action — else the first legal action). Exempt: the budget
+    # short-circuit's CLOSE (state-written, must terminate the run) and the
+    # max-iterations forced VERDICT specifically (remapping it would loop the
+    # run into the recursion limit; the required-step gate below still governs
+    # it). The exemption is per-ACTION, not per-iteration — any other action at
+    # max iterations still gets remapped.
+    forced_verdict = (
+        action == "VERDICT" and state.get("iteration_count", 0) >= MAX_ITERATIONS
+    )
+    if not state.get("budget_terminated") and not forced_verdict:
+        legal = legal_actions_for(state)
+        if legal is not None and action not in legal:
+            fallback = "VERDICT" if "VERDICT" in legal else sorted(legal)[0]
+            logger.warning(
+                "playbook_illegal_action_remapped",
+                playbook=(state.get("playbook") or {}).get("id"),
+                action=action,
+                legal=sorted(legal),
+                fallback=fallback,
+            )
+            action = fallback
+
     logger.debug("routing_from_supervisor", action=action)
 
     if action == "INVESTIGATE":
@@ -185,6 +185,14 @@ def route_from_verdict(state: dict[str, Any]) -> Literal[
             decision="forcing_close_no_hil",
         )
         return "close_investigation"
+
+    # Guard interrupt (#45): the draft stands but a human signs off before it
+    # takes effect — route to review regardless of the decision. With a
+    # checkpointer this is a real HIL pause; the worker plane maps it to an
+    # escalate disposition (pending_reviews) at disposition time.
+    if state.get("verdict_interrupted"):
+        logger.info("routing_from_verdict_interrupted", decision=decision)
+        return "human_review"
 
     logger.debug("routing_from_verdict", decision=decision)
 

@@ -136,22 +136,29 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("verdict_error") or not verdict:
         return state
 
+    playbook = state.get("playbook") or {}
+    playbook_id = playbook.get("id")
     investigation = state.get("investigation", {}) or {}
+    # Each verdict pass gets a fresh guard ruling — a stale interrupt flag from a
+    # prior pass (e.g. human MORE_INFO -> supervisor -> new verdict) must not
+    # route an uninterrupted draft to review.
+    state.pop("verdict_interrupted", None)
+    state.pop("verdict_overridden_by_guard", None)
     draft_decision = decision_value(verdict.get("decision"))
     result = evaluate_guard(
         verdict_decision=draft_decision,
         context=parse_authorization_context(investigation),
         malicious_signal=has_malicious_signal(investigation),
+        close_signoff_data_classes=playbook.get("close_signoff_data_classes") or (),
     )
     state["authz_class"] = result.authz_class
 
-    if not result.overridden:
+    if not result.overrides:
         logger.debug(
             "verdict_guard_pass", decision=draft_decision, authz_class=result.authz_class
         )
         return state
 
-    playbook_id = (state.get("playbook") or {}).get("id")
     audit = {
         "at": datetime.now(UTC).isoformat(),
         "playbook": playbook_id,
@@ -163,20 +170,27 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     }
     state.setdefault("playbook_audit", []).append(audit)
 
-    reasons = "; ".join(o.reason for o in result.overrides)
-    verdict = dict(verdict)
-    verdict["decision"] = result.final_decision
-    verdict["recommendation"] = (
-        f"[GUARD OVERRIDE: LLM drafted '{draft_decision}', enforced '"
-        f"{result.final_decision}' — {reasons}] "
-        f"{verdict.get('recommendation') or ''}"
-    ).strip()[:2048]
-    state["verdict"] = verdict
-    state["verdict_overridden_by_guard"] = True
+    if result.interrupted:
+        # The draft stands untouched — a human disposes. Routing (and the
+        # worker's disposition mapping) read the flag, not the verdict.
+        state["verdict_interrupted"] = True
+    if result.overridden:
+        reasons = "; ".join(
+            o.reason for o in result.overrides if o.effect == "override"
+        )
+        verdict = dict(verdict)
+        verdict["decision"] = result.final_decision
+        verdict["recommendation"] = (
+            f"[GUARD OVERRIDE: LLM drafted '{draft_decision}', enforced '"
+            f"{result.final_decision}' — {reasons}] "
+            f"{verdict.get('recommendation') or ''}"
+        ).strip()[:2048]
+        state["verdict"] = verdict
+        state["verdict_overridden_by_guard"] = True
 
     for o in result.overrides:
         logger.warning(
-            "verdict_guard_override",
+            "verdict_guard_" + o.effect,
             guardrail=o.guardrail,
             playbook=playbook_id,
             from_decision=o.from_decision,
