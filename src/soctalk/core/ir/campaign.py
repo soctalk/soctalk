@@ -14,21 +14,76 @@ false alarm.
 from __future__ import annotations
 
 import ipaddress
+import re
+from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.observability.audit import log_audit
+
+# An engagement window longer than this is almost certainly a mistake (a
+# forgotten window is a standing blind spot). Bound it at declare time.
+DEFAULT_MAX_ENGAGEMENT_DAYS = 90
+
+_TECHNIQUE_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
+
 
 # ---------------------------------------------------------------- engagements
+
+
+def _valid_ip_or_cidr(entry: str) -> bool:
+    try:
+        if "/" in entry:
+            ipaddress.ip_network(entry, strict=False)
+        else:
+            ipaddress.ip_address(entry)
+        return True
+    except ValueError:
+        return False
 
 
 async def declare_engagement(
     db: AsyncSession, *, tenant_id: UUID, name: str, kind: str,
     starts_at, ends_at, scope_source_ips: list[str],
     scope_hosts: list[str], scope_techniques: list[str],
+    created_by: UUID | None = None,
+    max_days: int = DEFAULT_MAX_ENGAGEMENT_DAYS,
 ) -> str:
+    """Declare a bounded pentest/red-team window. Analyst-authored source of truth.
+
+    Validated fail-closed so a declaration can never become an accidental
+    match-all: a non-empty tester source axis and at least one bounded target
+    axis (host or technique) are REQUIRED, and the window is bounded. An
+    all-empty scope would deconflict every alert in its window — forbidden here.
+    Raises ``ValueError`` on any invalid input.
+    """
+    if not name or not name.strip():
+        raise ValueError("engagement name is required")
+    if ends_at <= starts_at:
+        raise ValueError("engagement ends_at must be after starts_at")
+    if (ends_at - starts_at) > timedelta(days=max_days):
+        raise ValueError(f"engagement window exceeds the {max_days}-day maximum")
+
+    src = [s.strip() for s in scope_source_ips if s and s.strip()]
+    if not src:
+        raise ValueError("scope_source_ips must list at least one tester source ip/cidr")
+    bad_ips = [s for s in src if not _valid_ip_or_cidr(s)]
+    if bad_ips:
+        raise ValueError(f"invalid source ip/cidr: {', '.join(bad_ips)}")
+
+    hosts = [h.strip() for h in scope_hosts if h and h.strip()]
+    techs = [t.strip().upper() for t in scope_techniques if t and t.strip()]
+    if not hosts and not techs:
+        raise ValueError(
+            "declare at least one bounded target axis: scope_hosts or scope_techniques"
+        )
+    bad_tech = [t for t in techs if not _TECHNIQUE_RE.match(t)]
+    if bad_tech:
+        raise ValueError(f"invalid ATT&CK technique id: {', '.join(bad_tech)}")
+
     eid = str(uuid4())
     await db.execute(
         text(
@@ -40,11 +95,72 @@ async def declare_engagement(
                     CAST(:ips AS JSONB), CAST(:hosts AS JSONB), CAST(:tech AS JSONB))
             """
         ),
-        {"id": eid, "t": str(tenant_id), "n": name, "k": kind,
-         "s": starts_at, "e": ends_at, "ips": _json(scope_source_ips),
-         "hosts": _json(scope_hosts), "tech": _json(scope_techniques)},
+        {"id": eid, "t": str(tenant_id), "n": name.strip(), "k": kind,
+         "s": starts_at, "e": ends_at, "ips": _json(src),
+         "hosts": _json(hosts), "tech": _json(techs)},
+    )
+    await log_audit(
+        db, action="ir.engagement.declared",
+        actor_principal="analyst", actor_id=str(created_by) if created_by else "system",
+        tenant_id=tenant_id, resource_type="engagement", resource_id=eid,
+        notes=_json({"name": name.strip(), "kind": kind,
+                     "source_ips": src, "hosts": hosts, "techniques": techs}),
     )
     return eid
+
+
+async def revoke_engagement(
+    db: AsyncSession, *, tenant_id: UUID, engagement_id: UUID,
+    revoked_by: UUID | None = None, reason: str | None = None,
+) -> bool:
+    """End a declared window early. Stamps ``revoked_at`` WITHOUT mutating the
+    declared ``ends_at`` (the window is audit-bearing). ``deconflict()`` ignores
+    revoked engagements immediately. Returns False if not found / already revoked."""
+    row = (await db.execute(
+        text(
+            "UPDATE engagements SET revoked_at = now(), revoked_by = :by, "
+            "       revoke_reason = :reason "
+            "WHERE id = :id AND tenant_id = :t AND revoked_at IS NULL "
+            "RETURNING id"
+        ),
+        {"id": str(engagement_id), "t": str(tenant_id),
+         "by": str(revoked_by) if revoked_by else None, "reason": reason},
+    )).first()
+    if row is None:
+        return False
+    await log_audit(
+        db, action="ir.engagement.revoked",
+        actor_principal="analyst", actor_id=str(revoked_by) if revoked_by else "system",
+        tenant_id=tenant_id, resource_type="engagement", resource_id=str(engagement_id),
+        notes=reason,
+    )
+    return True
+
+
+async def list_engagements(
+    db: AsyncSession, *, tenant_id: UUID, include_revoked: bool = False,
+) -> list[dict[str, Any]]:
+    """List engagements with declared-test / out-of-scope lane counts."""
+    where = "WHERE e.tenant_id = :t" + ("" if include_revoked else " AND e.revoked_at IS NULL")
+    rows = (await db.execute(
+        text(
+            f"""
+            SELECT e.id, e.name, e.kind, e.starts_at, e.ends_at,
+                   e.scope_source_ips, e.scope_hosts, e.scope_techniques,
+                   e.revoked_at, e.created_at,
+                   count(o.id) FILTER (WHERE o.status = 'declared_test') AS declared_test_count,
+                   count(o.id) FILTER (WHERE o.status = 'out_of_scope') AS out_of_scope_count
+            FROM engagements e
+            LEFT JOIN engagement_observations o
+              ON o.primary_engagement_id = e.id AND o.tenant_id = e.tenant_id
+            {where}
+            GROUP BY e.id
+            ORDER BY e.starts_at DESC
+            """
+        ),
+        {"t": str(tenant_id)},
+    )).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def _ip_in_scope(ip: str, scope_ips: list[str]) -> bool:
@@ -68,45 +184,120 @@ async def deconflict(
     db: AsyncSession, *, tenant_id: UUID, occurred_at,
     source_ips: list[str], hosts: list[str], techniques: list[str],
 ) -> dict[str, Any] | None:
-    """Match activity against declared engagements.
+    """Match activity against ALL declared engagements covering this window.
+
+    Windows can legitimately overlap (a pentest and a red-team can run at once),
+    so every in-window, non-revoked engagement is considered. FAIL-CLOSED: an
+    alert is only ever suppressed as a declared test when it is POSITIVELY
+    attributable to the tester — an in-scope source ip must be observed and no
+    part of the activity may stray.
+
+    Per engagement, declared_test requires ALL of:
+      - the engagement declares a tester source scope (an engagement without one
+        can never deconflict — it would be source-blind; skipped);
+      - at least one observed source ip is in scope (the tester), and NO observed
+        source ip is out of scope;
+      - at least one target axis is positively satisfied — an in-scope host OR an
+        in-scope technique — and no observed host/technique strays.
 
     Returns:
-      - None: no engagement covers this window.
-      - {status: 'declared_test', ...}: in-window AND fully in-scope.
-      - {status: 'out_of_scope', out_of_scope: {...}}: in-window but the
-        activity strays outside declared scope — a contractual finding,
-        surfaced, never suppressed.
+      - None: no engagement positively covers this activity (normal triage runs —
+        an unattributable alert is never suppressed).
+      - {status: 'declared_test', engagement_id, matched_engagement_ids}.
+      - {status: 'out_of_scope', engagement_id, out_of_scope}: the tester source
+        matched but the activity strayed (out-of-scope host/technique, mixed
+        source, or no positive target) — a contractual finding, forced to a look.
     """
-    eng = (await db.execute(
+    rows = (await db.execute(
         text(
             """
             SELECT id, scope_source_ips, scope_hosts, scope_techniques
             FROM engagements
             WHERE tenant_id = :t AND starts_at <= :occ AND ends_at >= :occ
-            ORDER BY starts_at DESC LIMIT 1
+              AND revoked_at IS NULL
+            ORDER BY starts_at DESC
             """
         ),
         {"t": str(tenant_id), "occ": occurred_at},
-    )).mappings().first()
-    if eng is None:
+    )).mappings().all()
+    if not rows:
         return None
 
-    scope_ips = list(eng["scope_source_ips"] or [])
-    scope_hosts = {h.lower() for h in (eng["scope_hosts"] or [])}
-    scope_tech = {t.upper() for t in (eng["scope_techniques"] or [])}
+    matched: list[str] = []
+    best_oos: tuple[int, str, dict[str, Any]] | None = None
+    for eng in rows:
+        scope_ips = list(eng["scope_source_ips"] or [])
+        scope_hosts = {h.lower() for h in (eng["scope_hosts"] or [])}
+        scope_tech = {t.upper() for t in (eng["scope_techniques"] or [])}
+        # An engagement without a tester source scope is source-blind and can
+        # never deconflict. declare_engagement() forbids it; legacy rows aren't
+        # trusted.
+        if not scope_ips:
+            continue
 
-    oos_ips = [ip for ip in source_ips if scope_ips and not _ip_in_scope(ip, scope_ips)]
-    oos_hosts = [h for h in hosts if scope_hosts and h.lower() not in scope_hosts]
-    oos_tech = [t for t in techniques if scope_tech and t.upper() not in scope_tech]
+        src_in = [ip for ip in source_ips if _ip_in_scope(ip, scope_ips)]
+        # Not attributable to this engagement's testers: it does not apply. The
+        # alert falls through to normal triage — never silently suppressed.
+        if not src_in:
+            continue
 
-    if oos_ips or oos_hosts or oos_tech:
-        return {
-            "status": "out_of_scope",
-            "engagement_id": str(eng["id"]),
-            "out_of_scope": {"source_ips": oos_ips, "hosts": oos_hosts,
-                             "techniques": oos_tech},
-        }
-    return {"status": "declared_test", "engagement_id": str(eng["id"])}
+        src_oos = [ip for ip in source_ips if not _ip_in_scope(ip, scope_ips)]
+        host_in = [h for h in hosts if h.lower() in scope_hosts]
+        host_oos = [h for h in hosts if scope_hosts and h.lower() not in scope_hosts]
+        tech_in = [t for t in techniques if t.upper() in scope_tech]
+        tech_oos = [t for t in techniques if scope_tech and t.upper() not in scope_tech]
+
+        target_ok = bool(host_in or tech_in)  # a positive target match is required
+        strays = src_oos + host_oos + tech_oos
+
+        if target_ok and not strays:
+            matched.append(str(eng["id"]))
+        else:
+            oos: dict[str, Any] = {
+                "source_ips": src_oos, "hosts": host_oos, "techniques": tech_oos,
+            }
+            if not target_ok:
+                oos["missing_target"] = True
+            count = len(strays) + (0 if target_ok else 1)
+            if best_oos is None or count < best_oos[0]:
+                best_oos = (count, str(eng["id"]), oos)
+
+    if matched:
+        return {"status": "declared_test", "engagement_id": matched[0],
+                "matched_engagement_ids": matched}
+    if best_oos is not None:
+        return {"status": "out_of_scope", "engagement_id": best_oos[1],
+                "matched_engagement_ids": [best_oos[1]], "out_of_scope": best_oos[2]}
+    return None
+
+
+async def record_engagement_observation(
+    db: AsyncSession, *, tenant_id: UUID, alert_id: UUID,
+    source_event_row_id: UUID, status: str, primary_engagement_id: str,
+    matched_engagement_ids: list[str], out_of_scope: dict[str, Any] | None,
+    occurred_at,
+) -> None:
+    """Record one deconflicted alert into the durable declared-test lane.
+
+    Idempotent per source-event row (a replay no-ops). A deconflicted alert is
+    NEVER closed/FP — this row is how it stays queryable and counted."""
+    await db.execute(
+        text(
+            """
+            INSERT INTO engagement_observations
+              (id, tenant_id, primary_engagement_id, matched_engagement_ids,
+               alert_id, source_event_row_id, status, out_of_scope, occurred_at)
+            VALUES (:id, :t, :peid, CAST(:meids AS JSONB), :aid, :seid, :st,
+                    CAST(:oos AS JSONB), :occ)
+            ON CONFLICT (tenant_id, source_event_row_id) DO NOTHING
+            """
+        ),
+        {"id": str(uuid4()), "t": str(tenant_id), "peid": primary_engagement_id,
+         "meids": _json(matched_engagement_ids), "aid": str(alert_id),
+         "seid": str(source_event_row_id), "st": status,
+         "oos": _json(out_of_scope) if out_of_scope is not None else None,
+         "occ": occurred_at},
+    )
 
 
 # ------------------------------------------------------- probe classification

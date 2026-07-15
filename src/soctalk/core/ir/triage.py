@@ -30,6 +30,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.authz_shadow import ShadowSettings, score_alert_shadow, should_score
+from soctalk.core.ir.campaign import (
+    deconflict,
+    record_engagement_observation,
+)
 from soctalk.core.ir.correlation import (
     extract_keys,
     find_correlated_investigation,
@@ -204,6 +208,45 @@ def _evidence_retention_days() -> int:
         return max(1, int(os.getenv("SOCTALK_EVIDENCE_RETENTION_DAYS", "90")))
     except ValueError:
         return 90
+
+
+# Entity roles that identify the ORIGIN of activity (the tester's box for a
+# pentest). Only these seed the deconfliction source axis — a destination ip
+# must never be matched against the tester source scope (it would false-flag a
+# legitimate declared-test alert as out-of-scope).
+_SOURCE_IP_ROLES = frozenset({"src", "source", "source_ip", "attacker", "client"})
+
+
+def _deconfliction_inputs(
+    evidence: dict[str, Any], asset_ids: list[str]
+) -> tuple[list[str], list[str], list[str]]:
+    """Extract (source_ips, hosts, techniques) for engagement deconfliction.
+
+    - source_ips: only source-role ip entities (see ``_SOURCE_IP_ROLES``);
+      unroled/destination ips are ignored so the host/technique axes constrain
+      instead of false-flagging out-of-scope.
+    - hosts: host-type entities plus the alert's asset_ids.
+    - techniques: canonical ATT&CK ids from ``mitre['ids']`` (+ legacy ``id``),
+      never the human-readable ``mitre['techniques']`` names.
+    """
+    source_ips: list[str] = []
+    hosts: set[str] = {h for h in (asset_ids or []) if h}
+    for ent in evidence.get("entities") or []:
+        if not isinstance(ent, dict):
+            continue
+        et = str(ent.get("type") or "").lower()
+        val = ent.get("value")
+        if not val:
+            continue
+        if et == "ip" and str(ent.get("role") or "").lower() in _SOURCE_IP_ROLES:
+            source_ips.append(str(val))
+        elif et in ("host", "hostname"):
+            hosts.add(str(val))
+    mitre = evidence.get("mitre") or {}
+    techniques = [str(t) for t in (mitre.get("ids") or []) if t]
+    if mitre.get("id"):
+        techniques.append(str(mitre["id"]))
+    return source_ips, sorted(hosts), sorted(set(techniques))
 
 
 # ---------------------------------------------------------------------------
@@ -881,30 +924,9 @@ async def triage_event(
             "event_count": alert_result.get("event_count"),
         }
 
-    # 2. Check reopen signatures first — a matching event on an auto-closed
-    #    investigation re-opens rather than creating a new one.
-    reopened_case_id = await _check_and_reopen(
-        db,
-        tenant_id=tenant_id,
-        asset_ids=asset_ids,
-        ioc_values=[(i["type"], i["value"]) for i in initial_iocs
-                    if isinstance(i, dict) and i.get("type") and i.get("value")],
-        rule_id=rule_id,
-        ts=ts,
-    )
-    if reopened_case_id is not None:
-        # attach this alert to the reopened investigation.
-        await db.execute(
-            text(
-                "UPDATE alerts SET status = 'promoted', investigation_id = :c WHERE id = :id"
-            ),
-            {"c": str(reopened_case_id), "id": str(alert_id)},
-        )
-        return {
-            "alert_id": str(alert_id),
-            "investigation_id": str(reopened_case_id),
-            "action": "reopened",
-        }
+    # NOTE: the reopen-signature check runs LATER (after correlation and
+    #    engagement deconfliction) — a declared-test alert must not resurrect an
+    #    auto-closed FP, so deconfliction has to see it first.
 
     # 3. Decide based on AI assessment + policy. Rule semantics (MITRE) can
     #    veto a high-confidence-FP auto-close (issue #17 T6).
@@ -989,6 +1011,100 @@ async def triage_event(
                 "action": "correlated",
             }
 
+    # 3c. Engagement deconfliction (#31). Runs AFTER correlation (a live-incident
+    #     alert must attach, never be deconflicted) and BEFORE reopen/memo/rules
+    #     auto-close (a declared-test alert must not resurrect an auto-closed FP
+    #     or be closed by reference). In-scope declared-test alerts are recorded
+    #     in an auditable lane and skip the LLM run but are NEVER closed/FP;
+    #     out-of-scope tester activity is a contractual finding forced to a look.
+    force_promote = False
+    if policy.get("engagement_deconfliction_enabled", False):
+        src_ips, hosts_in, techniques = _deconfliction_inputs(evidence, asset_ids)
+        try:
+            deconf = await deconflict(
+                db, tenant_id=tenant_id, occurred_at=ts,
+                source_ips=src_ips, hosts=hosts_in, techniques=techniques,
+            )
+        except Exception as e:  # noqa: BLE001 — deconfliction must never block ingest
+            logger.warning("engagement_deconfliction_failed", error=str(e))
+            deconf = None
+        if deconf is not None:
+            await record_engagement_observation(
+                db, tenant_id=tenant_id, alert_id=alert_id,
+                source_event_row_id=source_event_row_id,
+                status=deconf["status"],
+                primary_engagement_id=deconf["engagement_id"],
+                matched_engagement_ids=deconf.get("matched_engagement_ids") or [],
+                out_of_scope=deconf.get("out_of_scope"),
+                occurred_at=ts,
+            )
+            if deconf["status"] == "declared_test":
+                # Positively attributed to the tester (in-scope source + target):
+                # take it out of the open queue and skip the LLM, but NEVER
+                # close/FP it — the observation row above keeps it queryable and
+                # counted. Only a fresh single-event alert reaches here (coalesced
+                # merges return earlier), so no mixed row is hidden. Note: an
+                # alert whose source can't be attributed is deconflict()==None and
+                # runs normal triage, so nothing unattributable is suppressed.
+                await db.execute(
+                    text("UPDATE alerts SET status = 'deconflicted' WHERE id = :id"),
+                    {"id": str(alert_id)},
+                )
+                await log_audit(
+                    db, action="ir.engagement.declared_test",
+                    actor_principal="system", actor_id="triage",
+                    tenant_id=tenant_id, resource_type="alert",
+                    resource_id=str(alert_id),
+                    notes=canonical_json({
+                        "engagement_id": deconf["engagement_id"],
+                        "matched_engagement_ids": deconf.get("matched_engagement_ids") or [],
+                    }),
+                )
+                return {
+                    "alert_id": str(alert_id),
+                    "action": "declared_test",
+                    "engagement_id": deconf["engagement_id"],
+                }
+            # out_of_scope: the tester strayed. Force a real look and veto the
+            # close paths below — this must never be memo/rules auto-closed.
+            force_promote = True
+            await log_audit(
+                db, action="ir.engagement.out_of_scope",
+                actor_principal="system", actor_id="triage",
+                tenant_id=tenant_id, resource_type="alert",
+                resource_id=str(alert_id),
+                notes=canonical_json({
+                    "engagement_id": deconf["engagement_id"],
+                    "out_of_scope": deconf.get("out_of_scope"),
+                }),
+            )
+
+    # 2. Reopen-signature check (moved below deconfliction). A matching event on
+    #    an auto-closed investigation re-opens it rather than creating a new one.
+    #    Declared-test alerts already returned above, so a pentest alert never
+    #    resurrects a closed FP; an out-of-scope finding legitimately may reopen.
+    reopened_case_id = await _check_and_reopen(
+        db,
+        tenant_id=tenant_id,
+        asset_ids=asset_ids,
+        ioc_values=[(i["type"], i["value"]) for i in initial_iocs
+                    if isinstance(i, dict) and i.get("type") and i.get("value")],
+        rule_id=rule_id,
+        ts=ts,
+    )
+    if reopened_case_id is not None:
+        await db.execute(
+            text(
+                "UPDATE alerts SET status = 'promoted', investigation_id = :c WHERE id = :id"
+            ),
+            {"c": str(reopened_case_id), "id": str(alert_id)},
+        )
+        return {
+            "alert_id": str(alert_id),
+            "investigation_id": str(reopened_case_id),
+            "action": "reopened",
+        }
+
     # 3b. Authorization routine scoring (epic M2) — SHADOW ONLY. Scores whether
     #     SIEM-derived routine history would authorize-close this alert and logs
     #     the would-close decision; it NEVER changes the disposition. Placed
@@ -1017,7 +1133,7 @@ async def triage_event(
     #     shape closes by reference — AFTER the entity-correlation check so it
     #     can never suppress an alert that belongs to a live incident.
     memo_replay_denied = False
-    if policy.get("verdict_memoization_enabled", False):
+    if policy.get("verdict_memoization_enabled", False) and not force_promote:
         mkey = memo_shape_key(
             source=source,
             decoder=evidence.get("decoder"),
@@ -1105,6 +1221,7 @@ async def triage_event(
     if (
         assessment == "high_conf_fp"
         and not memo_replay_denied  # authz-denied replay must route to the LLM, not this fallback
+        and not force_promote  # out-of-scope engagement activity must not be auto-closed
         and policy.get("auto_close_enabled", True)
         and confidence >= policy.get("auto_close_threshold", 0.90)
     ):

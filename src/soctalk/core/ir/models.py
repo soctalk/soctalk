@@ -34,6 +34,9 @@ class AlertStatus(str, Enum):
     PROMOTED = "promoted"
     IGNORED = "ignored"
     AUTO_CLOSED = "auto_closed"
+    # Matched a declared engagement (pentest/red-team) window in-scope: handled
+    # by deconfliction, out of the open queue, but NEVER closed/FP.
+    DECONFLICTED = "deconflicted"
 
 
 class AIAssessment(str, Enum):

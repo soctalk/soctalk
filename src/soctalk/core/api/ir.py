@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.ir.campaign import (
+    declare_engagement,
+    list_engagements,
+    revoke_engagement,
+)
 from soctalk.core.ir.events import EventKind, append_event
 from soctalk.core.ir.runtime import (
     approve_proposal,
@@ -25,7 +30,6 @@ from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
 from soctalk.core.tenancy.models import Role
 
-
 mssp_investigations_router = APIRouter(prefix="/api/mssp/investigations", tags=["ir-mssp"])
 tenant_investigations_router = APIRouter(prefix="/api/tenant/investigations", tags=["ir-tenant"])
 alerts_router = APIRouter(prefix="/api/mssp/alerts", tags=["ir-alerts"])
@@ -33,6 +37,7 @@ proposals_router = APIRouter(prefix="/api/mssp/proposals", tags=["ir-proposals"]
 integrations_router = APIRouter(
     prefix="/api/mssp/tenants", tags=["ir-integrations"]
 )
+engagements_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-engagements"])
 
 
 # ---------------------------------------------------------------------------
@@ -781,8 +786,120 @@ async def patch_integrations(
     return await get_integrations(tenant_id, request)
 
 
+# ---------------------------------------------------------------------------
+# Engagements (declared pentest / red-team windows) — #31
+# ---------------------------------------------------------------------------
+
+
+class DeclareEngagementRequest(BaseModel):
+    name: str
+    kind: str = "pentest"
+    starts_at: datetime
+    ends_at: datetime
+    scope_source_ips: list[str] = Field(default_factory=list)
+    scope_hosts: list[str] = Field(default_factory=list)
+    scope_techniques: list[str] = Field(default_factory=list)
+
+
+class RevokeEngagementRequest(BaseModel):
+    reason: str | None = None
+
+
+class EngagementDTO(BaseModel):
+    id: str
+    name: str
+    kind: str
+    starts_at: datetime
+    ends_at: datetime
+    scope_source_ips: list[str]
+    scope_hosts: list[str]
+    scope_techniques: list[str]
+    revoked_at: datetime | None
+    created_at: datetime
+    declared_test_count: int
+    out_of_scope_count: int
+
+
+def _engagement_dto(row: dict[str, Any]) -> EngagementDTO:
+    return EngagementDTO(
+        id=str(row["id"]),
+        name=row["name"],
+        kind=row["kind"],
+        starts_at=row["starts_at"],
+        ends_at=row["ends_at"],
+        scope_source_ips=list(row["scope_source_ips"] or []),
+        scope_hosts=list(row["scope_hosts"] or []),
+        scope_techniques=list(row["scope_techniques"] or []),
+        revoked_at=row["revoked_at"],
+        created_at=row["created_at"],
+        declared_test_count=int(row["declared_test_count"] or 0),
+        out_of_scope_count=int(row["out_of_scope_count"] or 0),
+    )
+
+
+@engagements_router.get(
+    "/{tenant_id}/engagements",
+    response_model=list[EngagementDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def list_engagements_route(
+    tenant_id: UUID, request: Request, include_revoked: bool = False
+) -> list[EngagementDTO]:
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        rows = await list_engagements(
+            db, tenant_id=tenant_id, include_revoked=include_revoked
+        )
+    return [_engagement_dto(r) for r in rows]
+
+
+@engagements_router.post(
+    "/{tenant_id}/engagements",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def declare_engagement_route(
+    tenant_id: UUID, payload: DeclareEngagementRequest, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        try:
+            eid = await declare_engagement(
+                db, tenant_id=tenant_id, name=payload.name, kind=payload.kind,
+                starts_at=payload.starts_at, ends_at=payload.ends_at,
+                scope_source_ips=payload.scope_source_ips,
+                scope_hosts=payload.scope_hosts,
+                scope_techniques=payload.scope_techniques,
+                created_by=identity.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    return {"id": eid}
+
+
+@engagements_router.post(
+    "/{tenant_id}/engagements/{engagement_id}/revoke",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def revoke_engagement_route(
+    tenant_id: UUID, engagement_id: UUID,
+    payload: RevokeEngagementRequest, request: Request,
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        ok = await revoke_engagement(
+            db, tenant_id=tenant_id, engagement_id=engagement_id,
+            revoked_by=identity.user_id, reason=payload.reason,
+        )
+    if not ok:
+        raise HTTPException(404, "engagement not found or already revoked")
+    return {"ok": "revoked"}
+
+
 __all__ = [
     "alerts_router",
+    "engagements_router",
     "integrations_router",
     "mssp_investigations_router",
     "proposals_router",
