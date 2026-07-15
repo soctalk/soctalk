@@ -437,7 +437,7 @@ export interface TriagePolicy {
 }
 
 export interface AuthoredTriagePolicy {
-	playbook_id: string;
+	triage_policy_id: string;
 	revision: number;
 	status: string;
 	definition: Record<string, unknown>;
@@ -793,7 +793,7 @@ export const api = {
 				method: 'DELETE'
 			}),
 		exportAuthored: (tenantId: string, playbookId: string) =>
-			request<{ playbook_id: string; yaml: string }>(
+			request<{ triage_policy_id: string; yaml: string }>(
 				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/export`
 			),
 		activateAuthored: (tenantId: string, playbookId: string) =>

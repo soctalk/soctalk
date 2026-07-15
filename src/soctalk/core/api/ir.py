@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1001,15 +1001,22 @@ class AuthoredTriagePolicyRequest(BaseModel):
 
 
 class AuthoredTriagePolicyDTO(BaseModel):
-    playbook_id: str
+    triage_policy_id: str
     revision: int
     status: str
     definition: dict[str, Any]
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def playbook_id(self) -> str:
+        """Deprecated wire mirror of ``triage_policy_id`` — kept one release for
+        clients still reading the old field. Remove alongside the /playbooks routes."""
+        return self.triage_policy_id
+
 
 def _authored_dto(row: dict[str, Any]) -> AuthoredTriagePolicyDTO:
     return AuthoredTriagePolicyDTO(
-        playbook_id=row["playbook_id"],
+        triage_policy_id=row["triage_policy_id"],
         revision=row["revision"],
         status=row["status"],
         definition=dict(row["definition"]),
@@ -1054,7 +1061,7 @@ async def create_authored_triage_policy_route(
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
         pid = str(payload.definition.get("id") or "")
-        if pid and await get_authored(db, tenant_id=tenant_id, playbook_id=pid) is not None:
+        if pid and await get_authored(db, tenant_id=tenant_id, triage_policy_id=pid) is not None:
             raise HTTPException(409, f"playbook '{pid}' already exists — use PUT to edit")
         try:
             result = await upsert_authored(
@@ -1068,31 +1075,31 @@ async def create_authored_triage_policy_route(
         await log_audit(
             db, action="ir.playbook.authored_created",
             actor_principal="analyst", actor_id=str(identity.user_id),
-            tenant_id=tenant_id, resource_type="playbook", resource_id=result["playbook_id"],
+            tenant_id=tenant_id, resource_type="triage_policy", resource_id=result["triage_policy_id"],
         )
     return _authored_dto(result)
 
 
 @authored_playbooks_router.put(
-    "/{tenant_id}/triage-policies/{playbook_id}",
+    "/{tenant_id}/triage-policies/{triage_policy_id}",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.put(
-    "/{tenant_id}/playbooks/{playbook_id}",
+    "/{tenant_id}/playbooks/{triage_policy_id}",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
 async def update_authored_triage_policy_route(
-    tenant_id: UUID, playbook_id: str, payload: AuthoredTriagePolicyRequest, request: Request
+    tenant_id: UUID, triage_policy_id: str, payload: AuthoredTriagePolicyRequest, request: Request
 ) -> AuthoredTriagePolicyDTO:
     db = _db(request)
     identity = current_identity(request)
-    if str(payload.definition.get("id") or "") != playbook_id:
+    if str(payload.definition.get("id") or "") != triage_policy_id:
         raise HTTPException(400, "definition.id must match the playbook id in the path")
     async with tenant_context(db, tenant_id):
-        prior = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
+        prior = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
         if prior is None:
             raise HTTPException(404, "playbook not found")
         try:
@@ -1105,7 +1112,7 @@ async def update_authored_triage_policy_route(
             # Keep it governing on the new definition + roll it out.
             if prior["status"] == "active":
                 result = await set_authored_status(
-                    db, tenant_id=tenant_id, playbook_id=playbook_id, status="active",
+                    db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, status="active",
                     created_by=identity.user_id,
                 )
         except TriagePolicyValidationError as exc:
@@ -1115,7 +1122,7 @@ async def update_authored_triage_policy_route(
         await log_audit(
             db, action="ir.playbook.authored_updated",
             actor_principal="analyst", actor_id=str(identity.user_id),
-            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+            tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
             notes=f"revision {result['revision']}",
         )
         if prior["status"] == "active":
@@ -1124,30 +1131,30 @@ async def update_authored_triage_policy_route(
 
 
 @authored_playbooks_router.delete(
-    "/{tenant_id}/triage-policies/{playbook_id}",
+    "/{tenant_id}/triage-policies/{triage_policy_id}",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.delete(
-    "/{tenant_id}/playbooks/{playbook_id}",
+    "/{tenant_id}/playbooks/{triage_policy_id}",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
 async def retire_authored_triage_policy_route(
-    tenant_id: UUID, playbook_id: str, request: Request
+    tenant_id: UUID, triage_policy_id: str, request: Request
 ) -> dict[str, str]:
     db = _db(request)
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
-        prior = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
+        prior = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
         ok = await retire_authored(
-            db, tenant_id=tenant_id, playbook_id=playbook_id, retired_by=identity.user_id,
+            db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, retired_by=identity.user_id,
         )
         if not ok:
             raise HTTPException(404, "playbook not found or already retired")
         await log_audit(
             db, action="ir.playbook.authored_retired",
             actor_principal="analyst", actor_id=str(identity.user_id),
-            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+            tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
         )
         # Retiring a governing playbook must stop it governing.
         if prior is not None and prior["status"] == "active":
@@ -1182,14 +1189,14 @@ async def _enqueue_triage_policy_reconcile(db: AsyncSession, tenant_id: UUID) ->
 
 
 async def _set_authored_and_reconcile(
-    tenant_id: UUID, playbook_id: str, status: str, request: Request, action: str
+    tenant_id: UUID, triage_policy_id: str, status: str, request: Request, action: str
 ) -> AuthoredTriagePolicyDTO:
     db = _db(request)
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
         try:
             result = await set_authored_status(
-                db, tenant_id=tenant_id, playbook_id=playbook_id, status=status,
+                db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, status=status,
                 created_by=identity.user_id,
             )
         except TriagePolicyValidationError as exc:
@@ -1200,72 +1207,76 @@ async def _set_authored_and_reconcile(
             raise HTTPException(404, "playbook not found or retired")
         await log_audit(
             db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
-            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+            tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
         )
         await _enqueue_triage_policy_reconcile(db, tenant_id)
     return _authored_dto(result)
 
 
 @authored_playbooks_router.post(
-    "/{tenant_id}/triage-policies/{playbook_id}/activate",
+    "/{tenant_id}/triage-policies/{triage_policy_id}/activate",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.post(
-    "/{tenant_id}/playbooks/{playbook_id}/activate",
+    "/{tenant_id}/playbooks/{triage_policy_id}/activate",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
 async def activate_authored_triage_policy_route(
-    tenant_id: UUID, playbook_id: str, request: Request
+    tenant_id: UUID, triage_policy_id: str, request: Request
 ) -> AuthoredTriagePolicyDTO:
     """Activate an authored playbook so it governs triage. Materialized into the tenant's
     playbook ConfigMap on the queued reconcile (rollout is the activation gate)."""
     return await _set_authored_and_reconcile(
-        tenant_id, playbook_id, "active", request, "ir.playbook.authored_activated"
+        tenant_id, triage_policy_id, "active", request, "ir.playbook.authored_activated"
     )
 
 
 @authored_playbooks_router.post(
-    "/{tenant_id}/triage-policies/{playbook_id}/deactivate",
+    "/{tenant_id}/triage-policies/{triage_policy_id}/deactivate",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.post(
-    "/{tenant_id}/playbooks/{playbook_id}/deactivate",
+    "/{tenant_id}/playbooks/{triage_policy_id}/deactivate",
     response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
 async def deactivate_authored_triage_policy_route(
-    tenant_id: UUID, playbook_id: str, request: Request
+    tenant_id: UUID, triage_policy_id: str, request: Request
 ) -> AuthoredTriagePolicyDTO:
     """Deactivate (back to shadow) — the reconcile drops it from the ConfigMap."""
     return await _set_authored_and_reconcile(
-        tenant_id, playbook_id, "shadow", request, "ir.playbook.authored_deactivated"
+        tenant_id, triage_policy_id, "shadow", request, "ir.playbook.authored_deactivated"
     )
 
 
 @authored_playbooks_router.get(
-    "/{tenant_id}/triage-policies/{playbook_id}/export",
+    "/{tenant_id}/triage-policies/{triage_policy_id}/export",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
 )
 @authored_playbooks_router.get(
-    "/{tenant_id}/playbooks/{playbook_id}/export",
+    "/{tenant_id}/playbooks/{triage_policy_id}/export",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
     deprecated=True,
 )
 async def export_authored_triage_policy_route(
-    tenant_id: UUID, playbook_id: str, request: Request
+    tenant_id: UUID, triage_policy_id: str, request: Request
 ) -> dict[str, str]:
     """Export the authored definition as YAML for git / worker rollout (activation)."""
     db = _db(request)
     async with tenant_context(db, tenant_id):
-        row = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
+        row = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if row is None:
         raise HTTPException(404, "playbook not found")
-    return {"playbook_id": playbook_id, "yaml": to_yaml(dict(row["definition"]))}
+    return {
+        "triage_policy_id": triage_policy_id,
+        "playbook_id": triage_policy_id,  # deprecated mirror, one release
+        "yaml": to_yaml(dict(row["definition"])),
+    }
 
 
 __all__ = [

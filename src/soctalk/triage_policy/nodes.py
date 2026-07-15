@@ -149,7 +149,7 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         return state
 
     playbook = state.get("playbook") or {}
-    playbook_id = playbook.get("id")
+    triage_policy_id = playbook.get("id")
     investigation = state.get("investigation", {}) or {}
     # Each verdict pass gets a fresh guard ruling — a stale interrupt flag from a
     # prior pass (e.g. human MORE_INFO -> supervisor -> new verdict) must not
@@ -194,7 +194,7 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
 
     audit = {
         "at": datetime.now(UTC).isoformat(),
-        "playbook": playbook_id,
+        "playbook": triage_policy_id,
         "authz_class": result.authz_class,
         "components": result.components.model_dump() if result.components else None,
         "llm_draft_decision": draft_decision,
@@ -232,7 +232,7 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         logger.warning(
             "verdict_guard_" + o.effect,
             guardrail=o.guardrail,
-            playbook=playbook_id,
+            playbook=triage_policy_id,
             from_decision=o.from_decision,
             to_decision=o.to_decision,
             authz_class=result.authz_class,

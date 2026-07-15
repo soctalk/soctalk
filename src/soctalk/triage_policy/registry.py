@@ -210,8 +210,8 @@ def all_triage_policies() -> tuple[TriagePolicy, ...]:
     return _registry()
 
 
-def is_builtin(playbook_id: str) -> bool:
-    return any(playbook_id == b.id for b in BUILTIN_TRIAGE_POLICIES)
+def is_builtin(triage_policy_id: str) -> bool:
+    return any(triage_policy_id == b.id for b in BUILTIN_TRIAGE_POLICIES)
 
 
 def _alert_rule_groups(investigation: dict[str, Any]) -> set[str]:

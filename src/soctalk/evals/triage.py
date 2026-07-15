@@ -133,7 +133,7 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
     Runs the resolver match + the resolve-playbook route over the fabricated
     investigation and scores the route (``operational_close`` = the deterministic
     disposition fired and the case never reaches the model; ``supervisor`` = full
-    triage). ``expect.playbook_id`` optionally pins WHICH playbook matched. This
+    triage). ``expect.triage_policy_id`` optionally pins WHICH playbook matched. This
     keeps "class X never reaches the LLM" pinned in the same golden set that
     scores the LLM's own judgment.
     """
@@ -147,7 +147,7 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
     route = route_from_resolve_triage_policy(state)
 
     expected = [str(r) for r in case.expect["playbook_route"]]
-    expected_id = case.expect.get("playbook_id")
+    expected_id = case.expect.get("triage_policy_id")
     matched_id = playbook.id if playbook else None
     passed = route in expected and (expected_id is None or matched_id == expected_id)
     detail = ""

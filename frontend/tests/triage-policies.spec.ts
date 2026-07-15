@@ -37,7 +37,7 @@ const BUILTINS = [
 
 function authoredRow(id: string) {
 	return {
-		playbook_id: id,
+		triage_policy_id: id,
 		revision: 1,
 		status: 'shadow',
 		definition: { id, priority: 70, status: 'shadow', applies_to: { rule_groups: ['g'] } }
@@ -184,7 +184,7 @@ test.describe('Triage Policies page', () => {
 					status: 200,
 					contentType: 'application/json',
 					body: JSON.stringify({
-						playbook_id: captured?.definition?.id,
+						triage_policy_id: captured?.definition?.id,
 						revision: 1,
 						status: 'shadow',
 						definition: captured?.definition
