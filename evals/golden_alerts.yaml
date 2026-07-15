@@ -251,3 +251,85 @@ cases:
     pending_observables: []
     expect:
       routing_actions: [CONTEXTUALIZE, INVESTIGATE, VERDICT]
+
+  # ------------------------------------------- deterministic playbook layer
+  # kind: playbook cases score the resolver route with NO LLM call (issue #43).
+  # expect.playbook_route: operational_close = deterministic disposition fired,
+  # the case never reaches the model; supervisor = full triage.
+
+  - id: agent-queue-flooded-operational
+    kind: playbook
+    description: >
+      Wazuh rule 202 "Agent event queue is flooded" — agent-health/operational
+      class with no security indicators. The agent-health-operational playbook
+      must close it deterministically; it must never reach LLM triage (this
+      class previously drew inconsistent model verdicts across occurrences).
+    investigation:
+      title: Agent event queue is flooded on web-01
+      alerts:
+        - severity: high
+          level: 9
+          rule_id: "202"
+          rule_description: "Agent event queue is flooded. Check the agent configuration."
+          rule_groups: [wazuh, agent_flooding]
+          mitre: {}
+          source: {agent_name: web-01}
+      observables: []
+      enrichments: []
+      misp_context: {}
+    expect:
+      playbook_route: [operational_close]
+      playbook_id: agent-health-operational
+
+  - id: agent-queue-flooded-with-mitre-to-triage
+    kind: playbook
+    description: >
+      The same agent-health class carrying a MITRE mapping (e.g. an endpoint-DoS
+      technique) is more than its class — a security indicator vetoes the
+      operational close and the alert goes to full LLM triage.
+    investigation:
+      title: Agent event queue is flooded on web-01
+      alerts:
+        - severity: high
+          level: 9
+          rule_id: "202"
+          rule_description: "Agent event queue is flooded. Check the agent configuration."
+          rule_groups: [wazuh, agent_flooding]
+          mitre: {ids: [T1499]}
+          source: {agent_name: web-01}
+      observables: []
+      enrichments: []
+      misp_context: {}
+    expect:
+      playbook_route: [supervisor]
+      playbook_id: agent-health-operational
+
+  - id: agent-flooding-correlated-with-security-alert-to-triage
+    kind: playbook
+    description: >
+      A flooding alert correlated with a non-operational alert on the same
+      investigation fails class attestation — the whole investigation goes to
+      triage; one agent-health member never closes mixed evidence.
+    investigation:
+      title: Queue flooding plus brute-force on web-01
+      alerts:
+        - severity: high
+          level: 9
+          rule_id: "202"
+          rule_description: "Agent event queue is flooded. Check the agent configuration."
+          rule_groups: [wazuh, agent_flooding]
+          mitre: {}
+          source: {agent_name: web-01}
+        - severity: high
+          level: 10
+          rule_id: "5710"
+          rule_description: "sshd: Attempt to login using a non-existent user"
+          rule_groups: [syslog, sshd]
+          mitre: {}
+          source: {agent_name: web-01}
+      observables: []
+      enrichments: []
+      misp_context: {}
+    expect:
+      playbook_route: [supervisor]
+      playbook_id: agent-health-operational
