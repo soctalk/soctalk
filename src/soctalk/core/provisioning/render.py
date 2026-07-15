@@ -266,6 +266,7 @@ def render_tenant_values(
     profile: Profile = "poc",
     network_policies_enabled: bool = True,
     include_llm_api_key: bool = True,
+    authored_playbooks: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
 
@@ -621,6 +622,19 @@ def render_tenant_values(
     # namespaceLabels.soctalk.io/profile emitted during ensure_namespace.)
     for k, v in _profile_tenant_overrides(profile).items():
         values[k] = v
+
+    # Merge DB-authored ACTIVE playbooks (#44) alongside the operator file playbooks,
+    # into the same runsWorker.playbooks ConfigMap. Fail closed on a filename collision
+    # so an authored playbook can never silently overwrite an operator file (or vice
+    # versa) — the reconcile fails and the UI shows activation failed.
+    if authored_playbooks:
+        file_pb = values["runsWorker"].setdefault("playbooks", {})
+        for filename, text in authored_playbooks.items():
+            if filename in file_pb:
+                raise ValueError(
+                    f"authored playbook '{filename}' collides with a file playbook"
+                )
+            file_pb[filename] = text
     return values
 
 
