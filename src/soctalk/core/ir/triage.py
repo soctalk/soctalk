@@ -21,8 +21,7 @@ services; that lands when we wire the LLM tool registry.
 
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -30,6 +29,12 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.ir.authz_shadow import ShadowSettings, score_alert_shadow, should_score
+from soctalk.core.ir.correlation import (
+    extract_keys,
+    find_correlated_investigation,
+    record_keys,
+)
 from soctalk.core.ir.events import (
     EventKind,
     alert_signature,
@@ -37,20 +42,19 @@ from soctalk.core.ir.events import (
     canonical_json,
     ioc_fingerprint,
 )
-from soctalk.core.ir.correlation import (
-    extract_keys,
-    find_correlated_investigation,
-    record_keys,
-)
+from soctalk.core.ir.graph import land_alert_entities
 from soctalk.core.ir.memoization import (
     bump_hit as bump_memo_hit,
+)
+from soctalk.core.ir.memoization import (
     lookup_memoized_close,
+)
+from soctalk.core.ir.memoization import (
     shape_key as memo_shape_key,
 )
-from soctalk.core.ir.graph import land_alert_entities
-from soctalk.core.ir.scorer import suggest_for_alert as suggest_correlation
 from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
+from soctalk.core.ir.scorer import suggest_for_alert as suggest_correlation
 from soctalk.core.observability.audit import log_audit
 
 logger = structlog.get_logger()
@@ -94,7 +98,7 @@ def assess(
         return "unclear", 0.5
 
     has_mitre = bool(mitre) and any(
-        (mitre.get(k) for k in ("ids", "tactics", "techniques"))
+        mitre.get(k) for k in ("ids", "tactics", "techniques")
     )
     if severity >= 3:
         return "likely_fp", 0.75
@@ -119,7 +123,7 @@ async def next_short_id(db: AsyncSession, tenant_id: UUID) -> str:
     n = (
         await db.execute(text("SELECT nextval('investigations_short_id_seq')"))
     ).scalar_one()
-    year = datetime.now(timezone.utc).year
+    year = datetime.now(UTC).year
     return f"{year}-{int(n):04d}"
 
 
@@ -448,7 +452,7 @@ def _reopen_fields(
             "end": (window_start + timedelta(days=reopen_window_days)).isoformat(),
         },
     }
-    reopen_until = datetime.now(timezone.utc) + timedelta(days=reopen_window_days)
+    reopen_until = datetime.now(UTC) + timedelta(days=reopen_window_days)
     return canonical_json(sig), reopen_until
 
 
@@ -485,7 +489,7 @@ async def build_reopen_fields_for_investigation(
         for a in list(r["asset_ids"] or []):
             asset_ids.setdefault(a)
         iocs.extend(list(r["initial_iocs"] or []))
-    window_start = rows[0]["first_event_at"] if rows else datetime.now(timezone.utc)
+    window_start = rows[0]["first_event_at"] if rows else datetime.now(UTC)
 
     return _reopen_fields(
         rule_ids=list(rule_ids),
@@ -603,7 +607,7 @@ async def triage_event(
     without touching coalescing counters.
     """
 
-    ts = ts or datetime.now(timezone.utc)
+    ts = ts or datetime.now(UTC)
     evidence = evidence or {}
 
     # 0. Idempotency gate (issue #17 fix 7). Reserve the source-event key
@@ -849,6 +853,24 @@ async def triage_event(
                 "investigation_id": str(correlated_id),
                 "action": "correlated",
             }
+
+    # 3b. Authorization routine scoring (epic M2) — SHADOW ONLY. Scores whether
+    #     SIEM-derived routine history would authorize-close this alert and logs
+    #     the would-close decision; it NEVER changes the disposition. Placed
+    #     after entity correlation (§8.2: a live-incident alert must correlate,
+    #     never be counted routine) and behind kill switch + family allowlist +
+    #     per-tenant policy flag. Everything (incl. settings construction) is
+    #     inside the guard so a scoring failure can never block ingest.
+    try:
+        _shadow_settings = ShadowSettings.from_env()
+        if should_score(_shadow_settings, policy, evidence.get("decoder")):
+            await score_alert_shadow(
+                db, tenant_id=tenant_id, source=source, rule_id=rule_id,
+                severity=severity, initial_iocs=initial_iocs, evidence=evidence,
+                ts=ts, alert_id=alert_id, settings=_shadow_settings,
+            )
+    except Exception as e:  # noqa: BLE001 — shadow scoring must never block ingest
+        logger.warning("authz_routine_shadow_failed", error=str(e))
 
     # 3a. Verdict memoization (issue #29): a recurring high-confidence-FP
     #     shape closes by reference — AFTER the entity-correlation check so it
