@@ -131,6 +131,29 @@ test.describe('Playbooks page', () => {
 		await expect(page.getByText('brand-new-pb')).toBeVisible();
 	});
 
+	test('activates an authored playbook (governs) and shows the rollout note', async ({ page }) => {
+		let active = false;
+		await page.route('**/api/mssp/tenants/*/playbooks/*/activate', async (route) => {
+			active = true;
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ ...authoredRow('existing-pb'), status: 'active' })
+			});
+		});
+		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify([{ ...authoredRow('existing-pb'), status: active ? 'active' : 'shadow' }])
+			});
+		});
+		await page.goto('/playbooks');
+		await page.getByRole('button', { name: 'Activate' }).click();
+		await expect(page.getByText(/worker rollout was queued/)).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Deactivate' })).toBeVisible();
+	});
+
 	test('surfaces a server validation error', async ({ page }) => {
 		// override POST to reject
 		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
