@@ -407,36 +407,36 @@ export interface AnalyticsSummary {
 	outcomes: OutcomeMetrics;
 }
 
-export interface PlaybookGuardrail {
+export interface TriagePolicyGuardrail {
 	when: Record<string, unknown>;
 	effect: string;
 	to: string;
 	reason: string;
 }
 
-export interface PlaybookMatch {
+export interface TriagePolicyMatch {
 	rule_groups: string[];
 	rule_ids: string[];
 	authorization_tracks: string[];
 }
 
-export interface Playbook {
+export interface TriagePolicy {
 	id: string;
 	version: number;
 	tenant: string;
 	status: 'active' | 'shadow';
 	priority: number;
 	source: 'built-in' | 'file';
-	applies_to: PlaybookMatch;
+	applies_to: TriagePolicyMatch;
 	required_steps: string[];
 	decision_modules: string[];
 	deterministic_disposition: string | null;
 	legal_actions: Record<string, string[]>;
 	close_signoff_data_classes: string[];
-	guardrails: PlaybookGuardrail[];
+	guardrails: TriagePolicyGuardrail[];
 }
 
-export interface AuthoredPlaybook {
+export interface AuthoredTriagePolicy {
 	playbook_id: string;
 	revision: number;
 	status: string;
@@ -769,12 +769,12 @@ export const api = {
 			)
 	},
 
-	playbooks: {
-		list: () => request<Playbook[]>('/mssp/playbooks'),
+	triagePolicies: {
+		list: () => request<TriagePolicy[]>('/mssp/playbooks'),
 		listAuthored: (tenantId: string) =>
-			request<AuthoredPlaybook[]>(`/mssp/tenants/${tenantId}/playbooks`),
+			request<AuthoredTriagePolicy[]>(`/mssp/tenants/${tenantId}/playbooks`),
 		createAuthored: (tenantId: string, definition: Record<string, unknown>, status = 'shadow') =>
-			request<AuthoredPlaybook>(`/mssp/tenants/${tenantId}/playbooks`, {
+			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/playbooks`, {
 				method: 'POST',
 				body: JSON.stringify({ definition, status })
 			}),
@@ -784,7 +784,7 @@ export const api = {
 			definition: Record<string, unknown>,
 			status = 'shadow'
 		) =>
-			request<AuthoredPlaybook>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
+			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
 				method: 'PUT',
 				body: JSON.stringify({ definition, status })
 			}),
@@ -797,12 +797,12 @@ export const api = {
 				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/export`
 			),
 		activateAuthored: (tenantId: string, playbookId: string) =>
-			request<AuthoredPlaybook>(
+			request<AuthoredTriagePolicy>(
 				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/activate`,
 				{ method: 'POST' }
 			),
 		deactivateAuthored: (tenantId: string, playbookId: string) =>
-			request<AuthoredPlaybook>(
+			request<AuthoredTriagePolicy>(
 				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/deactivate`,
 				{ method: 'POST' }
 			)
