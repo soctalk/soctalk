@@ -68,6 +68,9 @@ class GuardResult(BaseModel):
     # interrupt (#45): the draft decision stands, but a human signs off before it
     # takes effect — distinct from an override in both routing and audit.
     interrupted: bool = False
+    # The state-contract context the conditions were evaluated against (#44) —
+    # exposed so shadow playbooks are judged against the exact same facts.
+    condition_ctx: dict[str, Any] | None = None
 
     @property
     def overridden(self) -> bool:
@@ -121,12 +124,58 @@ def asset_data_classification(context: AuthorizationContext | None) -> str | Non
     return str(asset.data_classification).lower()
 
 
+def condition_context(
+    *,
+    verdict_decision: str,
+    verdict_confidence: float | None,
+    authz_class: AuthzClass,
+    components: AuthorizationComponents | None,
+    context: AuthorizationContext | None,
+    malicious_signal: bool,
+    active_incident: bool,
+) -> dict[str, Any]:
+    """The read-only state contract (#43/#44) declarative conditions run against.
+    Every field here must be declared in ``conditions.STATE_CONTRACT``."""
+    asset_env = asset_crit = None
+    if context is not None and context.activity.track == AuthorizationTrack.ACCOUNT:
+        selected = select_facts(context.facts, context.activity.track, context.tenant)
+        asset = resolved_entity(
+            selected, AuthorizationEntityKind.ASSET, context.activity.host or ""
+        )
+        if asset is not None:
+            asset_env = asset.environment
+            asset_crit = asset.criticality
+    return {
+        "authz": {
+            "class": authz_class,
+            "in_scope": components.in_scope if components else False,
+            "sanctioned_or_routine": (
+                components.sanctioned_or_routine if components else False
+            ),
+            "actor_genuine": components.actor_genuine if components else True,
+            "policy_allowed": components.policy_allowed if components else True,
+        },
+        "verdict": verdict_decision,
+        "verdict_confidence": verdict_confidence,
+        "asset": {
+            "data_classification": asset_data_classification(context),
+            "environment": asset_env,
+            "criticality": asset_crit,
+        },
+        "enrichment": {"ioc": malicious_signal},
+        "correlation": {"active_incident": active_incident},
+    }
+
+
 def evaluate_guard(
     *,
     verdict_decision: str,
     context: AuthorizationContext | None,
     malicious_signal: bool,
     close_signoff_data_classes: Sequence[str] = (),
+    guardrails: Sequence[dict[str, Any]] = (),
+    verdict_confidence: float | None = None,
+    active_incident: bool = False,
 ) -> GuardResult:
     """The guard's whole decision, as a pure function.
 
@@ -165,7 +214,61 @@ def evaluate_guard(
                 ),
             )
         )
-    elif verdict_decision == "close" and close_signoff_data_classes:
+    ctx = condition_context(
+        verdict_decision=verdict_decision,
+        verdict_confidence=verdict_confidence,
+        authz_class=authz_class,
+        components=components,
+        context=context,
+        malicious_signal=malicious_signal,
+        active_incident=active_incident,
+    )
+    final_decision = "escalate" if overrides else verdict_decision
+
+    # Declarative guardrails (#44) — evaluated AFTER the code edges, first match
+    # wins, additive only: an override may only move the decision UP the
+    # close < needs_more_info < escalate ladder (the schema's ``to`` enum plus
+    # this rank check make suppression inexpressible).
+    if not overrides:
+        from soctalk.playbook.conditions import evaluate_condition
+        from soctalk.playbook.models import DECISION_RANK
+
+        for i, rule in enumerate(guardrails):
+            if not isinstance(rule, dict) or not evaluate_condition(
+                rule.get("when"), ctx
+            ):
+                continue
+            effect = rule.get("effect")
+            to = str(rule.get("to") or "")
+            reason = str(rule.get("reason") or "playbook guardrail")[:512]
+            if effect == "override":
+                if DECISION_RANK.get(to, -1) <= DECISION_RANK.get(verdict_decision, 99):
+                    continue  # raise-only: a non-raising override never fires
+                overrides.append(
+                    GuardOverride(
+                        guardrail=f"playbook_guardrail_{i}",
+                        from_decision=verdict_decision,
+                        to_decision=to,
+                        reason=reason,
+                    )
+                )
+                final_decision = to
+                break
+            if effect == "interrupt":
+                interrupted = True
+                overrides.append(
+                    GuardOverride(
+                        guardrail=f"playbook_guardrail_{i}",
+                        effect="interrupt",
+                        from_decision=verdict_decision,
+                        to_decision="human_review",
+                        reason=reason,
+                    )
+                )
+                break
+
+    # Built-in sign-off interrupt (#45) — only when nothing above fired.
+    if not overrides and verdict_decision == "close" and close_signoff_data_classes:
         data_class = asset_data_classification(context)
         if data_class is not None and data_class in {
             str(c).lower() for c in close_signoff_data_classes
@@ -184,15 +287,59 @@ def evaluate_guard(
                 )
             )
     return GuardResult(
-        final_decision=(
-            "escalate" if any(o.effect == "override" for o in overrides)
-            else verdict_decision
-        ),
+        final_decision=final_decision,
         authz_class=authz_class,
         components=components,
         overrides=overrides,
         interrupted=interrupted,
+        condition_ctx=ctx,
     )
+
+
+def shadow_guardrail_audits(
+    shadow_playbooks: Sequence[dict[str, Any]], ctx: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """Would-fire records for SHADOW playbooks' guardrails against the same
+    contract context the active guard used (#44). Pure; never mutates anything —
+    the caller appends these to the audit trail only.
+
+    Mirrors ACTIVE semantics exactly (Codex #44 finding: divergent shadow data
+    corrupts the activation evidence): first matching rule per playbook wins, and
+    a non-raising override is skipped just as the live guard would skip it — a
+    rule that would be ignored when active must not be logged as would-fire.
+    """
+    from soctalk.playbook.conditions import evaluate_condition
+    from soctalk.playbook.models import DECISION_RANK
+
+    if not ctx:
+        return []
+    draft = str(ctx.get("verdict") or "")
+    audits: list[dict[str, Any]] = []
+    for pb in shadow_playbooks:
+        if not isinstance(pb, dict):
+            continue
+        for i, rule in enumerate(pb.get("guardrails") or []):
+            if not isinstance(rule, dict) or not evaluate_condition(
+                rule.get("when"), ctx
+            ):
+                continue
+            to = str(rule.get("to") or "")
+            if rule.get("effect") == "override" and DECISION_RANK.get(
+                to, -1
+            ) <= DECISION_RANK.get(draft, 99):
+                continue  # raise-only, same as the live guard
+            audits.append(
+                {
+                    "shadow": True,
+                    "playbook": pb.get("id"),
+                    "guardrail": f"playbook_guardrail_{i}",
+                    "would_effect": rule.get("effect"),
+                    "would_to": to,
+                    "reason": str(rule.get("reason") or "")[:512],
+                }
+            )
+            break  # first match wins, same as the live guard
+    return audits
 
 
 def decision_value(raw: Any) -> str:
