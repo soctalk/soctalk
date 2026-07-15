@@ -211,7 +211,7 @@
 		try {
 			// listAuthored + find: there is no single-get endpoint yet.
 			const all = await api.triagePolicies.listAuthored(tid);
-			const row = all.find((p) => p.playbook_id === id);
+			const row = all.find((p) => p.triage_policy_id === id);
 			if (!row) throw new Error(`triage policy '${id}' not found for this tenant`);
 			lifecycleStatus = row.status === 'draft' ? 'draft' : 'shadow';
 			loadDefinition(row.definition);

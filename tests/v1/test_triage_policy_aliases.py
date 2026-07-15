@@ -55,6 +55,19 @@ def test_builtins_alias_matches_canonical():
     assert any(p["id"] == "dual-use-privileged-exec" for p in canonical.json())
 
 
+def test_authored_dto_keeps_deprecated_playbook_id_mirror():
+    """The renamed wire field is triage_policy_id; the old playbook_id must still ride
+    along (same value) for one release so existing clients keep working."""
+    from soctalk.core.api.ir import AuthoredTriagePolicyDTO
+
+    dto = AuthoredTriagePolicyDTO(
+        triage_policy_id="pb-x", revision=1, status="shadow", definition={}
+    )
+    body = dto.model_dump()
+    assert body["triage_policy_id"] == "pb-x"
+    assert body["playbook_id"] == "pb-x"  # deprecated mirror, remove with /playbooks routes
+
+
 def test_every_authored_playbook_route_has_a_triage_policy_twin():
     """Each /playbooks route has a /triage-policies twin bound to the SAME handler."""
     _, app = _client()

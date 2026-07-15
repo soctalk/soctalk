@@ -108,16 +108,16 @@ def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
 
 
 async def _latest_revision(
-    db: AsyncSession, *, tenant_id: UUID, playbook_id: str
+    db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str
 ) -> dict[str, Any] | None:
     row = (await db.execute(
         text(
             "SELECT revision, status, definition, created_by, created_at "
-            "FROM authored_playbook_revisions "
-            "WHERE tenant_id = :t AND playbook_id = :p "
+            "FROM authored_triage_policy_revisions "
+            "WHERE tenant_id = :t AND triage_policy_id = :p "
             "ORDER BY revision DESC LIMIT 1"
         ),
-        {"t": str(tenant_id), "p": playbook_id},
+        {"t": str(tenant_id), "p": triage_policy_id},
     )).mappings().first()
     return dict(row) if row else None
 
@@ -127,11 +127,11 @@ async def list_authored(db: AsyncSession, *, tenant_id: UUID) -> list[dict[str, 
     rows = (await db.execute(
         text(
             """
-            SELECT DISTINCT ON (playbook_id)
-                   playbook_id, revision, status, definition, created_by, created_at
-            FROM authored_playbook_revisions
+            SELECT DISTINCT ON (triage_policy_id)
+                   triage_policy_id, revision, status, definition, created_by, created_at
+            FROM authored_triage_policy_revisions
             WHERE tenant_id = :t
-            ORDER BY playbook_id, revision DESC
+            ORDER BY triage_policy_id, revision DESC
             """
         ),
         {"t": str(tenant_id)},
@@ -140,25 +140,25 @@ async def list_authored(db: AsyncSession, *, tenant_id: UUID) -> list[dict[str, 
 
 
 async def get_authored(
-    db: AsyncSession, *, tenant_id: UUID, playbook_id: str
+    db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str
 ) -> dict[str, Any] | None:
-    latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=playbook_id)
+    latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if latest is None or latest["status"] == "retired":
         return None
     return latest
 
 
 async def _insert_revision(
-    db: AsyncSession, *, tenant_id: UUID, playbook_id: str, revision: int,
+    db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str, revision: int,
     status: str, definition: dict[str, Any], created_by: UUID | None,
 ) -> None:
     await db.execute(
         text(
-            "INSERT INTO authored_playbook_revisions "
-            "(id, tenant_id, playbook_id, revision, status, definition, created_by) "
+            "INSERT INTO authored_triage_policy_revisions "
+            "(id, tenant_id, triage_policy_id, revision, status, definition, created_by) "
             "VALUES (:id, :t, :p, :rev, :st, CAST(:def AS JSONB), :by)"
         ),
-        {"id": str(uuid4()), "t": str(tenant_id), "p": playbook_id, "rev": revision,
+        {"id": str(uuid4()), "t": str(tenant_id), "p": triage_policy_id, "rev": revision,
          "st": status, "def": _json(definition),
          "by": str(created_by) if created_by else None},
     )
@@ -175,12 +175,12 @@ async def upsert_authored(
     # Force the concrete tenant: a tenant-authored playbook must never store/export
     # tenant="*" (which the file registry treats as applies-everywhere).
     pb = validate_authored({**definition, "tenant": str(tenant_id)})
-    latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=pb.id)
+    latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=pb.id)
     revision = (latest["revision"] + 1) if latest else 1
     stored = pb.model_dump()
     try:
         await _insert_revision(
-            db, tenant_id=tenant_id, playbook_id=pb.id, revision=revision,
+            db, tenant_id=tenant_id, triage_policy_id=pb.id, revision=revision,
             status=status, definition=stored, created_by=created_by,
         )
         await db.flush()  # surface a duplicate-revision race here, not at commit
@@ -188,26 +188,26 @@ async def upsert_authored(
         raise TriagePolicyConflictError(
             "a concurrent edit created a newer revision — reload and retry"
         ) from exc
-    return {"playbook_id": pb.id, "revision": revision, "status": status, "definition": stored}
+    return {"triage_policy_id": pb.id, "revision": revision, "status": status, "definition": stored}
 
 
 async def retire_authored(
-    db: AsyncSession, *, tenant_id: UUID, playbook_id: str, retired_by: UUID | None = None,
+    db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str, retired_by: UUID | None = None,
 ) -> bool:
     """Soft-delete: append a 'retired' revision keeping the definition for history.
     Returns False if the playbook doesn't exist or is already retired."""
-    latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=playbook_id)
+    latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if latest is None or latest["status"] == "retired":
         return False
     await _insert_revision(
-        db, tenant_id=tenant_id, playbook_id=playbook_id, revision=latest["revision"] + 1,
+        db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, revision=latest["revision"] + 1,
         status="retired", definition=dict(latest["definition"]), created_by=retired_by,
     )
     return True
 
 
 async def set_authored_status(
-    db: AsyncSession, *, tenant_id: UUID, playbook_id: str, status: str,
+    db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str, status: str,
     created_by: UUID | None = None,
 ) -> dict[str, Any] | None:
     """Activate ('active') or deactivate ('shadow') an authored playbook by appending a
@@ -216,7 +216,7 @@ async def set_authored_status(
     playbook doesn't exist / is retired."""
     if status not in ("active", "shadow"):
         raise TriagePolicyValidationError("status must be 'active' or 'shadow'")
-    latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=playbook_id)
+    latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if latest is None or latest["status"] == "retired":
         return None
     definition = dict(latest["definition"])
@@ -228,13 +228,13 @@ async def set_authored_status(
     revision = latest["revision"] + 1
     try:
         await _insert_revision(
-            db, tenant_id=tenant_id, playbook_id=playbook_id, revision=revision,
+            db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, revision=revision,
             status=status, definition=definition, created_by=created_by,
         )
         await db.flush()
     except IntegrityError as exc:
         raise TriagePolicyConflictError("a concurrent edit collided — reload and retry") from exc
-    return {"playbook_id": playbook_id, "revision": revision, "status": status,
+    return {"triage_policy_id": triage_policy_id, "revision": revision, "status": status,
             "definition": definition}
 
 
@@ -252,10 +252,10 @@ async def render_active_authored_values(
     rows = (await db.execute(
         text(
             """
-            SELECT DISTINCT ON (playbook_id) playbook_id, revision, status, definition
-            FROM authored_playbook_revisions
+            SELECT DISTINCT ON (triage_policy_id) triage_policy_id, revision, status, definition
+            FROM authored_triage_policy_revisions
             WHERE tenant_id = :t
-            ORDER BY playbook_id, revision DESC
+            ORDER BY triage_policy_id, revision DESC
             """
         ),
         {"t": str(tenant_id)},
@@ -273,7 +273,7 @@ async def render_active_authored_values(
         doc = {**dict(r["definition"]), "status": "active", "tenant": str(tenant_id)}
         yaml_text = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)
         parse_triage_policy_text(yaml_text)
-        out[f"authored-{r['playbook_id']}.yaml"] = yaml_text
+        out[f"authored-{r['triage_policy_id']}.yaml"] = yaml_text
     return out
 
 

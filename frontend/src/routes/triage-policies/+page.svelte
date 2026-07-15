@@ -48,7 +48,7 @@
 
 	function openEdit(pb: AuthoredTriagePolicy) {
 		editorMode = 'edit';
-		editorPid = pb.playbook_id;
+		editorPid = pb.triage_policy_id;
 		editorError = null;
 		editorText = JSON.stringify(pb.definition, null, 2);
 		editorOpen = true;
@@ -378,10 +378,10 @@
 			<div class="card p-6 opacity-60 text-sm">No authored triage policies yet.</div>
 		{:else}
 			<div class="grid gap-2">
-				{#each authored as pb (pb.playbook_id)}
+				{#each authored as pb (pb.triage_policy_id)}
 					<div class="card p-4 flex items-center justify-between gap-3">
 						<div class="flex items-center gap-2 min-w-0">
-							<span class="font-mono font-semibold truncate">{pb.playbook_id}</span>
+							<span class="font-mono font-semibold truncate">{pb.triage_policy_id}</span>
 							<span class="badge {authoredStatusBadge(pb.status)} text-xs">{pb.status}</span>
 							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
 						</div>
@@ -389,21 +389,21 @@
 							{#if pb.status === 'active'}
 								<button
 									class="btn btn-sm variant-soft"
-									on:click={() => setActive(pb.playbook_id, false)}
+									on:click={() => setActive(pb.triage_policy_id, false)}
 								>
 									Deactivate
 								</button>
 							{:else}
 								<button
 									class="btn btn-sm variant-filled-success"
-									on:click={() => setActive(pb.playbook_id, true)}
+									on:click={() => setActive(pb.triage_policy_id, true)}
 								>
 									Activate
 								</button>
 							{/if}
 							<a
 								class="btn btn-sm variant-filled-primary"
-								href="/triage-policies/editor?id={encodeURIComponent(pb.playbook_id)}"
+								href="/triage-policies/editor?id={encodeURIComponent(pb.triage_policy_id)}"
 							>
 								Edit
 							</a>
@@ -414,12 +414,12 @@
 							>
 								JSON
 							</button>
-							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.playbook_id)}>
+							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.triage_policy_id)}>
 								Export
 							</button>
 							<button
 								class="btn btn-sm variant-soft-error"
-								on:click={() => retire(pb.playbook_id)}
+								on:click={() => retire(pb.triage_policy_id)}
 							>
 								Delete
 							</button>
