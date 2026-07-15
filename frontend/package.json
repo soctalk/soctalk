@@ -35,6 +35,7 @@
     "vite": "^5.0.0"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@floating-ui/dom": "^1.6.12",
     "@xyflow/svelte": "^0.1.39",
     "apexcharts": "^3.45.0",

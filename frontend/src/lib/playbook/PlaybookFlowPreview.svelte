@@ -2,7 +2,8 @@
 	// Read-only projection of a playbook definition onto the guard pipeline.
 	// The document is the source of truth; this canvas is derived, never edited
 	// directly (Windmill/Kestra pattern). Clicking a guardrail node emits
-	// `focus` so the editor can scroll to that rule's form.
+	// `focus` so the editor can scroll to that rule's form. Positions come from
+	// dagre (top-down layered layout), so node heights can vary with content.
 	import { createEventDispatcher } from 'svelte';
 	import { writable } from 'svelte/store';
 	import {
@@ -14,12 +15,15 @@
 		type NodeTypes
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
+	import dagre from '@dagrejs/dagre';
 	import FlowNode from './FlowNode.svelte';
 	import { conditionToSentence, type PlaybookDef } from './schema';
 
 	export let definition: PlaybookDef;
 	/** Node id the Try-it simulation says would dispose the draft — highlighted. */
 	export let firedNodeId: string | null = null;
+	/** Compact mode: intake chain merged into one node, subtitles hidden. */
+	export let compact = false;
 
 	const dispatch = createEventDispatcher<{ focus: { guardrail: number } }>();
 
@@ -27,10 +31,6 @@
 	const nodeTypes = { pb: FlowNode } as unknown as NodeTypes;
 	const nodes = writable<Node[]>([]);
 	const edges = writable<Edge[]>([]);
-
-	const CHAIN_X = 0;
-	const OUTCOME_X = 430;
-	const STEP_Y = 96;
 
 	// SvelteFlow 0.1.x only fits the view on mount — re-key the component when
 	// the projected structure changes so it re-fits (cheap at this graph size).
@@ -52,18 +52,56 @@
 		commit: { title: 'Decision commits' }
 	};
 
-	function rebuild(def: PlaybookDef) {
+	// ------------------------------------------------------------ size model
+	// dagre needs node dimensions up front; these mirror FlowNode's rendering
+	// (max-w-[15rem], text-xs title, 10px subtitle, px-3 py-2).
+
+	const NODE_W = 250;
+	const OUTCOME_W = 130;
+	const CHARS_PER_LINE = 40;
+
+	function estSize(data: Record<string, unknown>): { width: number; height: number } {
+		if (data.kind === 'outcome') return { width: OUTCOME_W, height: 40 };
+		let h = 30; // padding + title
+		const subtitle = typeof data.subtitle === 'string' ? data.subtitle : '';
+		if (subtitle) {
+			const lines = subtitle
+				.split('\n')
+				.reduce((n, l) => n + Math.max(1, Math.ceil(l.length / CHARS_PER_LINE)), 0);
+			h += lines * 13 + 4;
+		}
+		if (data.fired) h += 14;
+		return { width: NODE_W, height: h };
+	}
+
+	function runLayout(ns: Node[], es: Edge[]): void {
+		const g = new dagre.graphlib.Graph();
+		g.setGraph({ rankdir: 'TB', nodesep: 50, ranksep: 34, marginx: 8, marginy: 8 });
+		g.setDefaultEdgeLabel(() => ({}));
+		for (const n of ns) g.setNode(n.id, estSize(n.data as Record<string, unknown>));
+		for (const e of es) g.setEdge(e.source, e.target);
+		dagre.layout(g);
+		for (const n of ns) {
+			const p = g.node(n.id);
+			const s = estSize(n.data as Record<string, unknown>);
+			n.position = { x: p.x - s.width / 2, y: p.y - s.height / 2 };
+		}
+	}
+
+	// ------------------------------------------------------------- projection
+
+	function rebuild(def: PlaybookDef, dense: boolean) {
 		const ns: Node[] = [];
 		const es: Edge[] = [];
-		const outcomesUsed = new Map<string, string>(); // accent -> node id
-		let y = 0;
+		const outcomesUsed = new Map<string, string>();
 		let prev: string | null = null;
 
 		function chainNode(id: string, data: Record<string, unknown>): void {
+			if (dense) delete data.subtitle;
 			ns.push({
 				id,
 				type: 'pb',
-				position: { x: CHAIN_X, y },
+				position: { x: 0, y: 0 }, // dagre assigns
 				data: { hasTarget: prev !== null, hasNext: false, fired: id === firedNodeId, ...data },
 				draggable: false,
 				connectable: false
@@ -71,15 +109,9 @@
 			if (prev !== null) {
 				const p = ns.find((n) => n.id === prev);
 				if (p) (p.data as Record<string, unknown>).hasNext = true;
-				es.push({
-					id: `${prev}->${id}`,
-					source: prev!,
-					target: id,
-					type: 'smoothstep'
-				});
+				es.push({ id: `${prev}->${id}`, source: prev, target: id, type: 'smoothstep' });
 			}
 			prev = id;
-			y += STEP_Y;
 		}
 
 		function outcome(accent: string): string {
@@ -90,7 +122,7 @@
 				ns.push({
 					id,
 					type: 'pb',
-					position: { x: OUTCOME_X, y: 0 }, // y assigned after chain is built
+					position: { x: 0, y: 0 },
 					data: { title: OUTCOME_META[accent].title, kind: 'outcome', accent },
 					draggable: false,
 					connectable: false
@@ -105,43 +137,42 @@
 				source: from,
 				sourceHandle: 'fires',
 				target: outcome(accent),
-				label,
+				label: dense ? undefined : label,
 				type: 'smoothstep',
 				animated: true
 			});
 		}
 
-		chainNode('alert', {
-			title: 'Alert matches playbook',
-			subtitle: matchSummary(def),
-			kind: 'alert'
-		});
-
-		const steps = def.required_steps ?? [];
-		const legal = def.legal_actions ?? {};
-		if (steps.length || legal.triage?.length) {
-			const lines: string[] = [];
-			if (steps.length) lines.push(`must run first: ${steps.join(', ')}`);
-			if (legal.triage?.length) lines.push(`allowed actions: ${legal.triage.join(', ')}`);
-			chainNode('triage', {
-				title: 'Triage phase',
-				subtitle: lines.join('\n'),
-				kind: 'phase'
+		if (dense) {
+			// the intake chain never varies per-rule — collapse it to one node
+			chainNode('alert', { title: 'Intake → LLM verdict draft', kind: 'verdict' });
+		} else {
+			chainNode('alert', {
+				title: 'Alert matches playbook',
+				subtitle: matchSummary(def),
+				kind: 'alert'
+			});
+			const steps = def.required_steps ?? [];
+			const legal = def.legal_actions ?? {};
+			if (steps.length || legal.triage?.length) {
+				const lines: string[] = [];
+				if (steps.length) lines.push(`must run first: ${steps.join(', ')}`);
+				if (legal.triage?.length) lines.push(`allowed actions: ${legal.triage.join(', ')}`);
+				chainNode('triage', { title: 'Triage phase', subtitle: lines.join('\n'), kind: 'phase' });
+			}
+			if (legal.decide?.length) {
+				chainNode('decide', {
+					title: 'Decide phase',
+					subtitle: `allowed actions: ${legal.decide.join(', ')}`,
+					kind: 'phase'
+				});
+			}
+			chainNode('verdict', {
+				title: 'LLM drafts a verdict',
+				subtitle: 'close · needs_more_info · escalate\n(proposes — the guard disposes)',
+				kind: 'verdict'
 			});
 		}
-		if (legal.decide?.length) {
-			chainNode('decide', {
-				title: 'Decide phase',
-				subtitle: `allowed actions: ${legal.decide.join(', ')}`,
-				kind: 'phase'
-			});
-		}
-
-		chainNode('verdict', {
-			title: 'LLM drafts a verdict',
-			subtitle: 'close · needs_more_info · escalate\n(proposes — the guard disposes)',
-			kind: 'verdict'
-		});
 
 		chainNode('floor', {
 			title: 'Safety floor — always on',
@@ -178,22 +209,15 @@
 			kind: 'terminal'
 		});
 
-		// Spread outcome nodes down the right column, centered on the chain.
-		const used = [...outcomesUsed.values()];
-		const mid = Math.max(0, (y - STEP_Y) / 2 - ((used.length - 1) * 70) / 2);
-		used.forEach((id, i) => {
-			const n = ns.find((nd) => nd.id === id);
-			if (n) n.position = { x: OUTCOME_X, y: mid + i * 70 };
-		});
-
+		runLayout(ns, es);
 		nodes.set(ns);
 		edges.set(es);
-		layoutKey = ns.map((n) => n.id).join('|');
+		layoutKey = (dense ? 'c|' : 'f|') + ns.map((n) => n.id).join('|');
 	}
 
 	$: {
 		firedNodeId; // re-project when the simulated firing node changes too
-		rebuild(definition);
+		rebuild(definition, compact);
 	}
 
 	function onNodeClick(e: CustomEvent<{ node: Node }>) {
@@ -209,7 +233,7 @@
 		{edges}
 		{nodeTypes}
 		fitView
-		minZoom={0.3}
+		minZoom={0.25}
 		nodesDraggable={false}
 		nodesConnectable={false}
 		elementsSelectable={true}
