@@ -199,15 +199,16 @@ runsWorker:
   token: ""
   fastModel: ""       # optional override; falls back to llm.model
   reasoningModel: ""  # optional override; falls back to llm.model
-  # Declarative playbook files (issue #44): filename -> YAML content string.
-  # Non-empty renders ConfigMap soctalk-playbooks, mounts it read-only at
-  # /etc/soctalk/playbooks, sets SOCTALK_PLAYBOOK_DIR, and stamps a content
-  # checksum on the pod template so a playbook edit rolls the worker (the
+  # Declarative triage-policy files (issue #44): filename -> YAML content string.
+  # Non-empty renders ConfigMap soctalk-triage-policies, mounts it read-only at
+  # /etc/soctalk/triage-policies, sets SOCTALK_TRIAGE_POLICY_DIR, and stamps a
+  # content checksum on the pod template so a policy edit rolls the worker (the
   # registry loads once per process — the rollout IS the activation). The
   # worker's registry validates each file fail-closed and defaults them to
   # status: shadow; the controller path additionally pre-validates via
   # render.py so an invalid file never even reaches the chart.
-  playbooks: {}
+  # Deprecated alias `playbooks` still works for one release.
+  triagePolicies: {}
 
 # Cross-cluster L1 reachability. Populated by L1 at :issue-agent time
 # when the tenant's L2 cluster is separate from the MSSP's SocTalk

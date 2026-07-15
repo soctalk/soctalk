@@ -150,7 +150,9 @@ def load_triage_policy_file(path: Path) -> TriagePolicy:
 
 
 def _load_file_triage_policies() -> list[TriagePolicy]:
-    directory = os.getenv("SOCTALK_PLAYBOOK_DIR", "")
+    # Canonical env is SOCTALK_TRIAGE_POLICY_DIR; SOCTALK_PLAYBOOK_DIR is the
+    # deprecated alias, read for one release so a not-yet-rolled pod still works.
+    directory = os.getenv("SOCTALK_TRIAGE_POLICY_DIR") or os.getenv("SOCTALK_PLAYBOOK_DIR", "")
     if not directory:
         return []
     root = Path(directory)

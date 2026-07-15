@@ -1,0 +1,26 @@
+{{- /*
+  Declarative triage-policy files for the runs-worker (issue #44).
+
+  Rendered only when runsWorker.triagePolicies (deprecated alias:
+  runsWorker.playbooks) is non-empty. Content arrives as filename -> YAML
+  string; the worker's triage-policy registry validates each file fail-closed
+  at startup (invalid files are rejected whole and logged, they never govern),
+  and file triage policies default to status: shadow until the file itself
+  says active.
+*/}}
+{{- $tp := or .Values.runsWorker.triagePolicies .Values.runsWorker.playbooks }}
+{{- if and .Values.runsWorker.enabled $tp }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soctalk-triage-policies
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+    app.kubernetes.io/name: soctalk-runs-worker
+data:
+  {{- range $name, $content := $tp }}
+  {{ $name }}: |
+{{ $content | indent 4 }}
+  {{- end }}
+{{- end }}
