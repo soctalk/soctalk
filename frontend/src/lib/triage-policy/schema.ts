@@ -399,7 +399,7 @@ export function validateDefinition(def: Record<string, unknown>): string[] {
 	}
 	const guardrails = (def.guardrails as GuardrailDef[]) ?? [];
 	if (guardrails.length > MAX_GUARDRAILS) {
-		errors.push(`at most ${MAX_GUARDRAILS} guardrails per playbook`);
+		errors.push(`at most ${MAX_GUARDRAILS} guardrails per policy`);
 	}
 	guardrails.forEach((g, i) => {
 		const label = `guardrail ${i + 1}`;
