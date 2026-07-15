@@ -57,12 +57,14 @@ def load_cases(path: Path | str = DEFAULT_GOLDEN_PATH) -> list[GoldenCase]:
     cases = []
     for c in raw["cases"]:
         kind = c.get("kind", "both")
-        if kind not in ("routing", "verdict", "both"):
+        if kind not in ("routing", "verdict", "both", "playbook"):
             raise ValueError(f"case {c.get('id')}: invalid kind {kind!r}")
         if kind in ("routing", "both") and not c.get("expect", {}).get("routing_actions"):
             raise ValueError(f"case {c.get('id')}: routing case needs expect.routing_actions")
         if kind in ("verdict", "both") and not c.get("expect", {}).get("verdict_decisions"):
             raise ValueError(f"case {c.get('id')}: verdict case needs expect.verdict_decisions")
+        if kind == "playbook" and not c.get("expect", {}).get("playbook_route"):
+            raise ValueError(f"case {c.get('id')}: playbook case needs expect.playbook_route")
         cases.append(
             GoldenCase(
                 id=c["id"],
@@ -125,6 +127,42 @@ def score_routing(case: GoldenCase, action: str) -> TrialResult:
     )
 
 
+def score_playbook(case: GoldenCase) -> TrialResult:
+    """Deterministic playbook-layer scoring (issue #43) — no LLM, no tokens.
+
+    Runs the resolver match + the resolve-playbook route over the fabricated
+    investigation and scores the route (``operational_close`` = the deterministic
+    disposition fired and the case never reaches the model; ``supervisor`` = full
+    triage). ``expect.playbook_id`` optionally pins WHICH playbook matched. This
+    keeps "class X never reaches the LLM" pinned in the same golden set that
+    scores the LLM's own judgment.
+    """
+    from soctalk.graph.builder import route_from_resolve_playbook
+    from soctalk.playbook.registry import match_playbook
+
+    playbook = match_playbook(case.investigation)
+    state: dict[str, Any] = {"investigation": case.investigation}
+    if playbook is not None:
+        state["playbook"] = playbook.model_dump()
+    route = route_from_resolve_playbook(state)
+
+    expected = [str(r) for r in case.expect["playbook_route"]]
+    expected_id = case.expect.get("playbook_id")
+    matched_id = playbook.id if playbook else None
+    passed = route in expected and (expected_id is None or matched_id == expected_id)
+    detail = ""
+    if expected_id is not None and matched_id != expected_id:
+        detail = f"matched playbook {matched_id!r}, expected {expected_id!r}"
+    return TrialResult(
+        case_id=case.id,
+        kind="playbook",
+        passed=passed,
+        got=f"{route} ({matched_id or 'no-playbook'})",
+        expected=expected,
+        detail=detail,
+    )
+
+
 def score_verdict(case: GoldenCase, decision: str, confidence: float) -> TrialResult:
     expected = [str(d) for d in case.expect["verdict_decisions"]]
     lo = float(case.expect.get("confidence_min", 0.0))
@@ -144,7 +182,7 @@ def score_verdict(case: GoldenCase, decision: str, confidence: float) -> TrialRe
 
 def summarize(results: list[TrialResult]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for kind in ("routing", "verdict"):
+    for kind in ("routing", "verdict", "playbook"):
         subset = [r for r in results if r.kind == kind]
         if subset:
             # A trial whose `got` starts with ERROR: crashed rather than
@@ -204,6 +242,10 @@ async def run_evals(
                     got=f"ERROR:{type(e).__name__}", expected=[], detail=str(e)[:200],
                 )
 
+    # Playbook cases are deterministic (no LLM): score once, outside the
+    # semaphore/trials machinery — repeated trials of a pure function are noise.
+    deterministic = [score_playbook(c) for c in cases if c.kind == "playbook"]
+
     tasks = []
     for case in cases:
         for _ in range(trials):
@@ -211,7 +253,7 @@ async def run_evals(
                 tasks.append(guarded(_run_routing_trial, case))
             if case.kind in ("verdict", "both"):
                 tasks.append(guarded(_run_verdict_trial, case))
-    return list(await asyncio.gather(*tasks))
+    return deterministic + list(await asyncio.gather(*tasks))
 
 
 def print_scorecard(results: list[TrialResult], stream: Any = None) -> dict[str, Any]:
@@ -282,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     if "routing" in summary and summary["routing"]["accuracy"] < routing_threshold:
         ok = False
     if "verdict" in summary and summary["verdict"]["accuracy"] < verdict_threshold:
+        ok = False
+    # Playbook cases are deterministic — anything below 100% is a code regression,
+    # not model variance, so there is no tunable threshold.
+    if "playbook" in summary and summary["playbook"]["accuracy"] < 1.0:
         ok = False
     return 0 if ok else 1
 
