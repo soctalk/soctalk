@@ -208,10 +208,20 @@ def summarize(results: list[TrialResult]) -> dict[str, Any]:
 
 
 async def _run_routing_trial(case: GoldenCase, config: Any) -> TrialResult:
+    from soctalk.playbook.registry import match_playbook
     from soctalk.supervisor.node import _build_context_summary, _get_supervisor_decision
 
     state = build_supervisor_state(case)
-    decision = await _get_supervisor_decision(config, _build_context_summary(state))
+    # Production-equivalence (#45): resolve the playbook exactly as the graph's
+    # entry node would, so a playbook-matched case runs with the same narrowed
+    # action schema production uses. Without this, the harness could score an
+    # action production can no longer sample.
+    playbook = match_playbook(case.investigation)
+    if playbook is not None:
+        state["playbook"] = playbook.model_dump()
+    decision = await _get_supervisor_decision(
+        config, _build_context_summary(state), state
+    )
     return score_routing(case, str(decision.next_action))
 
 

@@ -21,13 +21,24 @@ from soctalk.playbook.models import (
 # carries an account-track authorization context (the M1 claim/fixture seam).
 PRIVILEGED_EXEC_PLAYBOOK = Playbook(
     id="dual-use-privileged-exec",
-    version=1,
+    version=2,
     applies_to=PlaybookMatch(
         rule_groups=["sudo", "su"],
         authorization_tracks=["account"],
     ),
     required_steps=[GATHER_AUTHORIZATION_CONTEXT],
     decision_modules=["authorization_engine"],
+    # CLOSE is never legal for the dual-use class: the router tier must not
+    # short-circuit-close an alert whose whole point is that benign and hostile
+    # look identical — the reasoning-tier verdict makes that call. VERDICT stays
+    # legal in triage because proposing it triggers the required-step reroute.
+    legal_actions={
+        "triage": ["ENRICH", "CONTEXTUALIZE", "INVESTIGATE", "VERDICT"],
+        "decide": ["ENRICH", "CONTEXTUALIZE", "INVESTIGATE", "VERDICT"],
+    },
+    # The #43 worked example: a close on a PCI-scoped asset needs human sign-off
+    # even when a record fully covers the activity.
+    close_signoff_data_classes=["pci"],
 )
 
 # The agent-health/operational class: Wazuh agent self-monitoring noise ("Agent

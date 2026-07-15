@@ -73,6 +73,14 @@ def _disposition_from_final(final: dict[str, Any], run_status: str) -> str:
     sup_conf = float(sup.get("tp_confidence") or 0.0)
     sup_action = _enum_value(sup.get("next_action")).upper()
 
+    # Guard interrupt (#45): the LLM draft stands but a human must sign off
+    # before it takes effect. The worker has no HIL of its own — without a
+    # checkpointer the graph's human_review ends the run untouched — so the
+    # sign-off queue IS the pending_reviews row an escalate disposition
+    # creates. The draft rides along in the verdict summary/audit.
+    if final.get("verdict_interrupted"):
+        return "escalate"
+
     # Verdict node fired — trust its decision.
     if decision == "escalate":
         return "escalate"
@@ -96,6 +104,10 @@ def _disposition_from_final(final: dict[str, Any], run_status: str) -> str:
 def _verdict_summary(final: dict[str, Any]) -> str | None:
     verdict = final.get("verdict") or {}
     rec = verdict.get("recommendation")
+    if rec and final.get("verdict_interrupted"):
+        # An interrupted draft reaches the reviewer with its close-shaped
+        # recommendation intact — say why it's in the queue (#45).
+        return (f"[SIGN-OFF REQUIRED: guard interrupted this draft] {rec}")[:1024]
     if rec:
         return str(rec)[:1024]
     sup = final.get("supervisor_decision") or {}
