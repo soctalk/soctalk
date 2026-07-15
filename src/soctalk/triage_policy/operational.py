@@ -1,4 +1,4 @@
-"""The ``close_operational`` deterministic disposition (issue #43, second playbook).
+"""The ``close_operational`` deterministic disposition (issue #43, second triage policy).
 
 Some alert classes are operational, not security events: Wazuh agent-health noise
 (event queue flooded, buffer full) is an infrastructure/agent-configuration
@@ -54,10 +54,10 @@ def operational_close_vetoes(
     list = the alert is its class and nothing more; any entry = full LLM triage.
 
     Class attestation: EVERY alert on the investigation must carry one of the
-    playbook's ``class_rule_groups`` (the ruleset's semantic class), or the close is
+    triage policy's ``class_rule_groups`` (the ruleset's semantic class), or the close is
     vetoed. This is what stops a correlated multi-alert investigation from being
     closed on the strength of one agent-health member, and it demands more identity
-    than a bare rule id — a rule-id-only match still routes to the playbook, but an
+    than a bare rule id — a rule-id-only match still routes to the triage policy, but an
     alert whose groups don't attest the class goes to full triage (the fail-closed
     direction). An investigation with no alerts can't attest anything and is vetoed
     the same way.

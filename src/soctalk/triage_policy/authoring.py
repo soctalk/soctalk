@@ -1,14 +1,14 @@
-"""Authored playbooks: DB-backed shadow/draft playbooks created via the API (#44 follow-on).
+"""Authored triage policies: DB-backed shadow/draft triage policies created via the API (#44 follow-on).
 
-Authoring is strictly SHADOW/DRAFT + export-to-YAML — authored playbooks NEVER govern the
+Authoring is strictly SHADOW/DRAFT + export-to-YAML — authored triage policies NEVER govern the
 worker directly. Active enforcement stays on the vetted file -> git -> worker-rollout path.
 
 Every authored definition is validated with the SAME ``TriagePolicy`` model and the same
-fail-closed restrictions as file playbooks (shadow-only status, priority floor, no
+fail-closed restrictions as file triage policies (shadow-only status, priority floor, no
 ``deterministic_disposition``, no built-in id collision, ``extra="forbid"``, sandboxed
 guardrail conditions), PLUS stricter reference checks: unknown required steps / legal
 actions / decision modules are REJECTED at author time rather than warned-and-ignored at
-runtime. The store is an append-only revision log; the current state of a playbook is its
+runtime. The store is an append-only revision log; the current state of a triage policy is its
 highest revision.
 """
 
@@ -35,17 +35,17 @@ _VALID_ACTIONS = frozenset(a.value for a in SupervisorAction)
 # fail open (unconstrained) if promoted, so reject it at author time.
 KNOWN_PHASES = frozenset({"triage", "decide"})
 # Authoring lifecycle statuses (the DB row's status; the stored DEFINITION is always
-# shadow). 'active' is deliberately absent — authored playbooks never govern.
+# shadow). 'active' is deliberately absent — authored triage policies never govern.
 AUTHORED_STATUSES = frozenset({"draft", "shadow"})
-# A playbook id is a path segment (PUT/DELETE/export address by it) and a YAML filename
+# A triage policy id is a path segment (PUT/DELETE/export address by it) and a YAML filename
 # stem on rollout — constrain it to a safe slug.
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
-# Mirror the file-playbook cap so an authored definition can't bloat the row / a run.
+# Mirror the file-triage policy cap so an authored definition can't bloat the row / a run.
 _MAX_AUTHORED_BYTES = 64 * 1024
 
 
 class TriagePolicyValidationError(ValueError):
-    """An authored playbook definition failed validation (author-facing message)."""
+    """An authored triage policy definition failed validation (author-facing message)."""
 
 
 class TriagePolicyConflictError(Exception):
@@ -53,14 +53,14 @@ class TriagePolicyConflictError(Exception):
 
 
 def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
-    """Validate an authored playbook definition fail-closed. Returns the parsed TriagePolicy
-    (status forced to 'shadow' — authored playbooks are never active). Raises
+    """Validate an authored triage policy definition fail-closed. Returns the parsed TriagePolicy
+    (status forced to 'shadow' — authored triage policies are never active). Raises
     ``TriagePolicyValidationError`` with an author-facing message on any problem."""
     if not isinstance(raw, dict):
-        raise TriagePolicyValidationError("playbook must be a mapping")
+        raise TriagePolicyValidationError("triage policy must be a mapping")
     if len(json.dumps(raw, default=str)) > _MAX_AUTHORED_BYTES:
-        raise TriagePolicyValidationError(f"playbook definition exceeds {_MAX_AUTHORED_BYTES} bytes")
-    # The stored definition is always shadow — an authored playbook cannot declare itself
+        raise TriagePolicyValidationError(f"triage policy definition exceeds {_MAX_AUTHORED_BYTES} bytes")
+    # The stored definition is always shadow — an authored triage policy cannot declare itself
     # active. (The DB row carries the draft/shadow lifecycle separately.)
     definition = {**raw, "status": "shadow"}
     try:
@@ -87,7 +87,7 @@ def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
             "deterministic_disposition is a built-in-only capability and cannot be authored"
         )
     if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
-        raise TriagePolicyValidationError(f"id '{pb.id}' collides with a built-in playbook")
+        raise TriagePolicyValidationError(f"id '{pb.id}' collides with a built-in triage policy")
 
     bad_steps = [s for s in pb.required_steps if s not in KNOWN_STEP_NODES]
     if bad_steps:
@@ -123,7 +123,7 @@ async def _latest_revision(
 
 
 async def list_authored(db: AsyncSession, *, tenant_id: UUID) -> list[dict[str, Any]]:
-    """Latest revision of each non-retired authored playbook for the tenant."""
+    """Latest revision of each non-retired authored triage policy for the tenant."""
     rows = (await db.execute(
         text(
             """
@@ -168,11 +168,11 @@ async def upsert_authored(
     db: AsyncSession, *, tenant_id: UUID, definition: dict[str, Any],
     status: str = "shadow", created_by: UUID | None = None,
 ) -> dict[str, Any]:
-    """Create or edit an authored playbook (appends a new revision). Validates fail-closed.
+    """Create or edit an authored triage policy (appends a new revision). Validates fail-closed.
     ``status`` is the authoring lifecycle (draft|shadow). Raises TriagePolicyValidationError."""
     if status not in AUTHORED_STATUSES:
         raise TriagePolicyValidationError("status must be 'draft' or 'shadow'")
-    # Force the concrete tenant: a tenant-authored playbook must never store/export
+    # Force the concrete tenant: a tenant-authored triage policy must never store/export
     # tenant="*" (which the file registry treats as applies-everywhere).
     pb = validate_authored({**definition, "tenant": str(tenant_id)})
     latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=pb.id)
@@ -195,7 +195,7 @@ async def retire_authored(
     db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str, retired_by: UUID | None = None,
 ) -> bool:
     """Soft-delete: append a 'retired' revision keeping the definition for history.
-    Returns False if the playbook doesn't exist or is already retired."""
+    Returns False if the triage policy doesn't exist or is already retired."""
     latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if latest is None or latest["status"] == "retired":
         return False
@@ -210,10 +210,10 @@ async def set_authored_status(
     db: AsyncSession, *, tenant_id: UUID, triage_policy_id: str, status: str,
     created_by: UUID | None = None,
 ) -> dict[str, Any] | None:
-    """Activate ('active') or deactivate ('shadow') an authored playbook by appending a
+    """Activate ('active') or deactivate ('shadow') an authored triage policy by appending a
     status revision. Re-validates the stored definition fail-closed before it can govern
     (Codex: old rows must re-clear the validator). Returns the new state, or None if the
-    playbook doesn't exist / is retired."""
+    triage policy doesn't exist / is retired."""
     if status not in ("active", "shadow"):
         raise TriagePolicyValidationError("status must be 'active' or 'shadow'")
     latest = await _latest_revision(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
@@ -222,7 +222,7 @@ async def set_authored_status(
     definition = dict(latest["definition"])
     # Gate ACTIVATION on a fresh fail-closed validation (a row valid at author time can go
     # invalid after a code change, e.g. a new built-in id collision). Deactivation must NOT
-    # revalidate — turning a now-invalid playbook OFF must always succeed.
+    # revalidate — turning a now-invalid triage policy OFF must always succeed.
     if status == "active":
         validate_authored(definition)
     revision = latest["revision"] + 1
@@ -241,7 +241,7 @@ async def set_authored_status(
 async def render_active_authored_values(
     db: AsyncSession, *, tenant_id: UUID
 ) -> dict[str, str]:
-    """Active authored playbooks as ``{configmap_filename: yaml_text}`` for chart delivery.
+    """Active authored triage policies as ``{configmap_filename: yaml_text}`` for chart delivery.
 
     FAIL-CLOSED: each active row is rendered to YAML (status forced 'active', tenant pinned)
     and re-validated with ``parse_triage_policy_text`` — the worker's own loader. Raises on ANY

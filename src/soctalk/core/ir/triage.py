@@ -79,7 +79,7 @@ async def count_recent_auto_closes(
 
     Counts ``auto_closed_fp`` investigations by ``closed_at`` — the shared terminal
     state of every automatic close plane (rules band, memoized close, worker
-    ``close_fp`` incl. the playbook operational disposition) and of analyst rejects;
+    ``close_fp`` incl. the triage policy operational disposition) and of analyst rejects;
     counting the latter slightly overstates the automatic volume, which errs the cap
     in the safe direction. Served by the v1_0031 partial index.
     """

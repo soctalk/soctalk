@@ -9,6 +9,7 @@ from uuid import UUID
 import structlog
 from langchain_core.messages import HumanMessage
 
+from soctalk.authorization.render import supervisor_authorization_lines
 from soctalk.config import get_config
 from soctalk.graph import budget as token_budget
 from soctalk.inference import (
@@ -18,12 +19,11 @@ from soctalk.inference import (
     ainvoke_request,
     resolve_tier_sampling,
 )
-from soctalk.authorization.render import supervisor_authorization_lines
 from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
-from soctalk.triage_policy.gate import legal_actions_for
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
+from soctalk.triage_policy.gate import legal_actions_for
 
 logger = structlog.get_logger()
 
@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 MAX_ITERATIONS = 10
 
 # Narrowed structured-output schemas per legal-action set (#45): when the active
-# playbook restricts the supervisor's legal actions, the restriction is applied
+# triage policy restricts the supervisor's legal actions, the restriction is applied
 # BEFORE the call — an illegal action cannot even be sampled. Cached because the
 # handful of distinct legal sets is tiny and model classes are heavy to build.
 _CONSTRAINED_SCHEMAS: dict[frozenset[str], type[SupervisorDecision]] = {}
@@ -342,7 +342,7 @@ async def _get_supervisor_decision(
     error fed back, then fails the run loudly via SchemaValidationError. Every
     raw response is funnelled through budget.track by the dispatcher.
     """
-    # Pre-call legal-action narrowing (#45): the playbook's legal set for the
+    # Pre-call legal-action narrowing (#45): the triage policy's legal set for the
     # current phase becomes the schema's action enum. The routing gate re-checks
     # after the call (defense in depth for state-written decisions).
     schema: type[SupervisorDecision] = SupervisorDecision

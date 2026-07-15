@@ -1,9 +1,9 @@
-"""Deterministic playbook nodes for the SecOps graph (issue #43).
+"""Deterministic triage policy nodes for the SecOps graph (issue #43).
 
 Three plain LangGraph nodes — no LLM calls, no I/O beyond state:
 
 - ``resolve_triage_policy_node``: entry node; matches the investigation against the
-  built-in registry and writes the active playbook into state.
+  built-in registry and writes the active triage policy into state.
 - ``gather_authorization_context_node``: the required step the pre-verdict gate
   reroutes to. Connectors are separate work, so today it gathers from the sources
   that exist — the claim payload / fixture context already on the investigation —
@@ -33,14 +33,14 @@ from soctalk.triage_policy.guard import (
     shadow_guardrail_audits,
 )
 from soctalk.triage_policy.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
-from soctalk.triage_policy.registry import match_triage_policy, match_shadow_triage_policies
+from soctalk.triage_policy.registry import match_shadow_triage_policies, match_triage_policy
 
 logger = structlog.get_logger()
 
 
 async def resolve_triage_policy_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Match the alert against the playbook registry; write the winner into state.
-    Matching SHADOW playbooks are recorded alongside (#44) — their guardrails get
+    """Match the alert against the triage policy registry; write the winner into state.
+    Matching SHADOW triage policies are recorded alongside (#44) — their guardrails get
     would-fire audit records at the guard, but they never govern anything."""
     investigation = state.get("investigation", {}) or {}
     triage_policy = match_triage_policy(investigation)
@@ -111,19 +111,19 @@ async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
     check came back clean. Writes a supervisor-shaped CLOSE decision (the worker's
     disposition mapping and the close node already understand that shape) plus a
     playbook_audit record, so the close reason and the audit trail both say this
-    was a playbook disposition, not a model judgment. The terminal safety floor in
+    was a triage policy disposition, not a model judgment. The terminal safety floor in
     the runs-worker still applies to the resulting ``close_fp``, unchanged.
     """
     triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
     reasoning = (
-        f"playbook {triage_policy.get('id')}: operational alert class (agent health) "
+        f"triage policy {triage_policy.get('id')}: operational alert class (agent health) "
         "with no security indicators — deterministic close, no LLM invoked"
     )
     state["supervisor_decision"] = {
         "next_action": "CLOSE",
         "action_reasoning": reasoning,
         "tp_confidence": 0.0,
-        "confidence_reasoning": "deterministic playbook disposition",
+        "confidence_reasoning": "deterministic triage policy disposition",
     }
     state.setdefault("triage_policy_audit", state.setdefault("playbook_audit", [])).append(
         {
@@ -142,7 +142,7 @@ async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
 async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     """Post-verdict guard: LLM proposed, this node disposes.
 
-    Runs on every verdict (the floor edges are unconditional; playbook presence only
+    Runs on every verdict (the floor edges are unconditional; triage policy presence only
     gates the pre-verdict reroute). Provider errors and missing verdicts pass through
     untouched — the worker's failed-run contract owns those.
     """
@@ -177,8 +177,8 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     )
     state["authz_class"] = result.authz_class
 
-    # Shadow playbooks (#44): would-fire records against the exact same context,
-    # audit-only — this is the evidence that graduates a shadow playbook to active.
+    # Shadow triage policies (#44): would-fire records against the exact same context,
+    # audit-only — this is the evidence that graduates a shadow triage policy to active.
     shadow_audits = shadow_guardrail_audits(
         (state.get("triage_policy_shadow") or state.get("playbook_shadow")) or (),
         result.condition_ctx,

@@ -1,11 +1,11 @@
-"""Pre-decision gating: required steps and the playbook's legal action set (#43/#45).
+"""Pre-decision gating: required steps and the triage policy's legal action set (#43/#45).
 
 Pure functions over graph state, consumed by the supervisor's routing edge (post-call
 defense in depth) and by the supervisor node itself (pre-call schema narrowing — an
 illegal action can't even be sampled).
 
 Phases are deterministic, never LLM-driven: a run is in the ``triage`` phase until the
-playbook's required deterministic steps have all run, then in ``decide``. VERDICT
+triage policy's required deterministic steps have all run, then in ``decide``. VERDICT
 belongs in a triage legal set even when the phase's purpose is evidence-gathering —
 proposing VERDICT is what triggers the required-step reroute; the gate, not the
 model, decides whether it proceeds.
@@ -32,7 +32,7 @@ def missing_required_steps(state: dict[str, Any]) -> list[str]:
     """TriagePolicy-required deterministic steps that have not run yet (pure).
 
     Only step names the graph actually has nodes for count — an unknown name in a
-    playbook is logged and skipped rather than deadlocking the run (there is nowhere
+    triage policy is logged and skipped rather than deadlocking the run (there is nowhere
     to route to, and the post-verdict guard still enforces the floor edges).
     """
     triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
@@ -55,14 +55,14 @@ def missing_required_steps(state: dict[str, Any]) -> list[str]:
 
 def triage_policy_phase(state: dict[str, Any]) -> Literal["triage", "decide"]:
     """``triage`` until every required step has run, then ``decide``. Deterministic
-    from playbook state — never from the LLM-written ``current_phase``."""
+    from triage policy state — never from the LLM-written ``current_phase``."""
     return PHASE_TRIAGE if missing_required_steps(state) else PHASE_DECIDE
 
 
 def legal_actions_for(state: dict[str, Any]) -> frozenset[str] | None:
-    """The supervisor actions the active playbook allows in the current phase,
-    or None when unconstrained (no playbook, no ``legal_actions``, or the phase
-    isn't listed). Unknown action names in playbook data are dropped with a
+    """The supervisor actions the active triage policy allows in the current phase,
+    or None when unconstrained (no triage policy, no ``legal_actions``, or the phase
+    isn't listed). Unknown action names in triage policy data are dropped with a
     warning — and if that leaves an empty set, the constraint is VOID (None):
     an authoring error must degrade to full triage, never to a wedged run.
     """

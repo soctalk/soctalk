@@ -1,8 +1,8 @@
-"""Author-side playbook validation (#44): the same fail-closed checks the
-registry loader applies, as a CLI, so a playbook file is proven valid BEFORE it
+"""Author-side triage policy validation (#44): the same fail-closed checks the
+registry loader applies, as a CLI, so a triage policy file is proven valid BEFORE it
 is deployed:
 
-    python -m soctalk.triage_policy.validate path/to/playbook.yaml [more.yaml ...]
+    python -m soctalk.triage_policy.validate path/to/triage-policy.yaml [more.yaml ...]
 
 Exit code 0 = every file valid; 1 = at least one rejected (reasons on stderr).
 """
@@ -18,7 +18,7 @@ from soctalk.triage_policy.registry import load_triage_policy_file
 def main(argv: list[str] | None = None) -> int:
     paths = argv if argv is not None else sys.argv[1:]
     if not paths:
-        print("usage: python -m soctalk.triage_policy.validate <playbook.yaml> [...]",
+        print("usage: python -m soctalk.triage_policy.validate <triage-policy.yaml> [...]",
               file=sys.stderr)
         return 2
     failed = False

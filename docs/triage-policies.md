@@ -35,15 +35,15 @@ A triage policy can only make triage **more conservative**, never less:
 
 - Guardrail effects are **raise-only** — `DECISION_RANK` and the `to` enum make `close`
   unreachable; the guard skips any override that isn't strictly higher
-  (`soctalk/playbook/guard.py`).
+  (`soctalk/triage_policy/guard.py`).
 - `deterministic_disposition` is a **built-in-only** capability — authored/file policies
   cannot set it (`authoring.py`, `registry.py`), so UI/file authors cannot mint an
   auto-close class.
-- The **non-overridable safety floor** (`soctalk/playbook/floor.py`) vetoes any auto-close
+- The **non-overridable safety floor** (`soctalk/triage_policy/floor.py`) vetoes any auto-close
   over an IOC, an active-incident overlap, or contradicted authorization — regardless of any
   policy.
 
-See the docstrings in `soctalk/playbook/models.py` and `DECISION_RANK` for the grammar.
+See the docstrings in `soctalk/triage_policy/models.py` and `DECISION_RANK` for the grammar.
 
 > **Known gap (do not rely on it as a boundary):** authored `legal_actions` is *not* fully
 > raise-only — a set that omits `VERDICT` and includes `CLOSE` can steer toward an
@@ -54,11 +54,11 @@ See the docstrings in `soctalk/playbook/models.py` and `DECISION_RANK` for the g
 ## Lifecycle
 
 - **Built-in** policies are vetted code (`registry.py`), read-only, always active.
-- **File** policies load per-process in the runs-worker from `SOCTALK_PLAYBOOK_DIR`
+- **File** policies load per-process in the runs-worker from `SOCTALK_TRIAGE_POLICY_DIR`
   (delivered via the tenant chart ConfigMap); default `shadow`.
 - **Authored** policies are DB-backed, per-tenant, admin-authored via the API/UI:
   `draft` → `shadow` (evaluated for audit, never enforced) → `active` (governs) →
-  `retired`. Activating an authored policy materializes it into the worker's playbook
+  `retired`. Activating an authored policy materializes it into the worker's triage-policy
   ConfigMap on a `tenant.reconcile`; the worker rollout is the activation gate.
 
 **Shadow** policies are matched and their guardrails evaluated for audit only — nothing is
@@ -77,18 +77,27 @@ GRC-flavored.)
 
 ## Terminology & legacy-name map
 
-| Concept | Current name | Legacy names still in the code (unchanged) |
-|---|---|---|
-| The policy kind | **Triage Policy** | "playbook" everywhere below |
-| API (canonical) | `/api/mssp/triage-policies`, `/api/mssp/tenants/{id}/triage-policies[/…]` | `/api/mssp/playbooks*` (deprecated aliases, one release) |
-| UI route | `/triage-policies` (+ `/editor`) | `/playbooks*` → 308 redirect |
-| DB table | *(unchanged)* | `authored_playbook_revisions` |
-| Python package | *(unchanged)* | `soctalk.playbook.*` |
-| Worker env / ConfigMap | *(unchanged)* | `SOCTALK_PLAYBOOK_DIR`, `soctalk-playbooks`, `authored-*.yaml` |
+Everything now carries triage-policy semantics; each renamed external/runtime contract keeps
+its old name working for **one release** so a rolling deploy never breaks mid-flight.
 
-The DB table, alembic history, Python package, and worker rollout contract keep their
-legacy `playbook` names deliberately (deferred, out of scope for the rename). Wire JSON
-field names (including `playbook_id`) are unchanged for compatibility.
+| Concept | Canonical name | Deprecated alias (one release) |
+|---|---|---|
+| The policy kind | **Triage Policy** | "playbook" |
+| API routes | `/api/mssp/triage-policies`, `/api/mssp/tenants/{id}/triage-policies[/…]` | `/api/mssp/playbooks*` (marked deprecated in OpenAPI) |
+| UI route | `/triage-policies` (+ `/editor`) | `/playbooks*` → 308 redirect |
+| API response field | `triage_policy_id` | `playbook_id` (mirrored, same value) |
+| DB table / column | `authored_triage_policy_revisions` / `triage_policy_id` | — (renamed in place by migration `v1_0035`) |
+| Python package | `soctalk.triage_policy.*` | — (hard rename; no import alias) |
+| Worker env | `SOCTALK_TRIAGE_POLICY_DIR`, `SOCTALK_TENANT_TRIAGE_POLICIES_DIR` | `SOCTALK_PLAYBOOK_DIR`, `SOCTALK_TENANT_PLAYBOOKS_DIR` (read as fallback) |
+| Chart values / ConfigMap | `runsWorker.triagePolicies`, `soctalk-triage-policies` | `runsWorker.playbooks` (read as fallback) |
+| Graph state / enrichment | `triage_policy`, `triage_policy_audit`, … | `playbook`, `playbook_audit` (dual-read/written) |
+| Audit action / resource_type | `ir.triage_policy.*`, `triage_policy` | — (forward-only) |
+
+The Python package, DB objects, and audit taxonomy are hard renames (no third-party
+consumer); the API routes/field, worker env, chart values, and checkpointed graph
+state/enrichment keep a one-release fallback. `authored-*.yaml` ConfigMap filenames are
+unchanged (the worker globs `*.yaml`).
 
 **Reserved:** `playbook` — for the future post-disposition **Response Playbooks**. Do not
-use it for the triage-policy kind.
+use it for the triage-policy kind. The aliases above exist only to bridge one release; the
+next release drops them.

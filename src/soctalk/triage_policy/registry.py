@@ -2,16 +2,16 @@
 
 ``match_triage_policy`` is pure and deterministic — the resolver node calls it once per
 run and writes the winner into graph state. Priority order (lower first) puts
-security-judgment playbooks before operational ones, so an alert that somehow
-matches both gets the stricter treatment; file-loaded playbooks default below the
+security-judgment triage policies before operational ones, so an alert that somehow
+matches both gets the stricter treatment; file-loaded triage policies default below the
 built-ins.
 
 File loading (``SOCTALK_PLAYBOOK_DIR``, ``*.yaml``/``*.yml``) fails closed per
 file: schema violations, unknown fields, or invalid guardrail conditions reject
-the whole file with an error log — a playbook that cannot be fully validated
-never governs anything. File-loaded playbooks default to ``status: shadow``
+the whole file with an error log — a triage policy that cannot be fully validated
+never governs anything. File-loaded triage policies default to ``status: shadow``
 (decisions logged, nothing enforced) until their author explicitly sets
-``status: active`` — the #44 activation gate. Tenant scoping: a playbook with a
+``status: active`` — the #44 activation gate. Tenant scoping: a triage policy with a
 concrete ``tenant`` applies only when the process's ``SOCTALK_TENANT_ID`` (or
 ``SOCTALK_TENANT_SLUG``) matches; ``tenant: "*"`` applies everywhere. Every
 load/skip decision is logged as the activation audit trail.
@@ -39,7 +39,7 @@ logger = structlog.get_logger()
 # observable event is routine administration under a covering record and an incident
 # without one. Matches natively on sudo/su rule groups, and on any investigation that
 # carries an account-track authorization context (the M1 claim/fixture seam).
-PRIVILEGED_EXEC_PLAYBOOK = TriagePolicy(
+PRIVILEGED_EXEC_TRIAGE_POLICY = TriagePolicy(
     id="dual-use-privileged-exec",
     version=2,
     priority=10,
@@ -69,7 +69,7 @@ PRIVILEGED_EXEC_PLAYBOOK = TriagePolicy(
 # in soctalk.triage_policy.operational (MITRE mapping, IOCs, critical severity,
 # malicious signal) sends it to full triage instead. This is what makes verdicts
 # on this class consistent: a pure function cannot flip between 30% and 50%.
-AGENT_HEALTH_PLAYBOOK = TriagePolicy(
+AGENT_HEALTH_TRIAGE_POLICY = TriagePolicy(
     id="agent-health-operational",
     version=1,
     priority=50,
@@ -83,26 +83,26 @@ AGENT_HEALTH_PLAYBOOK = TriagePolicy(
 )
 
 BUILTIN_TRIAGE_POLICIES: tuple[TriagePolicy, ...] = (
-    PRIVILEGED_EXEC_PLAYBOOK,
-    AGENT_HEALTH_PLAYBOOK,
+    PRIVILEGED_EXEC_TRIAGE_POLICY,
+    AGENT_HEALTH_TRIAGE_POLICY,
 )
 
 
-# File-loaded playbooks may never outrank the built-ins on a double match: a
-# high-priority authored playbook governing (say) sudo alerts would silently strip
+# File-loaded triage policies may never outrank the built-ins on a double match: a
+# high-priority authored triage policy governing (say) sudo alerts would silently strip
 # the built-in dual-use protections (required evidence step, no-CLOSE legal set).
 # Files below this floor are REJECTED at load — an explicit authoring fix, not a
 # silent clamp. Built-ins use 10/50.
 FILE_PRIORITY_FLOOR = 60
 
-# A playbook file larger than this is rejected unread past the stat — the loader
+# A triage policy file larger than this is rejected unread past the stat — the loader
 # runs at worker startup and a runaway file (or symlink to one) must not OOM it.
 _MAX_FILE_BYTES = 64 * 1024
 
 
 def _process_tenant_identifiers() -> frozenset[str]:
     """Every identity this process runs as — the runs-worker carries BOTH the
-    tenant UUID and the slug, and a playbook's ``tenant:`` may name either."""
+    tenant UUID and the slug, and a triage policy's ``tenant:`` may name either."""
     return frozenset(
         v
         for v in (os.getenv("SOCTALK_TENANT_ID"), os.getenv("SOCTALK_TENANT_SLUG"))
@@ -111,41 +111,41 @@ def _process_tenant_identifiers() -> frozenset[str]:
 
 
 def parse_triage_policy_text(text: str) -> TriagePolicy:
-    """Parse + fully validate one YAML playbook document. Raises on ANY problem —
+    """Parse + fully validate one YAML triage policy document. Raises on ANY problem —
     unknown fields, bad enums, invalid guardrail conditions (fail closed). Text
     is the unit of validation so callers that also SHIP the content (render.py)
     validate exactly the bytes they ship — no read-twice TOCTOU window.
-    File-loaded playbooks default to shadow unless the document says otherwise."""
+    File-loaded triage policies default to shadow unless the document says otherwise."""
     import yaml
 
     if len(text.encode()) > _MAX_FILE_BYTES:
-        raise ValueError(f"playbook exceeds {_MAX_FILE_BYTES} bytes")
+        raise ValueError(f"triage policy exceeds {_MAX_FILE_BYTES} bytes")
     raw = yaml.safe_load(text)
     if not isinstance(raw, dict):
-        raise ValueError("playbook file must be a mapping at its root")
+        raise ValueError("triage policy file must be a mapping at its root")
     raw.setdefault("status", "shadow")
     pb = TriagePolicy.model_validate(raw)
     if pb.priority < FILE_PRIORITY_FLOOR:
         raise ValueError(
-            f"file playbooks must have priority >= {FILE_PRIORITY_FLOOR} "
+            f"file triage policies must have priority >= {FILE_PRIORITY_FLOOR} "
             f"(got {pb.priority}) — built-in protections may not be outranked"
         )
     if pb.deterministic_disposition is not None:
         # Codex #44 High: minting a new auto-close CLASS is a code-review
         # decision (a vetted built-in), never file data — the class-attestation
-        # veto trusts the playbook's own rule_groups, so an authored file could
+        # veto trusts the triage policy's own rule_groups, so an authored file could
         # otherwise declare any group operational and deterministically close it.
         raise ValueError(
             "deterministic_disposition is a built-in-only capability; file "
-            "playbooks compose guardrails/steps/legal_actions only"
+            "triage policies compose guardrails/steps/legal_actions only"
         )
     return pb
 
 
 def load_triage_policy_file(path: Path) -> TriagePolicy:
-    """Read + validate one playbook file (see ``parse_triage_policy_text``)."""
+    """Read + validate one triage policy file (see ``parse_triage_policy_text``)."""
     if path.stat().st_size > _MAX_FILE_BYTES:
-        raise ValueError(f"playbook file exceeds {_MAX_FILE_BYTES} bytes")
+        raise ValueError(f"triage policy file exceeds {_MAX_FILE_BYTES} bytes")
     return parse_triage_policy_text(path.read_text())
 
 
@@ -178,7 +178,7 @@ def _load_file_triage_policies() -> list[TriagePolicy]:
         if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
             logger.error(
                 "triage_policy_file_rejected", file=str(path), triage_policy=pb.id,
-                error="id collides with a built-in playbook",
+                error="id collides with a built-in triage policy",
             )
             continue
         logger.info(
@@ -192,8 +192,8 @@ def _load_file_triage_policies() -> list[TriagePolicy]:
 
 @lru_cache(maxsize=1)
 def _registry() -> tuple[TriagePolicy, ...]:
-    """Built-ins + validated file playbooks, priority-sorted (stable). Cached for
-    process lifetime — a playbook edit rolls out with the worker, which is the
+    """Built-ins + validated file triage policies, priority-sorted (stable). Cached for
+    process lifetime — a triage policy edit rolls out with the worker, which is the
     #44 activation gate working as intended."""
     merged = list(BUILTIN_TRIAGE_POLICIES) + _load_file_triage_policies()
     merged.sort(key=lambda p: p.priority)
@@ -206,8 +206,8 @@ def reset_registry_cache() -> None:
 
 
 def all_triage_policies() -> tuple[TriagePolicy, ...]:
-    """Every playbook the process governs by — built-ins plus validated file
-    playbooks, priority-sorted. Read-only view for governance/observability
+    """Every triage policy the process governs by — built-ins plus validated file
+    triage policies, priority-sorted. Read-only view for governance/observability
     surfaces; reflects THIS process's SOCTALK_PLAYBOOK_DIR + tenant scoping."""
     return _registry()
 
@@ -254,10 +254,10 @@ def _matches(pb: TriagePolicy, groups: set[str], rule_ids: set[str], track: str 
 
 
 def match_triage_policy(investigation: dict[str, Any]) -> TriagePolicy | None:
-    """Highest-priority matching ACTIVE playbook for this investigation, or None.
+    """Highest-priority matching ACTIVE triage policy for this investigation, or None.
 
     Matching reads only the projected alert dicts (``rule_groups``/``rule_id``) and
-    the authorization context's activity track — it selects WHICH playbook governs
+    the authorization context's activity track — it selects WHICH triage policy governs
     the run, never a security judgment (that stays in the engine + LLM). A matched
     deterministic disposition still has to clear its own per-alert class attestation
     and security-indicator vetoes before it applies.
@@ -272,7 +272,7 @@ def match_triage_policy(investigation: dict[str, Any]) -> TriagePolicy | None:
 
 
 def match_shadow_triage_policies(investigation: dict[str, Any]) -> list[TriagePolicy]:
-    """Every matching SHADOW playbook — evaluated for audit only, never enforced."""
+    """Every matching SHADOW triage policy — evaluated for audit only, never enforced."""
     groups = _alert_rule_groups(investigation)
     rule_ids = _alert_rule_ids(investigation)
     track = _authorization_track(investigation)

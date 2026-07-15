@@ -915,7 +915,7 @@ async def revoke_engagement_route(
 
 
 # ---------------------------------------------------------------------------
-# Playbooks (read-only governance view) — #43/#44
+# Triage policies (read-only governance view) — #43/#44
 # ---------------------------------------------------------------------------
 
 
@@ -960,10 +960,10 @@ class TriagePolicyDTO(BaseModel):
     deprecated=True,
 )
 async def list_triage_policies_route(request: Request) -> list[TriagePolicyDTO]:
-    """The compiled-in (built-in) playbooks that govern triage. Deliberately
-    scoped to built-ins: file playbooks (``SOCTALK_PLAYBOOK_DIR``) load per-PROCESS
+    """The compiled-in (built-in) triage policies that govern triage. Deliberately
+    scoped to built-ins: file triage policies (``SOCTALK_PLAYBOOK_DIR``) load per-PROCESS
     in the runs-worker, so the API can't truthfully report which govern — listing
-    the API process's own files would show playbooks that no worker enforces (and
+    the API process's own files would show triage policies that no worker enforces (and
     hide tenant-scoped ones that do). Read-only; built-ins are vetted code."""
     return [
         TriagePolicyDTO(
@@ -992,7 +992,7 @@ async def list_triage_policies_route(request: Request) -> list[TriagePolicyDTO]:
     ]
 
 
-# --- authored playbooks (DB-backed shadow/draft + export) ---
+# --- authored triage policies (DB-backed shadow/draft + export) ---
 
 
 class AuthoredTriagePolicyRequest(BaseModel):
@@ -1062,7 +1062,7 @@ async def create_authored_triage_policy_route(
     async with tenant_context(db, tenant_id):
         pid = str(payload.definition.get("id") or "")
         if pid and await get_authored(db, tenant_id=tenant_id, triage_policy_id=pid) is not None:
-            raise HTTPException(409, f"playbook '{pid}' already exists — use PUT to edit")
+            raise HTTPException(409, f"triage policy '{pid}' already exists — use PUT to edit")
         try:
             result = await upsert_authored(
                 db, tenant_id=tenant_id, definition=payload.definition,
@@ -1073,7 +1073,7 @@ async def create_authored_triage_policy_route(
         except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         await log_audit(
-            db, action="ir.playbook.authored_created",
+            db, action="ir.triage_policy.authored_created",
             actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="triage_policy", resource_id=result["triage_policy_id"],
         )
@@ -1097,17 +1097,17 @@ async def update_authored_triage_policy_route(
     db = _db(request)
     identity = current_identity(request)
     if str(payload.definition.get("id") or "") != triage_policy_id:
-        raise HTTPException(400, "definition.id must match the playbook id in the path")
+        raise HTTPException(400, "definition.id must match the triage policy id in the path")
     async with tenant_context(db, tenant_id):
         prior = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
         if prior is None:
-            raise HTTPException(404, "playbook not found")
+            raise HTTPException(404, "triage policy not found")
         try:
             result = await upsert_authored(
                 db, tenant_id=tenant_id, definition=payload.definition,
                 status=payload.status, created_by=identity.user_id,
             )
-            # Editing an ACTIVE playbook must not silently drop it to shadow (the old
+            # Editing an ACTIVE triage policy must not silently drop it to shadow (the old
             # ConfigMap would keep governing until an unrelated reconcile, then vanish).
             # Keep it governing on the new definition + roll it out.
             if prior["status"] == "active":
@@ -1120,7 +1120,7 @@ async def update_authored_triage_policy_route(
         except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         await log_audit(
-            db, action="ir.playbook.authored_updated",
+            db, action="ir.triage_policy.authored_updated",
             actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
             notes=f"revision {result['revision']}",
@@ -1150,13 +1150,13 @@ async def retire_authored_triage_policy_route(
             db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, retired_by=identity.user_id,
         )
         if not ok:
-            raise HTTPException(404, "playbook not found or already retired")
+            raise HTTPException(404, "triage policy not found or already retired")
         await log_audit(
-            db, action="ir.playbook.authored_retired",
+            db, action="ir.triage_policy.authored_retired",
             actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
         )
-        # Retiring a governing playbook must stop it governing.
+        # Retiring a governing triage policy must stop it governing.
         if prior is not None and prior["status"] == "active":
             await _enqueue_triage_policy_reconcile(db, tenant_id)
     return {"ok": "retired"}
@@ -1204,7 +1204,7 @@ async def _set_authored_and_reconcile(
         except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         if result is None:
-            raise HTTPException(404, "playbook not found or retired")
+            raise HTTPException(404, "triage policy not found or retired")
         await log_audit(
             db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
@@ -1227,10 +1227,10 @@ async def _set_authored_and_reconcile(
 async def activate_authored_triage_policy_route(
     tenant_id: UUID, triage_policy_id: str, request: Request
 ) -> AuthoredTriagePolicyDTO:
-    """Activate an authored playbook so it governs triage. Materialized into the tenant's
-    playbook ConfigMap on the queued reconcile (rollout is the activation gate)."""
+    """Activate an authored triage policy so it governs triage. Materialized into the tenant's
+    triage policy ConfigMap on the queued reconcile (rollout is the activation gate)."""
     return await _set_authored_and_reconcile(
-        tenant_id, triage_policy_id, "active", request, "ir.playbook.authored_activated"
+        tenant_id, triage_policy_id, "active", request, "ir.triage_policy.authored_activated"
     )
 
 
@@ -1250,7 +1250,7 @@ async def deactivate_authored_triage_policy_route(
 ) -> AuthoredTriagePolicyDTO:
     """Deactivate (back to shadow) — the reconcile drops it from the ConfigMap."""
     return await _set_authored_and_reconcile(
-        tenant_id, triage_policy_id, "shadow", request, "ir.playbook.authored_deactivated"
+        tenant_id, triage_policy_id, "shadow", request, "ir.triage_policy.authored_deactivated"
     )
 
 
@@ -1271,7 +1271,7 @@ async def export_authored_triage_policy_route(
     async with tenant_context(db, tenant_id):
         row = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if row is None:
-        raise HTTPException(404, "playbook not found")
+        raise HTTPException(404, "triage policy not found")
     return {
         "triage_policy_id": triage_policy_id,
         "playbook_id": triage_policy_id,  # deprecated mirror, one release
