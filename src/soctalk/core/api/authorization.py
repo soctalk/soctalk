@@ -16,7 +16,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,10 @@ from soctalk.core.ir.authorization_store import (
     revoke_fact,
     store_fact,
 )
+from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
+from soctalk.core.tenancy.decorators import require_role
+from soctalk.core.tenancy.models import Role
 from soctalk.models.authorization import (
     AUTHORIZATION_FACT_ADAPTER,
     AuthorizationSourceType,
@@ -132,4 +135,70 @@ async def revoke(fact_id: str, payload: RevokeRequest, request: Request) -> dict
     if not ok:
         raise HTTPException(404, "no live fact with that id")
     logger.info("authorization_fact_revoked", tenant_id=str(authed_tid), fact_id=fact_id)
+    return {"revoked": fact_id}
+
+
+# ---------------------------------------------------------------------------
+# MSSP governance API (human-authed, per-tenant) — powers the frontend view.
+# ---------------------------------------------------------------------------
+
+mssp_router = APIRouter(prefix="/api/mssp/tenants", tags=["authz-facts-mssp"])
+
+_ANALYST_ROLES = (Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST)
+
+
+class FactCreateRequest(BaseModel):
+    fact: dict
+
+
+@mssp_router.get(
+    "/{tenant_id}/authorization/facts",
+    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+)
+async def mssp_list_facts(tenant_id: UUID, request: Request) -> dict:
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        facts = await list_current_facts(db, tenant_id=tenant_id)
+    return {"facts": [AUTHORIZATION_FACT_ADAPTER.dump_python(f, mode="json") for f in facts]}
+
+
+@mssp_router.post(
+    "/{tenant_id}/authorization/facts",
+    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+)
+async def mssp_create_fact(tenant_id: UUID, payload: FactCreateRequest, request: Request) -> dict:
+    """Create an analyst-asserted fact (HIL / manual). Trust is stamped analyst_asserted."""
+    identity = current_identity(request)
+    try:
+        fact = AUTHORIZATION_FACT_ADAPTER.validate_python(payload.fact)
+    except ValidationError as exc:
+        raise HTTPException(422, exc.errors()[0].get("msg", "invalid fact")) from exc
+    fact.source_type = AuthorizationSourceType.ANALYST_ASSERTED
+    fact.trust = TRUST_TIER[fact.source_type]
+    fact.tenant = str(tenant_id)
+    fact.created_by = str(identity.user_id)
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        await store_fact(db, tenant_id=tenant_id, fact=fact)
+    logger.info("authorization_fact_created", tenant_id=str(tenant_id), fact_id=fact.id)
+    return {"stored": fact.id}
+
+
+@mssp_router.post(
+    "/{tenant_id}/authorization/facts/{fact_id}/revoke",
+    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+)
+async def mssp_revoke_fact(
+    tenant_id: UUID, fact_id: str, payload: RevokeRequest, request: Request
+) -> dict:
+    identity = current_identity(request)
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        ok = await revoke_fact(
+            db, tenant_id=tenant_id, fact_id=fact_id,
+            revoked_by=identity.user_id, reason=payload.reason,
+        )
+    if not ok:
+        raise HTTPException(404, "no live fact with that id")
+    logger.info("authorization_fact_revoked", tenant_id=str(tenant_id), fact_id=fact_id)
     return {"revoked": fact_id}
