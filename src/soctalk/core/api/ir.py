@@ -1062,7 +1062,7 @@ async def create_authored_triage_policy_route(
     async with tenant_context(db, tenant_id):
         pid = str(payload.definition.get("id") or "")
         if pid and await get_authored(db, tenant_id=tenant_id, triage_policy_id=pid) is not None:
-            raise HTTPException(409, f"playbook '{pid}' already exists — use PUT to edit")
+            raise HTTPException(409, f"triage policy '{pid}' already exists — use PUT to edit")
         try:
             result = await upsert_authored(
                 db, tenant_id=tenant_id, definition=payload.definition,
@@ -1101,7 +1101,7 @@ async def update_authored_triage_policy_route(
     async with tenant_context(db, tenant_id):
         prior = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
         if prior is None:
-            raise HTTPException(404, "playbook not found")
+            raise HTTPException(404, "triage policy not found")
         try:
             result = await upsert_authored(
                 db, tenant_id=tenant_id, definition=payload.definition,
@@ -1150,7 +1150,7 @@ async def retire_authored_triage_policy_route(
             db, tenant_id=tenant_id, triage_policy_id=triage_policy_id, retired_by=identity.user_id,
         )
         if not ok:
-            raise HTTPException(404, "playbook not found or already retired")
+            raise HTTPException(404, "triage policy not found or already retired")
         await log_audit(
             db, action="ir.playbook.authored_retired",
             actor_principal="analyst", actor_id=str(identity.user_id),
@@ -1204,7 +1204,7 @@ async def _set_authored_and_reconcile(
         except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         if result is None:
-            raise HTTPException(404, "playbook not found or retired")
+            raise HTTPException(404, "triage policy not found or retired")
         await log_audit(
             db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="triage_policy", resource_id=triage_policy_id,
@@ -1271,7 +1271,7 @@ async def export_authored_triage_policy_route(
     async with tenant_context(db, tenant_id):
         row = await get_authored(db, tenant_id=tenant_id, triage_policy_id=triage_policy_id)
     if row is None:
-        raise HTTPException(404, "playbook not found")
+        raise HTTPException(404, "triage policy not found")
     return {
         "triage_policy_id": triage_policy_id,
         "playbook_id": triage_policy_id,  # deprecated mirror, one release

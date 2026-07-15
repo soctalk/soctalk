@@ -112,16 +112,18 @@ test.describe('Triage Policies page', () => {
 		await expect(page.getByText('Close requires human sign-off for data classes:')).toBeVisible();
 	});
 
-	test('lists authored playbooks for the pinned tenant', async ({ page }) => {
+	test('lists authored triage policies for the pinned tenant', async ({ page }) => {
 		await page.goto('/triage-policies');
 		await expect(page.getByRole('heading', { name: 'Authored triage policies' })).toBeVisible();
 		await expect(page.getByText('existing-pb')).toBeVisible();
-		await expect(page.getByRole('button', { name: '+ New playbook' })).toBeVisible();
+		// the visual editor entry point is a link; the raw-JSON modal is a button
+		await expect(page.getByRole('link', { name: '+ New triage policy' })).toBeVisible();
 	});
 
-	test('creates an authored playbook via the editor', async ({ page }) => {
+	test('creates an authored triage policy via the raw JSON modal', async ({ page }) => {
 		await page.goto('/triage-policies');
-		await page.getByRole('button', { name: '+ New playbook' }).click();
+		// header JSON button opens the raw-JSON create modal (visual editor is a separate page)
+		await page.getByRole('button', { name: 'JSON', exact: true }).first().click();
 		const editor = page.locator('textarea');
 		await expect(editor).toBeVisible();
 		await editor.fill(
