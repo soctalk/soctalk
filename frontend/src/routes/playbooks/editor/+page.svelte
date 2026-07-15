@@ -79,6 +79,7 @@
 	let showJson = false;
 	let jsonText = '';
 	let jsonError: string | null = null;
+	let flowCompact = false;
 
 	let saving = false;
 	let saveError: string | null = null;
@@ -638,14 +639,27 @@
 		</div>
 
 		<!-- --------------------------------------------- preview column -->
-		<div class="xl:col-span-2 space-y-4 xl:sticky xl:top-4">
+		<div
+			class="xl:col-span-2 space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto"
+		>
 			<section class="card p-2">
-				<h3 class="h4 px-2 pt-1">Decision flow</h3>
+				<div class="flex items-center justify-between px-2 pt-1">
+					<h3 class="h4">Decision flow</h3>
+					<label class="flex items-center gap-2 text-xs opacity-70">
+						<input class="checkbox checkbox-sm" type="checkbox" bind:checked={flowCompact} />
+						compact
+					</label>
+				</div>
 				<p class="text-xs opacity-60 px-2 pb-1">
 					Projection of this document onto the triage pipeline — click a guardrail to jump to it.
 				</p>
-				<div class="h-[26rem]">
-					<PlaybookFlowPreview {definition} {firedNodeId} on:focus={focusGuardrail} />
+				<div class="h-[32rem]">
+					<PlaybookFlowPreview
+						{definition}
+						{firedNodeId}
+						compact={flowCompact}
+						on:focus={focusGuardrail}
+					/>
 				</div>
 			</section>
 
