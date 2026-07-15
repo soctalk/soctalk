@@ -19,6 +19,7 @@ Profiles (see ``docs/multi-tenant/wazuh-profiles.md``):
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Literal
 
 from soctalk.core.tenancy.models import BrandingConfig, IntegrationConfig, Tenant
@@ -114,6 +115,75 @@ def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
         if host and host not in hosts:
             hosts.append(host)
     return hosts
+
+
+# Filenames must satisfy the chart schema's propertyNames pattern (and the k8s
+# ConfigMap key ceiling) or the whole helm install would fail on one odd file.
+_PLAYBOOK_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
+
+# Total payload budget across all files for one tenant — a ConfigMap tops out
+# around 1MiB including metadata, so the sum must stay well under it.
+_PLAYBOOKS_TOTAL_BUDGET = 800 * 1024
+
+
+def render_playbook_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
+    """Playbook files to inject into a tenant's ``runsWorker.playbooks`` (#44).
+
+    Source: ``SOCTALK_TENANT_PLAYBOOKS_DIR`` on the controller/API process — an
+    operator-mounted directory of declarative playbook YAMLs (install-level
+    config, e.g. a ConfigMap on the api pod). Each file is read ONCE and that
+    exact text is both validated (the worker registry's own fail-closed parser:
+    schema, conditions, priority floor, no deterministic dispositions) and
+    shipped — no second read, no validate/ship drift. Skipped with an error log,
+    never failing the render: invalid content, filenames the chart schema would
+    reject, files past the per-tenant total budget (a ConfigMap tops out ~1MiB).
+    A concrete ``tenant:`` may name the slug or the UUID; both are matched here
+    and re-checked by the worker at load. Returns {} when the env is unset.
+    """
+    import structlog
+
+    from soctalk.playbook.registry import parse_playbook_text
+
+    log = structlog.get_logger()
+    directory = os.getenv("SOCTALK_TENANT_PLAYBOOKS_DIR", "")
+    if not directory:
+        return {}
+    from pathlib import Path
+
+    root = Path(directory)
+    if not root.is_dir():
+        log.warning("tenant_playbooks_dir_missing", dir=directory)
+        return {}
+    identifiers = {v for v in (tenant_slug, tenant_id) if v}
+    out: dict[str, str] = {}
+    total = 0
+    for path in sorted(root.glob("*.y*ml")):
+        if not _PLAYBOOK_FILENAME_RE.fullmatch(path.name):
+            log.error(
+                "tenant_playbook_rejected", file=str(path),
+                error="filename not accepted by the chart schema",
+            )
+            continue
+        try:
+            text = path.read_text()
+            pb = parse_playbook_text(text)
+        except Exception as exc:  # noqa: BLE001 — invalid files never reach the chart
+            log.error(
+                "tenant_playbook_rejected", file=str(path), error=str(exc)[:300]
+            )
+            continue
+        if pb.tenant != "*" and pb.tenant not in identifiers:
+            continue
+        size = len(text.encode())
+        if total + size > _PLAYBOOKS_TOTAL_BUDGET:
+            log.error(
+                "tenant_playbook_rejected", file=str(path),
+                error=f"per-tenant playbook budget ({_PLAYBOOKS_TOTAL_BUDGET}B) exceeded",
+            )
+            continue
+        total += size
+        out[path.name] = text
+    return out
 
 
 def _canonical_llm_provider(provider: str) -> str:
@@ -462,6 +532,9 @@ def render_tenant_values(
             "reasoningModel": (
                 integration.llm_reasoning_model or integration.llm_model
             ),
+            # Declarative playbooks (#44): validated install-level files scoped
+            # to this tenant; {} when SOCTALK_TENANT_PLAYBOOKS_DIR is unset.
+            "playbooks": render_playbook_values(tenant.slug, str(tenant.id)),
         },
         "namespaceLabels": {
             "tenant": "true",

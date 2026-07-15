@@ -100,19 +100,27 @@ FILE_PRIORITY_FLOOR = 60
 _MAX_FILE_BYTES = 64 * 1024
 
 
-def _process_tenant() -> str | None:
-    return os.getenv("SOCTALK_TENANT_ID") or os.getenv("SOCTALK_TENANT_SLUG") or None
+def _process_tenant_identifiers() -> frozenset[str]:
+    """Every identity this process runs as — the runs-worker carries BOTH the
+    tenant UUID and the slug, and a playbook's ``tenant:`` may name either."""
+    return frozenset(
+        v
+        for v in (os.getenv("SOCTALK_TENANT_ID"), os.getenv("SOCTALK_TENANT_SLUG"))
+        if v
+    )
 
 
-def load_playbook_file(path: Path) -> Playbook:
-    """Parse + fully validate one YAML playbook file. Raises on ANY problem —
-    unknown fields, bad enums, invalid guardrail conditions (fail closed).
-    File-loaded playbooks default to shadow unless the file says otherwise."""
+def parse_playbook_text(text: str) -> Playbook:
+    """Parse + fully validate one YAML playbook document. Raises on ANY problem —
+    unknown fields, bad enums, invalid guardrail conditions (fail closed). Text
+    is the unit of validation so callers that also SHIP the content (render.py)
+    validate exactly the bytes they ship — no read-twice TOCTOU window.
+    File-loaded playbooks default to shadow unless the document says otherwise."""
     import yaml
 
-    if path.stat().st_size > _MAX_FILE_BYTES:
-        raise ValueError(f"playbook file exceeds {_MAX_FILE_BYTES} bytes")
-    raw = yaml.safe_load(path.read_text())
+    if len(text.encode()) > _MAX_FILE_BYTES:
+        raise ValueError(f"playbook exceeds {_MAX_FILE_BYTES} bytes")
+    raw = yaml.safe_load(text)
     if not isinstance(raw, dict):
         raise ValueError("playbook file must be a mapping at its root")
     raw.setdefault("status", "shadow")
@@ -134,6 +142,13 @@ def load_playbook_file(path: Path) -> Playbook:
     return pb
 
 
+def load_playbook_file(path: Path) -> Playbook:
+    """Read + validate one playbook file (see ``parse_playbook_text``)."""
+    if path.stat().st_size > _MAX_FILE_BYTES:
+        raise ValueError(f"playbook file exceeds {_MAX_FILE_BYTES} bytes")
+    return parse_playbook_text(path.read_text())
+
+
 def _load_file_playbooks() -> list[Playbook]:
     directory = os.getenv("SOCTALK_PLAYBOOK_DIR", "")
     if not directory:
@@ -142,7 +157,7 @@ def _load_file_playbooks() -> list[Playbook]:
     if not root.is_dir():
         logger.warning("playbook_dir_missing", dir=directory)
         return []
-    tenant = _process_tenant()
+    tenants = _process_tenant_identifiers()
     loaded: list[Playbook] = []
     for path in sorted(root.glob("*.y*ml")):
         try:
@@ -152,7 +167,7 @@ def _load_file_playbooks() -> list[Playbook]:
                 "playbook_file_rejected", file=str(path), error=str(exc)[:300]
             )
             continue
-        if pb.tenant != "*" and pb.tenant != tenant:
+        if pb.tenant != "*" and pb.tenant not in tenants:
             logger.info(
                 "playbook_file_skipped_foreign_tenant",
                 file=str(path), playbook=pb.id, tenant=pb.tenant,

@@ -355,7 +355,14 @@
         },
         "token":          { "type": "string", "description": "Optional plaintext JWT used by the cross-cluster L2 path; chart materializes tokenSecretRef from this value when non-empty." },
         "fastModel":      { "type": "string" },
-        "reasoningModel": { "type": "string" }
+        "reasoningModel": { "type": "string" },
+        "playbooks": {
+          "type": "object",
+          "description": "Declarative playbook files (issue #44): filename -> YAML content string. Rendered as ConfigMap soctalk-playbooks, mounted read-only into the runs-worker, with SOCTALK_PLAYBOOK_DIR pointing at the mount. Content is validated fail-closed by the worker's registry loader at startup (and again by render.py on the controller path); files default to status: shadow until explicitly activated. Empty map (default) renders nothing.",
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 65536 },
+          "propertyNames": { "pattern": "^[A-Za-z0-9._-]+\\.ya?ml$", "maxLength": 253 },
+          "maxProperties": 32
+        }
       }
     }
   },

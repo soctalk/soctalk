@@ -18,12 +18,19 @@ spec:
       labels:
         {{- include "soctalk-tenant.labels" . | nindent 8 }}
         app.kubernetes.io/name: soctalk-runs-worker
-      {{- if .Values.llm.secretChecksum }}
+      {{- if or .Values.llm.secretChecksum .Values.runsWorker.playbooks }}
       annotations:
+        {{- if .Values.llm.secretChecksum }}
         # Forces a rollout when the LLM key material (primary or per-tier own
         # keys) rotates — env-from-secret does not hot-reload, and a key-only
         # change otherwise leaves chart values byte-identical (issue #12).
         checksum/llm-secret: {{ .Values.llm.secretChecksum | quote }}
+        {{- end }}
+        {{- if .Values.runsWorker.playbooks }}
+        # Forces a rollout when playbook content changes — the registry loads
+        # once per process, so the rollout IS the activation gate (issue #44).
+        checksum/playbooks: {{ .Values.runsWorker.playbooks | toJson | sha256sum | quote }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: tenant-{{ .Values.tenant.slug }}-sa
@@ -59,6 +66,10 @@ spec:
               {{- end }}
             - name: WORKER_TOKEN_PATH
               value: /run/secrets/runs-worker/token
+            {{- if .Values.runsWorker.playbooks }}
+            - name: SOCTALK_PLAYBOOK_DIR
+              value: /etc/soctalk/playbooks
+            {{- end }}
             {{- /*
                 ``llm.provider`` accepts ``openai-compatible`` (the
                 install-side enum), but the runs-worker's
@@ -225,6 +236,11 @@ spec:
             - name: worker-token
               mountPath: /run/secrets/runs-worker
               readOnly: true
+            {{- if .Values.runsWorker.playbooks }}
+            - name: playbooks
+              mountPath: /etc/soctalk/playbooks
+              readOnly: true
+            {{- end }}
       volumes:
         - name: worker-token
           secret:
@@ -233,4 +249,9 @@ spec:
               - key: {{ .Values.runsWorker.tokenSecretRef.key | quote }}
                 path: token
             defaultMode: 0440
+        {{- if .Values.runsWorker.playbooks }}
+        - name: playbooks
+          configMap:
+            name: soctalk-playbooks
+        {{- end }}
 {{- end }}
