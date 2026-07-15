@@ -60,9 +60,83 @@ from soctalk.playbook.floor import (
     FLOOR_AUDIT_ACTION,
     VETO_ACTIVE_INCIDENT,
     VETO_IOC,
+    VETO_KILL_SWITCH,
+    VETO_VOLUME_CAP,
+    auto_close_killed,
 )
 
 logger = structlog.get_logger()
+
+
+async def count_recent_auto_closes(
+    db: AsyncSession, *, tenant_id: UUID, window_hours: int
+) -> int:
+    """Automatic closes for this tenant inside the rolling window (issue #46).
+
+    Counts ``auto_closed_fp`` investigations by ``closed_at`` — the shared terminal
+    state of every automatic close plane (rules band, memoized close, worker
+    ``close_fp`` incl. the playbook operational disposition) and of analyst rejects;
+    counting the latter slightly overstates the automatic volume, which errs the cap
+    in the safe direction. Served by the v1_0031 partial index.
+    """
+    return int(
+        (
+            await db.execute(
+                text(
+                    "SELECT count(*) FROM investigations "
+                    "WHERE tenant_id = :t AND status = 'auto_closed_fp' "
+                    "  AND closed_at > now() - make_interval(hours => :h)"
+                ),
+                {"t": str(tenant_id), "h": window_hours},
+            )
+        ).scalar_one()
+    )
+
+
+def _int_policy(policy: dict[str, Any], key: str, default: int) -> int:
+    """A policy value as an int, falling back to the install default on any
+    malformed override. Booleans are rejected explicitly: tenant policies are
+    unvalidated JSONB, and a stray JSON ``true`` would otherwise become cap=1
+    and effectively shut off auto-close after a single close."""
+    value = policy.get(key, default)
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+async def volume_cap_exceeded(
+    db: AsyncSession, *, tenant_id: UUID, policy: dict[str, Any]
+) -> bool:
+    """True when this tenant's rolling auto-close count is at/above its cap.
+    A cap <= 0 disables the check (explicit operator intent only — malformed
+    values fall back to the default instead).
+
+    The check takes a transaction-scoped per-tenant advisory lock BEFORE
+    counting (same discipline as upsert_alert's coalescing lock): the lock is
+    held until this transaction's close commits, so concurrent closes serialize
+    and each one counts its predecessors. Without it the cap is advisory under
+    an alert storm — N racing transactions all read cap-1 and all close, which
+    is mass suppression, the exact failure the cap exists to stop.
+
+    Spending the cap is deliberately cheap: a storm of auto-closable noise
+    degrades to promotion/escalation (analyst load, bounded separately by run
+    budgets and the tenant daily spend cap), never to silent closes.
+    """
+    cap = _int_policy(policy, "auto_close_volume_cap", 500)
+    if cap <= 0:
+        return False
+    window = _int_policy(policy, "auto_close_volume_window_hours", 24)
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:t), hashtext('auto_close_volume'))"),
+        {"t": str(tenant_id)},
+    )
+    count = await count_recent_auto_closes(
+        db, tenant_id=tenant_id, window_hours=max(1, window)
+    )
+    return count >= cap
 
 
 async def _close_floor_veto(
@@ -71,12 +145,15 @@ async def _close_floor_veto(
     tenant_id: UUID,
     initial_iocs: list[dict[str, Any]],
     keys: list[tuple[str, str, str]],
+    policy: dict[str, Any],
 ) -> str | None:
-    """Non-overridable safety floor on the ingest auto-close plane (issue #43).
+    """Non-overridable safety floor on the ingest auto-close plane (issues #43/#46).
 
     An alert carrying IOCs, or sharing an attach-eligible entity with an ACTIVE
     investigation, must never be auto-closed — by memoization or by the rules
-    band — regardless of policy flags. Returns the veto reason, or None.
+    band — regardless of policy flags; nor may ANY alert auto-close while the
+    kill switch is on or the tenant's rolling close-volume cap is spent.
+    Returns the veto reason, or None.
 
     The active-incident lookup runs HERE, at the close site, even when the
     entity-correlation attach check already ran earlier in this ingest: a sibling
@@ -84,10 +161,14 @@ async def _close_floor_veto(
     see it (skipping "because correlation already checked" was a race). The
     residual check-then-close window is the same one the attach path itself has.
     """
+    if auto_close_killed(policy):
+        return VETO_KILL_SWITCH
     if initial_iocs:
         return VETO_IOC
     if await find_correlated_investigation(db, tenant_id=tenant_id, keys=keys) is not None:
         return VETO_ACTIVE_INCIDENT
+    if await volume_cap_exceeded(db, tenant_id=tenant_id, policy=policy):
+        return VETO_VOLUME_CAP
     return None
 
 
@@ -961,7 +1042,8 @@ async def triage_event(
                 #     also suppresses the cruder high-conf-FP fallback below, so authz still
                 #     protects the low-severity attacker-shares-template case.
                 veto = await _close_floor_veto(
-                    db, tenant_id=tenant_id, initial_iocs=initial_iocs, keys=keys,
+                    db, tenant_id=tenant_id, initial_iocs=initial_iocs,
+                    keys=keys, policy=policy,
                 )
                 if veto is not None:
                     await _audit_floor_veto(
@@ -1027,7 +1109,8 @@ async def triage_event(
         and confidence >= policy.get("auto_close_threshold", 0.90)
     ):
         veto = await _close_floor_veto(
-            db, tenant_id=tenant_id, initial_iocs=initial_iocs, keys=keys,
+            db, tenant_id=tenant_id, initial_iocs=initial_iocs,
+            keys=keys, policy=policy,
         )
         if veto is not None:
             await _audit_floor_veto(
