@@ -220,7 +220,11 @@ async def set_authored_status(
     if latest is None or latest["status"] == "retired":
         return None
     definition = dict(latest["definition"])
-    validate_authored(definition)  # fail-closed; unsafe stored rows can't be activated
+    # Gate ACTIVATION on a fresh fail-closed validation (a row valid at author time can go
+    # invalid after a code change, e.g. a new built-in id collision). Deactivation must NOT
+    # revalidate — turning a now-invalid playbook OFF must always succeed.
+    if status == "active":
+        validate_authored(definition)
     revision = latest["revision"] + 1
     try:
         await _insert_revision(
@@ -261,9 +265,14 @@ async def render_active_authored_values(
     for r in rows:
         if r["status"] != "active":
             continue
+        # Fail closed with the FULL authored validator (built-in id collision + authored
+        # rules) AND the worker's own file parser on the exact bytes shipped — so an active
+        # row the worker would reject/weaken fails the reconcile here instead of silently
+        # shipping and under-enforcing.
+        validate_authored(dict(r["definition"]))
         doc = {**dict(r["definition"]), "status": "active", "tenant": str(tenant_id)}
         yaml_text = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)
-        parse_playbook_text(yaml_text)  # fail-closed: raises on any problem
+        parse_playbook_text(yaml_text)
         out[f"authored-{r['playbook_id']}.yaml"] = yaml_text
     return out
 
