@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from soctalk.authorization.render import has_malicious_signal, parse_authorization_context
-from soctalk.playbook.guard import derive_authz_class
+from soctalk.triage_policy.guard import derive_authz_class
 
 VETO_IOC = "ioc_present"
 VETO_UNVERIFIED_IOC = "ioc_unverified"

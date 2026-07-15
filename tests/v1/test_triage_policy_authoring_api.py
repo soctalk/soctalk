@@ -20,16 +20,16 @@ os.environ.setdefault("SOCTALK_ADAPTER_SIGNING_KEY", "adapter-signing-key-32-byt
 from sqlalchemy import text  # noqa: E402
 
 from soctalk.core.api.ir import (  # noqa: E402
-    AuthoredPlaybookRequest,
-    activate_authored_playbook_route,
-    create_authored_playbook_route,
-    deactivate_authored_playbook_route,
-    export_authored_playbook_route,
-    list_authored_playbooks_route,
-    retire_authored_playbook_route,
-    update_authored_playbook_route,
+    AuthoredTriagePolicyRequest,
+    activate_authored_triage_policy_route,
+    create_authored_triage_policy_route,
+    deactivate_authored_triage_policy_route,
+    export_authored_triage_policy_route,
+    list_authored_triage_policies_route,
+    retire_authored_triage_policy_route,
+    update_authored_triage_policy_route,
 )
-from soctalk.playbook.authoring import render_active_authored_values  # noqa: E402
+from soctalk.triage_policy.authoring import render_active_authored_values  # noqa: E402
 
 SKIP_INTEGRATION = os.getenv("SKIP_INTEGRATION", "0") == "1"
 
@@ -59,14 +59,14 @@ def _req(session):
 def _valid(**over):
     d = {"id": "custom-pb", "priority": 70, "applies_to": {"rule_groups": ["custom_group"]}}
     d.update(over)
-    return AuthoredPlaybookRequest(definition=d, status="shadow")
+    return AuthoredTriagePolicyRequest(definition=d, status="shadow")
 
 
 async def test_create_list_edit_export_retire(mssp_session: AsyncSession, seed_two_tenants):
     t, _ = seed_two_tenants
     req = _req(mssp_session)
 
-    created = await create_authored_playbook_route(t.tenant_id, _valid(), req)
+    created = await create_authored_triage_policy_route(t.tenant_id, _valid(), req)
     await mssp_session.commit()
     assert created.playbook_id == "custom-pb"
     assert created.revision == 1
@@ -74,11 +74,11 @@ async def test_create_list_edit_export_retire(mssp_session: AsyncSession, seed_t
     assert created.definition["status"] == "shadow"  # forced — authored is never active
     assert created.definition["tenant"] == str(t.tenant_id)  # forced concrete tenant, never "*"
 
-    listed = await list_authored_playbooks_route(t.tenant_id, req)
+    listed = await list_authored_triage_policies_route(t.tenant_id, req)
     assert [p.playbook_id for p in listed] == ["custom-pb"]
 
     # edit → new revision
-    edited = await update_authored_playbook_route(
+    edited = await update_authored_triage_policy_route(
         t.tenant_id, "custom-pb",
         _valid(applies_to={"rule_groups": ["custom_group", "other"]}), req,
     )
@@ -87,24 +87,24 @@ async def test_create_list_edit_export_retire(mssp_session: AsyncSession, seed_t
     assert "other" in edited.definition["applies_to"]["rule_groups"]
 
     # export → parseable YAML
-    exported = await export_authored_playbook_route(t.tenant_id, "custom-pb", req)
+    exported = await export_authored_triage_policy_route(t.tenant_id, "custom-pb", req)
     parsed = yaml.safe_load(exported["yaml"])
     assert parsed["id"] == "custom-pb" and parsed["status"] == "shadow"
 
     # retire → gone from list
-    out = await retire_authored_playbook_route(t.tenant_id, "custom-pb", req)
+    out = await retire_authored_triage_policy_route(t.tenant_id, "custom-pb", req)
     await mssp_session.commit()
     assert out["ok"] == "retired"
-    assert await list_authored_playbooks_route(t.tenant_id, req) == []
+    assert await list_authored_triage_policies_route(t.tenant_id, req) == []
 
 
 async def test_duplicate_create_conflicts(mssp_session: AsyncSession, seed_two_tenants):
     t, _ = seed_two_tenants
     req = _req(mssp_session)
-    await create_authored_playbook_route(t.tenant_id, _valid(id="dup-pb"), req)
+    await create_authored_triage_policy_route(t.tenant_id, _valid(id="dup-pb"), req)
     await mssp_session.commit()
     with pytest.raises(HTTPException) as ei:
-        await create_authored_playbook_route(t.tenant_id, _valid(id="dup-pb"), req)
+        await create_authored_triage_policy_route(t.tenant_id, _valid(id="dup-pb"), req)
     assert ei.value.status_code == 409
 
 
@@ -128,7 +128,7 @@ async def test_invalid_definitions_rejected(mssp_session, seed_two_tenants, bad)
     t, _ = seed_two_tenants
     payload = _valid(**{"id": "bad-pb", **bad})
     with pytest.raises(HTTPException) as ei:
-        await create_authored_playbook_route(t.tenant_id, payload, _req(mssp_session))
+        await create_authored_triage_policy_route(t.tenant_id, payload, _req(mssp_session))
     assert ei.value.status_code == 400
 
 
@@ -145,13 +145,13 @@ async def test_activate_deactivate_governs_and_reconciles(
 ):
     t, _ = seed_two_tenants  # seeded tenants are ACTIVE → activation enqueues a reconcile
     req = _req(mssp_session)
-    await create_authored_playbook_route(t.tenant_id, _valid(id="gov-pb"), req)
+    await create_authored_triage_policy_route(t.tenant_id, _valid(id="gov-pb"), req)
     await mssp_session.commit()
 
     # not active yet → not delivered
     assert await render_active_authored_values(mssp_session, tenant_id=t.tenant_id) == {}
 
-    activated = await activate_authored_playbook_route(t.tenant_id, "gov-pb", req)
+    activated = await activate_authored_triage_policy_route(t.tenant_id, "gov-pb", req)
     await mssp_session.commit()
     assert activated.status == "active"
     assert await _reconcile_jobs(mssp_session, t.tenant_id) >= 1
@@ -163,7 +163,7 @@ async def test_activate_deactivate_governs_and_reconciles(
     assert doc["id"] == "gov-pb" and doc["status"] == "active"
     assert doc["tenant"] == str(t.tenant_id)
 
-    deactivated = await deactivate_authored_playbook_route(t.tenant_id, "gov-pb", req)
+    deactivated = await deactivate_authored_triage_policy_route(t.tenant_id, "gov-pb", req)
     await mssp_session.commit()
     assert deactivated.status == "shadow"
     assert await render_active_authored_values(mssp_session, tenant_id=t.tenant_id) == {}
@@ -176,11 +176,11 @@ async def test_edit_active_playbook_stays_active(
     re-roll — the Codex-flagged footgun."""
     t, _ = seed_two_tenants
     req = _req(mssp_session)
-    await create_authored_playbook_route(t.tenant_id, _valid(id="edit-pb"), req)
-    await activate_authored_playbook_route(t.tenant_id, "edit-pb", req)
+    await create_authored_triage_policy_route(t.tenant_id, _valid(id="edit-pb"), req)
+    await activate_authored_triage_policy_route(t.tenant_id, "edit-pb", req)
     await mssp_session.commit()
 
-    edited = await update_authored_playbook_route(
+    edited = await update_authored_triage_policy_route(
         t.tenant_id, "edit-pb",
         _valid(id="edit-pb", applies_to={"rule_groups": ["g", "extra"]}), req,
     )
@@ -195,7 +195,7 @@ async def test_edit_active_playbook_stays_active(
 async def test_activate_unknown_returns_404(mssp_session: AsyncSession, seed_two_tenants):
     t, _ = seed_two_tenants
     with pytest.raises(HTTPException) as ei:
-        await activate_authored_playbook_route(t.tenant_id, "ghost", _req(mssp_session))
+        await activate_authored_triage_policy_route(t.tenant_id, "ghost", _req(mssp_session))
     assert ei.value.status_code == 404
 
 
@@ -203,7 +203,7 @@ async def test_oversized_definition_rejected(mssp_session: AsyncSession, seed_tw
     t, _ = seed_two_tenants
     big = _valid(id="big-pb", applies_to={"rule_groups": ["x" * 70000]})
     with pytest.raises(HTTPException) as ei:
-        await create_authored_playbook_route(t.tenant_id, big, _req(mssp_session))
+        await create_authored_triage_policy_route(t.tenant_id, big, _req(mssp_session))
     assert ei.value.status_code == 400
 
 
@@ -211,18 +211,18 @@ async def test_edit_id_mismatch_and_unknown(mssp_session: AsyncSession, seed_two
     t, _ = seed_two_tenants
     req = _req(mssp_session)
     with pytest.raises(HTTPException) as ei:  # id in body != path
-        await update_authored_playbook_route(t.tenant_id, "path-id", _valid(id="body-id"), req)
+        await update_authored_triage_policy_route(t.tenant_id, "path-id", _valid(id="body-id"), req)
     assert ei.value.status_code == 400
     with pytest.raises(HTTPException) as ei2:  # editing a non-existent playbook
-        await update_authored_playbook_route(t.tenant_id, "ghost", _valid(id="ghost"), req)
+        await update_authored_triage_policy_route(t.tenant_id, "ghost", _valid(id="ghost"), req)
     assert ei2.value.status_code == 404
 
 
 async def test_tenant_isolation(mssp_session: AsyncSession, seed_two_tenants):
     ta, tb = seed_two_tenants
-    await create_authored_playbook_route(ta.tenant_id, _valid(id="a-only"), _req(mssp_session))
+    await create_authored_triage_policy_route(ta.tenant_id, _valid(id="a-only"), _req(mssp_session))
     await mssp_session.commit()
-    assert await list_authored_playbooks_route(tb.tenant_id, _req(mssp_session)) == []
+    assert await list_authored_triage_policies_route(tb.tenant_id, _req(mssp_session)) == []
 
 
 def test_authoring_role_gate():

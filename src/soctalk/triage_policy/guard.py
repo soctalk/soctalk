@@ -230,8 +230,8 @@ def evaluate_guard(
     # close < needs_more_info < escalate ladder (the schema's ``to`` enum plus
     # this rank check make suppression inexpressible).
     if not overrides:
-        from soctalk.playbook.conditions import evaluate_condition
-        from soctalk.playbook.models import DECISION_RANK
+        from soctalk.triage_policy.conditions import evaluate_condition
+        from soctalk.triage_policy.models import DECISION_RANK
 
         for i, rule in enumerate(guardrails):
             if not isinstance(rule, dict) or not evaluate_condition(
@@ -308,8 +308,8 @@ def shadow_guardrail_audits(
     a non-raising override is skipped just as the live guard would skip it — a
     rule that would be ignored when active must not be logged as would-fire.
     """
-    from soctalk.playbook.conditions import evaluate_condition
-    from soctalk.playbook.models import DECISION_RANK
+    from soctalk.triage_policy.conditions import evaluate_condition
+    from soctalk.triage_policy.models import DECISION_RANK
 
     if not ctx:
         return []

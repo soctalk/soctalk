@@ -1,4 +1,4 @@
-"""Playbook layer (issue #43) — the guardrails, in code, DB-free.
+"""TriagePolicy layer (issue #43) — the guardrails, in code, DB-free.
 
 Covers the pure decision surface case-for-case (same discipline as the expectedness
 parity test): playbook matching, the pre-verdict gate, the guard-result classifier,
@@ -16,7 +16,7 @@ import soctalk.graph.builder as builder
 from soctalk.graph.builder import (
     build_secops_graph,
     missing_required_steps,
-    route_from_resolve_playbook,
+    route_from_resolve_triage_policy,
     route_from_supervisor,
 )
 from soctalk.models.authorization import (
@@ -31,7 +31,8 @@ from soctalk.models.authorization import (
     PolicyPriority,
     ProhibitionFact,
 )
-from soctalk.playbook.floor import (
+from soctalk.runs_worker.main import _disposition_from_final
+from soctalk.triage_policy.floor import (
     VETO_ACTIVE_INCIDENT,
     VETO_AUTHZ_CONTRADICTED,
     VETO_IOC,
@@ -39,20 +40,20 @@ from soctalk.playbook.floor import (
     apply_worker_floor,
     worker_close_vetoes,
 )
-from soctalk.playbook.guard import (
+from soctalk.triage_policy.guard import (
     GUARDRAIL_AUTHZ_CONTRADICTED,
     GUARDRAIL_IOC_OVER_CLOSE,
     derive_authz_class,
     evaluate_guard,
 )
-from soctalk.playbook.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
-from soctalk.playbook.nodes import (
+from soctalk.triage_policy.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
+from soctalk.triage_policy.nodes import (
     gather_authorization_context_node,
     operational_close_node,
-    resolve_playbook_node,
+    resolve_triage_policy_node,
     verdict_guard_node,
 )
-from soctalk.playbook.operational import (
+from soctalk.triage_policy.operational import (
     VETO_MALICIOUS,
     VETO_MITRE,
     VETO_OBSERVABLES,
@@ -60,12 +61,11 @@ from soctalk.playbook.operational import (
     VETO_UNATTESTED_CLASS,
     operational_close_vetoes,
 )
-from soctalk.playbook.registry import (
+from soctalk.triage_policy.registry import (
     AGENT_HEALTH_PLAYBOOK,
     PRIVILEGED_EXEC_PLAYBOOK,
-    match_playbook,
+    match_triage_policy,
 )
-from soctalk.runs_worker.main import _disposition_from_final
 
 T = datetime(2026, 7, 14, 14, 32, tzinfo=UTC)
 
@@ -139,26 +139,26 @@ def _sudo_investigation(ctx: AuthorizationContext | None = None) -> dict[str, An
 
 
 # ---------------------------------------------------------------------------
-# Playbook matching
+# TriagePolicy matching
 # ---------------------------------------------------------------------------
 
 
 def test_match_playbook_on_sudo_rule_groups():
-    pb = match_playbook(_sudo_investigation())
+    pb = match_triage_policy(_sudo_investigation())
     assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
 
 
 def test_match_playbook_on_account_track_context():
     inv = _sudo_investigation(_context([]))
     inv["alerts"][0]["rule_groups"] = ["fim"]  # no group match — track carries it
-    pb = match_playbook(inv)
+    pb = match_triage_policy(inv)
     assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
 
 
 def test_match_playbook_none_for_unrelated_alert():
     inv = _sudo_investigation()
     inv["alerts"][0]["rule_groups"] = ["web", "accesslog"]
-    assert match_playbook(inv) is None
+    assert match_triage_policy(inv) is None
 
 
 # ---------------------------------------------------------------------------
@@ -332,9 +332,9 @@ def test_guard_never_touches_absent_or_non_close():
 
 async def test_resolve_playbook_node_writes_state():
     state = {"investigation": _sudo_investigation()}
-    state = await resolve_playbook_node(state)
+    state = await resolve_triage_policy_node(state)
     assert state["playbook"]["id"] == PRIVILEGED_EXEC_PLAYBOOK.id
-    state2 = await resolve_playbook_node(
+    state2 = await resolve_triage_policy_node(
         {"investigation": {"alerts": [{"rule_groups": ["web"]}]}}
     )
     assert "playbook" not in state2
@@ -631,18 +631,18 @@ def _flooding_investigation(**alert_overrides: Any) -> dict[str, Any]:
 
 
 def test_match_playbook_agent_health_by_group_and_rule_id():
-    pb = match_playbook(_flooding_investigation())
+    pb = match_triage_policy(_flooding_investigation())
     assert pb is not None and pb.id == AGENT_HEALTH_PLAYBOOK.id
     # rule id alone still ROUTES to the playbook when the groups drift — but the
     # deterministic close then fails class attestation (tested below), so the
     # only effect is playbook governance, never a close
-    pb2 = match_playbook(_flooding_investigation(rule_groups=["wazuh"]))
+    pb2 = match_triage_policy(_flooding_investigation(rule_groups=["wazuh"]))
     assert pb2 is not None and pb2.id == AGENT_HEALTH_PLAYBOOK.id
 
 
 def test_security_playbook_outranks_operational_on_double_match():
     inv = _flooding_investigation(rule_groups=["sudo", "agent_flooding"])
-    pb = match_playbook(inv)
+    pb = match_triage_policy(inv)
     assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
 
 
@@ -686,7 +686,7 @@ def test_operational_close_requires_every_alert_to_attest_the_class():
         }
     )
     assert VETO_UNATTESTED_CLASS in operational_close_vetoes(mixed, _CLASS_GROUPS)
-    assert route_from_resolve_playbook(
+    assert route_from_resolve_triage_policy(
         {"playbook": AGENT_HEALTH_PLAYBOOK.model_dump(), "investigation": mixed}
     ) == "supervisor"
 
@@ -702,20 +702,20 @@ def test_route_from_resolve_playbook_fails_closed_toward_triage():
         "playbook": AGENT_HEALTH_PLAYBOOK.model_dump(),
         "investigation": _flooding_investigation(),
     }
-    assert route_from_resolve_playbook(clean) == "operational_close"
+    assert route_from_resolve_triage_policy(clean) == "operational_close"
     # any veto -> full triage
     vetoed = dict(clean)
     vetoed["investigation"] = _flooding_investigation(mitre={"ids": ["T1499"]})
-    assert route_from_resolve_playbook(vetoed) == "supervisor"
+    assert route_from_resolve_triage_policy(vetoed) == "supervisor"
     # no playbook / no disposition / unknown capability name -> full triage
-    assert route_from_resolve_playbook({"investigation": {}}) == "supervisor"
+    assert route_from_resolve_triage_policy({"investigation": {}}) == "supervisor"
     no_disp = dict(clean)
     no_disp["playbook"] = PRIVILEGED_EXEC_PLAYBOOK.model_dump()
-    assert route_from_resolve_playbook(no_disp) == "supervisor"
+    assert route_from_resolve_triage_policy(no_disp) == "supervisor"
     unknown = dict(clean)
     unknown["playbook"] = {**AGENT_HEALTH_PLAYBOOK.model_dump(),
                            "deterministic_disposition": "wipe_all_alerts"}
-    assert route_from_resolve_playbook(unknown) == "supervisor"
+    assert route_from_resolve_triage_policy(unknown) == "supervisor"
 
 
 async def test_operational_close_node_writes_close_and_audit():
@@ -793,7 +793,7 @@ async def test_graph_operational_close_vetoed_falls_back_to_triage(monkeypatch):
 
 
 def test_auto_close_killed_env_and_policy(monkeypatch):
-    from soctalk.playbook.floor import auto_close_killed
+    from soctalk.triage_policy.floor import auto_close_killed
 
     monkeypatch.delenv("SOCTALK_AUTO_CLOSE_KILL", raising=False)
     assert auto_close_killed({}) is False
@@ -831,14 +831,14 @@ def test_volume_cap_policy_parse_rejects_booleans_and_garbage():
 
 
 def test_playbook_phase_flips_on_required_steps():
-    from soctalk.playbook.gate import legal_actions_for, playbook_phase
+    from soctalk.triage_policy.gate import legal_actions_for, triage_policy_phase
 
     state = _gate_state()
-    assert playbook_phase(state) == "triage"
+    assert triage_policy_phase(state) == "triage"
     assert "VERDICT" in legal_actions_for(state)
     assert "CLOSE" not in legal_actions_for(state)
     state["playbook_steps_run"] = [GATHER_AUTHORIZATION_CONTEXT]
-    assert playbook_phase(state) == "decide"
+    assert triage_policy_phase(state) == "decide"
     assert "CLOSE" not in legal_actions_for(state)
 
 
@@ -846,7 +846,7 @@ def test_legal_actions_unknown_names_drop_and_void():
     """Unknown action names in playbook data are dropped; a set that drops to
     empty voids the constraint entirely — authoring errors degrade to full
     triage, never to a wedged run."""
-    from soctalk.playbook.gate import legal_actions_for
+    from soctalk.triage_policy.gate import legal_actions_for
 
     state = _gate_state()
     state["playbook"]["legal_actions"] = {"triage": ["VERDICT", "SELF_DESTRUCT"]}
@@ -915,7 +915,7 @@ def _pci_asset() -> EntityContextFact:
 def test_guard_interrupts_covered_close_on_signoff_asset():
     """The #43 worked example, enforced: a fully covered close on a PCI asset is
     interrupted for human sign-off — the draft stands, a human disposes."""
-    from soctalk.playbook.guard import GUARDRAIL_SIGNOFF_CLOSE
+    from soctalk.triage_policy.guard import GUARDRAIL_SIGNOFF_CLOSE
 
     result = evaluate_guard(
         verdict_decision="close",
@@ -1041,7 +1041,7 @@ async def test_verdict_guard_clears_stale_interrupt_on_retry():
 
 
 def test_condition_language_sandbox():
-    from soctalk.playbook.conditions import (
+    from soctalk.triage_policy.conditions import (
         ConditionError,
         evaluate_condition,
         validate_condition,
@@ -1081,7 +1081,7 @@ def test_condition_language_sandbox():
 def test_guardrail_schema_fails_closed():
     import pydantic
 
-    from soctalk.playbook.models import Guardrail
+    from soctalk.triage_policy.models import Guardrail
 
     ok = Guardrail(
         when={"==": [{"var": "verdict"}, "close"]},
@@ -1133,9 +1133,9 @@ guardrails:
 
 
 def test_registry_loads_validates_and_shadow_defaults(tmp_path, monkeypatch):
-    from soctalk.playbook.registry import (
-        match_playbook,
-        match_shadow_playbooks,
+    from soctalk.triage_policy.registry import (
+        match_shadow_triage_policies,
+        match_triage_policy,
         reset_registry_cache,
     )
 
@@ -1156,19 +1156,19 @@ def test_registry_loads_validates_and_shadow_defaults(tmp_path, monkeypatch):
     try:
         inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
         # shadow playbooks never govern...
-        assert match_playbook(inv) is None
+        assert match_triage_policy(inv) is None
         # ...but they are matched for audit
-        shadow = match_shadow_playbooks(inv)
+        shadow = match_shadow_triage_policies(inv)
         assert [p.id for p in shadow] == ["custom-web-noise"]
         # built-ins unaffected by the file registry
-        pb = match_playbook(_sudo_investigation())
+        pb = match_triage_policy(_sudo_investigation())
         assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
     finally:
         reset_registry_cache()
 
 
 def test_registry_active_file_playbook_governs(tmp_path, monkeypatch):
-    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+    from soctalk.triage_policy.registry import match_triage_policy, reset_registry_cache
 
     _write_playbook_yaml(
         tmp_path, "web.yaml", _FILE_PLAYBOOK.format(status="active", priority=90)
@@ -1177,11 +1177,11 @@ def test_registry_active_file_playbook_governs(tmp_path, monkeypatch):
     reset_registry_cache()
     try:
         inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
-        pb = match_playbook(inv)
+        pb = match_triage_policy(inv)
         assert pb is not None and pb.id == "custom-web-noise"
         # priority: built-in security playbook still outranks it on double match
         both = {"alerts": [{"rule_groups": ["webnoise", "sudo"]}]}
-        assert match_playbook(both).id == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert match_triage_policy(both).id == PRIVILEGED_EXEC_PLAYBOOK.id
     finally:
         reset_registry_cache()
 
@@ -1262,7 +1262,7 @@ async def test_shadow_playbook_guardrails_audit_only(tmp_path, monkeypatch):
     """End-to-end shadow: a shadow playbook matches, its guardrail WOULD fire on
     the contradicted close, the audit records it — and the enforced outcome is
     exactly what the active built-in playbook dictates, untouched by shadow."""
-    from soctalk.playbook.registry import reset_registry_cache
+    from soctalk.triage_policy.registry import reset_registry_cache
 
     _write_playbook_yaml(tmp_path, "shadow-sudo.yaml", """
 id: shadow-sudo-strict
@@ -1281,7 +1281,7 @@ guardrails:
     reset_registry_cache()
     try:
         state = {"investigation": _sudo_investigation(_context([_ticket()]))}
-        state = await resolve_playbook_node(state)
+        state = await resolve_triage_policy_node(state)
         # shadow status: despite outranking priority it does NOT govern
         assert state["playbook"]["id"] == PRIVILEGED_EXEC_PLAYBOOK.id
         assert state["playbook_shadow"][0]["id"] == "shadow-sudo-strict"
@@ -1302,7 +1302,7 @@ guardrails:
 
 
 def test_validate_cli(tmp_path, capsys):
-    from soctalk.playbook.validate import main as validate_main
+    from soctalk.triage_policy.validate import main as validate_main
 
     good = _write_playbook_yaml(
         tmp_path, "good.yaml", _FILE_PLAYBOOK.format(status="shadow", priority=90)
@@ -1317,7 +1317,7 @@ def test_file_playbook_priority_floor_rejected(tmp_path, monkeypatch):
     """A file playbook may never outrank the built-ins: priority below the floor
     rejects the file, so an authored sudo playbook cannot strip the dual-use
     protections by winning the match."""
-    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+    from soctalk.triage_policy.registry import match_triage_policy, reset_registry_cache
 
     _write_playbook_yaml(tmp_path, "hijack.yaml", """
 id: sudo-hijack
@@ -1330,7 +1330,7 @@ applies_to:
     monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
     reset_registry_cache()
     try:
-        pb = match_playbook(_sudo_investigation())
+        pb = match_triage_policy(_sudo_investigation())
         assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
     finally:
         reset_registry_cache()
@@ -1340,7 +1340,7 @@ def test_file_playbook_cannot_mint_deterministic_disposition(tmp_path, monkeypat
     """Codex #44 High: an authored file naming its own rule_groups could attest
     any class — so deterministic dispositions are a built-in-only capability and
     a file carrying one is rejected whole."""
-    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+    from soctalk.triage_policy.registry import match_triage_policy, reset_registry_cache
 
     _write_playbook_yaml(tmp_path, "sshd-close.yaml", """
 id: sshd-noise-close
@@ -1355,7 +1355,7 @@ deterministic_disposition: close_operational
     reset_registry_cache()
     try:
         inv = {"alerts": [{"rule_groups": ["sshd"], "rule_id": "5710"}]}
-        assert match_playbook(inv) is None  # file rejected, nothing governs sshd
+        assert match_triage_policy(inv) is None  # file rejected, nothing governs sshd
     finally:
         reset_registry_cache()
 
@@ -1382,7 +1382,7 @@ async def test_guard_manufactured_nmi_counts_as_retry():
 
 
 def test_condition_list_literal_cap():
-    from soctalk.playbook.conditions import ConditionError, validate_condition
+    from soctalk.triage_policy.conditions import ConditionError, validate_condition
 
     ok = {"in": [{"var": "verdict"}, ["a"] * 32]}
     validate_condition(ok)
@@ -1396,7 +1396,7 @@ def test_condition_list_literal_cap():
 def test_shadow_audit_mirrors_active_semantics():
     """Codex #44 finding: shadow evidence must match what the rule would do when
     active — non-raising overrides are skipped, first match wins per playbook."""
-    from soctalk.playbook.guard import shadow_guardrail_audits
+    from soctalk.triage_policy.guard import shadow_guardrail_audits
 
     ctx = {"verdict": "escalate", "authz": {"class": "covered"}}
     shadow_pb = {

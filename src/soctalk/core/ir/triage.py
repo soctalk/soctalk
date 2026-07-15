@@ -60,7 +60,7 @@ from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.ir.scorer import suggest_for_alert as suggest_correlation
 from soctalk.core.observability.audit import log_audit
-from soctalk.playbook.floor import (
+from soctalk.triage_policy.floor import (
     FLOOR_AUDIT_ACTION,
     VETO_ACTIVE_INCIDENT,
     VETO_IOC,

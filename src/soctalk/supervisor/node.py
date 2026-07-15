@@ -22,7 +22,7 @@ from soctalk.authorization.render import supervisor_authorization_lines
 from soctalk.llm import classify_llm_error
 from soctalk.models.enums import Phase
 from soctalk.models.state import SupervisorDecision
-from soctalk.playbook.gate import legal_actions_for
+from soctalk.triage_policy.gate import legal_actions_for
 from soctalk.supervisor.prompts import SUPERVISOR_SYSTEM_PROMPT, SUPERVISOR_USER_PROMPT_TEMPLATE
 
 logger = structlog.get_logger()

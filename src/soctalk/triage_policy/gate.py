@@ -18,7 +18,7 @@ from typing import Any, Literal
 import structlog
 
 from soctalk.models.enums import SupervisorAction
-from soctalk.playbook.models import KNOWN_STEP_NODES
+from soctalk.triage_policy.models import KNOWN_STEP_NODES
 
 logger = structlog.get_logger()
 
@@ -29,7 +29,7 @@ _VALID_ACTIONS = {a.value for a in SupervisorAction}
 
 
 def missing_required_steps(state: dict[str, Any]) -> list[str]:
-    """Playbook-required deterministic steps that have not run yet (pure).
+    """TriagePolicy-required deterministic steps that have not run yet (pure).
 
     Only step names the graph actually has nodes for count — an unknown name in a
     playbook is logged and skipped rather than deadlocking the run (there is nowhere
@@ -53,7 +53,7 @@ def missing_required_steps(state: dict[str, Any]) -> list[str]:
     return missing
 
 
-def playbook_phase(state: dict[str, Any]) -> Literal["triage", "decide"]:
+def triage_policy_phase(state: dict[str, Any]) -> Literal["triage", "decide"]:
     """``triage`` until every required step has run, then ``decide``. Deterministic
     from playbook state — never from the LLM-written ``current_phase``."""
     return PHASE_TRIAGE if missing_required_steps(state) else PHASE_DECIDE
@@ -70,7 +70,7 @@ def legal_actions_for(state: dict[str, Any]) -> frozenset[str] | None:
     legal_map = playbook.get("legal_actions") or {}
     if not legal_map:
         return None
-    actions = legal_map.get(playbook_phase(state))
+    actions = legal_map.get(triage_policy_phase(state))
     if not actions:
         return None
     valid = frozenset(str(a).upper() for a in actions) & frozenset(_VALID_ACTIONS)

@@ -127,7 +127,7 @@ def score_routing(case: GoldenCase, action: str) -> TrialResult:
     )
 
 
-def score_playbook(case: GoldenCase) -> TrialResult:
+def score_triage_policy(case: GoldenCase) -> TrialResult:
     """Deterministic playbook-layer scoring (issue #43) — no LLM, no tokens.
 
     Runs the resolver match + the resolve-playbook route over the fabricated
@@ -137,14 +137,14 @@ def score_playbook(case: GoldenCase) -> TrialResult:
     keeps "class X never reaches the LLM" pinned in the same golden set that
     scores the LLM's own judgment.
     """
-    from soctalk.graph.builder import route_from_resolve_playbook
-    from soctalk.playbook.registry import match_playbook
+    from soctalk.graph.builder import route_from_resolve_triage_policy
+    from soctalk.triage_policy.registry import match_triage_policy
 
-    playbook = match_playbook(case.investigation)
+    playbook = match_triage_policy(case.investigation)
     state: dict[str, Any] = {"investigation": case.investigation}
     if playbook is not None:
         state["playbook"] = playbook.model_dump()
-    route = route_from_resolve_playbook(state)
+    route = route_from_resolve_triage_policy(state)
 
     expected = [str(r) for r in case.expect["playbook_route"]]
     expected_id = case.expect.get("playbook_id")
@@ -208,7 +208,7 @@ def summarize(results: list[TrialResult]) -> dict[str, Any]:
 
 
 async def _run_routing_trial(case: GoldenCase, config: Any) -> TrialResult:
-    from soctalk.playbook.registry import match_playbook
+    from soctalk.triage_policy.registry import match_triage_policy
     from soctalk.supervisor.node import _build_context_summary, _get_supervisor_decision
 
     state = build_supervisor_state(case)
@@ -216,7 +216,7 @@ async def _run_routing_trial(case: GoldenCase, config: Any) -> TrialResult:
     # entry node would, so a playbook-matched case runs with the same narrowed
     # action schema production uses. Without this, the harness could score an
     # action production can no longer sample.
-    playbook = match_playbook(case.investigation)
+    playbook = match_triage_policy(case.investigation)
     if playbook is not None:
         state["playbook"] = playbook.model_dump()
     decision = await _get_supervisor_decision(
@@ -252,9 +252,9 @@ async def run_evals(
                     got=f"ERROR:{type(e).__name__}", expected=[], detail=str(e)[:200],
                 )
 
-    # Playbook cases are deterministic (no LLM): score once, outside the
+    # Triage-policy cases are deterministic (no LLM): score once, outside the
     # semaphore/trials machinery — repeated trials of a pure function are noise.
-    deterministic = [score_playbook(c) for c in cases if c.kind == "playbook"]
+    deterministic = [score_triage_policy(c) for c in cases if c.kind == "playbook"]
 
     tasks = []
     for case in cases:
@@ -335,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         ok = False
     if "verdict" in summary and summary["verdict"]["accuracy"] < verdict_threshold:
         ok = False
-    # Playbook cases are deterministic — anything below 100% is a code regression,
+    # Triage-policy cases are deterministic — anything below 100% is a code regression,
     # not model variance, so there is no tunable threshold.
     if "playbook" in summary and summary["playbook"]["accuracy"] < 1.0:
         ok = False

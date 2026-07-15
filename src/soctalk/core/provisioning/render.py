@@ -126,8 +126,8 @@ _PLAYBOOK_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
 _PLAYBOOKS_TOTAL_BUDGET = 800 * 1024
 
 
-def render_playbook_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
-    """Playbook files to inject into a tenant's ``runsWorker.playbooks`` (#44).
+def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
+    """Triage-policy files to inject into a tenant's ``runsWorker.playbooks`` (#44).
 
     Source: ``SOCTALK_TENANT_PLAYBOOKS_DIR`` on the controller/API process — an
     operator-mounted directory of declarative playbook YAMLs (install-level
@@ -142,7 +142,7 @@ def render_playbook_values(tenant_slug: str, tenant_id: str = "") -> dict[str, s
     """
     import structlog
 
-    from soctalk.playbook.registry import parse_playbook_text
+    from soctalk.triage_policy.registry import parse_triage_policy_text
 
     log = structlog.get_logger()
     directory = os.getenv("SOCTALK_TENANT_PLAYBOOKS_DIR", "")
@@ -166,7 +166,7 @@ def render_playbook_values(tenant_slug: str, tenant_id: str = "") -> dict[str, s
             continue
         try:
             text = path.read_text()
-            pb = parse_playbook_text(text)
+            pb = parse_triage_policy_text(text)
         except Exception as exc:  # noqa: BLE001 — invalid files never reach the chart
             log.error(
                 "tenant_playbook_rejected", file=str(path), error=str(exc)[:300]
@@ -535,7 +535,7 @@ def render_tenant_values(
             ),
             # Declarative playbooks (#44): validated install-level files scoped
             # to this tenant; {} when SOCTALK_TENANT_PLAYBOOKS_DIR is unset.
-            "playbooks": render_playbook_values(tenant.slug, str(tenant.id)),
+            "playbooks": render_triage_policy_values(tenant.slug, str(tenant.id)),
         },
         "namespaceLabels": {
             "tenant": "true",
@@ -636,7 +636,7 @@ def render_tenant_values(
                 )
             file_pb[filename] = text
         # Enforce the per-tenant budget across BOTH file and authored playbooks — the
-        # file-only check in render_playbook_values can't see the authored additions.
+        # file-only check in render_triage_policy_values can't see the authored additions.
         total = sum(len(t.encode()) for t in file_pb.values())
         if total > _PLAYBOOKS_TOTAL_BUDGET:
             raise ValueError(
