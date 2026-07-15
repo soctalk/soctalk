@@ -635,6 +635,14 @@ def render_tenant_values(
                     f"authored playbook '{filename}' collides with a file playbook"
                 )
             file_pb[filename] = text
+        # Enforce the per-tenant budget across BOTH file and authored playbooks — the
+        # file-only check in render_playbook_values can't see the authored additions.
+        total = sum(len(t.encode()) for t in file_pb.values())
+        if total > _PLAYBOOKS_TOTAL_BUDGET:
+            raise ValueError(
+                f"combined playbook payload ({total}B) exceeds the per-tenant budget "
+                f"({_PLAYBOOKS_TOTAL_BUDGET}B)"
+            )
     return values
 
 

@@ -1065,13 +1065,22 @@ async def update_authored_playbook_route(
     if str(payload.definition.get("id") or "") != playbook_id:
         raise HTTPException(400, "definition.id must match the playbook id in the path")
     async with tenant_context(db, tenant_id):
-        if await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id) is None:
+        prior = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
+        if prior is None:
             raise HTTPException(404, "playbook not found")
         try:
             result = await upsert_authored(
                 db, tenant_id=tenant_id, definition=payload.definition,
                 status=payload.status, created_by=identity.user_id,
             )
+            # Editing an ACTIVE playbook must not silently drop it to shadow (the old
+            # ConfigMap would keep governing until an unrelated reconcile, then vanish).
+            # Keep it governing on the new definition + roll it out.
+            if prior["status"] == "active":
+                result = await set_authored_status(
+                    db, tenant_id=tenant_id, playbook_id=playbook_id, status="active",
+                    created_by=identity.user_id,
+                )
         except PlaybookValidationError as exc:
             raise HTTPException(400, str(exc))
         except PlaybookConflictError as exc:
@@ -1082,6 +1091,8 @@ async def update_authored_playbook_route(
             tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
             notes=f"revision {result['revision']}",
         )
+        if prior["status"] == "active":
+            await _enqueue_playbook_reconcile(db, tenant_id)
     return _authored_dto(result)
 
 

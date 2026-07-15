@@ -169,6 +169,29 @@ async def test_activate_deactivate_governs_and_reconciles(
     assert await render_active_authored_values(mssp_session, tenant_id=t.tenant_id) == {}
 
 
+async def test_edit_active_playbook_stays_active(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Editing an active playbook must keep it governing (not silently drop to shadow) and
+    re-roll — the Codex-flagged footgun."""
+    t, _ = seed_two_tenants
+    req = _req(mssp_session)
+    await create_authored_playbook_route(t.tenant_id, _valid(id="edit-pb"), req)
+    await activate_authored_playbook_route(t.tenant_id, "edit-pb", req)
+    await mssp_session.commit()
+
+    edited = await update_authored_playbook_route(
+        t.tenant_id, "edit-pb",
+        _valid(id="edit-pb", applies_to={"rule_groups": ["g", "extra"]}), req,
+    )
+    await mssp_session.commit()
+    assert edited.status == "active"  # still governing
+    rendered = await render_active_authored_values(mssp_session, tenant_id=t.tenant_id)
+    assert "authored-edit-pb.yaml" in rendered
+    doc = yaml.safe_load(rendered["authored-edit-pb.yaml"])
+    assert "extra" in doc["applies_to"]["rule_groups"]  # the new definition governs
+
+
 async def test_activate_unknown_returns_404(mssp_session: AsyncSession, seed_two_tenants):
     t, _ = seed_two_tenants
     with pytest.raises(HTTPException) as ei:
