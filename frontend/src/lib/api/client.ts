@@ -780,30 +780,30 @@ export const api = {
 			}),
 		updateAuthored: (
 			tenantId: string,
-			playbookId: string,
+			triagePolicyId: string,
 			definition: Record<string, unknown>,
 			status = 'shadow'
 		) =>
-			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/triage-policies/${playbookId}`, {
+			request<AuthoredTriagePolicy>(`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}`, {
 				method: 'PUT',
 				body: JSON.stringify({ definition, status })
 			}),
-		retireAuthored: (tenantId: string, playbookId: string) =>
-			request<{ ok: string }>(`/mssp/tenants/${tenantId}/triage-policies/${playbookId}`, {
+		retireAuthored: (tenantId: string, triagePolicyId: string) =>
+			request<{ ok: string }>(`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}`, {
 				method: 'DELETE'
 			}),
-		exportAuthored: (tenantId: string, playbookId: string) =>
+		exportAuthored: (tenantId: string, triagePolicyId: string) =>
 			request<{ triage_policy_id: string; yaml: string }>(
-				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/export`
+				`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}/export`
 			),
-		activateAuthored: (tenantId: string, playbookId: string) =>
+		activateAuthored: (tenantId: string, triagePolicyId: string) =>
 			request<AuthoredTriagePolicy>(
-				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/activate`,
+				`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}/activate`,
 				{ method: 'POST' }
 			),
-		deactivateAuthored: (tenantId: string, playbookId: string) =>
+		deactivateAuthored: (tenantId: string, triagePolicyId: string) =>
 			request<AuthoredTriagePolicy>(
-				`/mssp/tenants/${tenantId}/triage-policies/${playbookId}/deactivate`,
+				`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}/deactivate`,
 				{ method: 'POST' }
 			)
 	},

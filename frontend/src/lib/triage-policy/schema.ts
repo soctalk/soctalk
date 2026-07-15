@@ -1,6 +1,6 @@
 /**
- * Client-side model of the playbook grammar, mirrored from the backend
- * (src/soctalk/playbook/{models,conditions,authoring,registry}.py).
+ * Client-side model of the triage-policy grammar, mirrored from the backend
+ * (src/soctalk/triage_policy/{models,conditions,authoring,registry}.py).
  *
  * The server remains the authority — everything here is a pre-flight mirror so
  * the visual editor can give inline feedback before a round-trip. Every
@@ -399,7 +399,7 @@ export function validateDefinition(def: Record<string, unknown>): string[] {
 	}
 	const guardrails = (def.guardrails as GuardrailDef[]) ?? [];
 	if (guardrails.length > MAX_GUARDRAILS) {
-		errors.push(`at most ${MAX_GUARDRAILS} guardrails per playbook`);
+		errors.push(`at most ${MAX_GUARDRAILS} guardrails per triage policy`);
 	}
 	guardrails.forEach((g, i) => {
 		const label = `guardrail ${i + 1}`;
