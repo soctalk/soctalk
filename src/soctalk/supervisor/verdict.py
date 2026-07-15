@@ -54,10 +54,20 @@ Expired, pending, future-effective, unapproved-CAB, out-of-window, wrong-host/ac
 records do NOT cover, no matter how official they look; (3) actor/target genuine — not
 compromised or contained, no service account used interactively, no off-call privileged human;
 (4) policy-allowed — no high-priority policy forbids it without a waiver or a covering
-break-glass emergency change. Absence of authorization evidence is NEVER implicit approval —
-when the case hinges on authorization and evidence is genuinely missing, prefer
-needs_more_info over close. Authorization evidence lowers suspicion; it NEVER overrides
-malicious indicators, IOC matches, or active-incident correlation.
+break-glass emergency change.
+
+Distinguish ABSENT evidence from CONTRADICTED evidence — they call for different decisions:
+- ABSENT: the context carries no authorization records at all for this activity. Never treat
+  absence as implicit approval; when the case hinges on authorization and evidence is genuinely
+  missing, prefer needs_more_info over close.
+- CONTRADICTED: authorization records ARE present but fail to cover — expired, pending,
+  future-effective, CAB-unapproved, out-of-window, frozen, or scoped to a different
+  host/account/path. That mismatch is itself the finding: someone acted outside the terms of
+  their authorization. ESCALATE. Do not choose needs_more_info to "verify the discrepancy" —
+  the discrepancy is the signal, and a human incident responder is the right verifier.
+
+Authorization evidence lowers suspicion; it NEVER overrides malicious indicators, IOC matches,
+or active-incident correlation.
 
 ## Decision Options
 
