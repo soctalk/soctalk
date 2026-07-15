@@ -18,6 +18,8 @@
 	import { conditionToSentence, type PlaybookDef } from './schema';
 
 	export let definition: PlaybookDef;
+	/** Node id the Try-it simulation says would dispose the draft — highlighted. */
+	export let firedNodeId: string | null = null;
 
 	const dispatch = createEventDispatcher<{ focus: { guardrail: number } }>();
 
@@ -62,7 +64,7 @@
 				id,
 				type: 'pb',
 				position: { x: CHAIN_X, y },
-				data: { hasTarget: prev !== null, hasNext: false, ...data },
+				data: { hasTarget: prev !== null, hasNext: false, fired: id === firedNodeId, ...data },
 				draggable: false,
 				connectable: false
 			});
@@ -189,7 +191,10 @@
 		layoutKey = ns.map((n) => n.id).join('|');
 	}
 
-	$: rebuild(definition);
+	$: {
+		firedNodeId; // re-project when the simulated firing node changes too
+		rebuild(definition);
+	}
 
 	function onNodeClick(e: CustomEvent<{ node: Node }>) {
 		const m = /^guardrail-(\d+)$/.exec(e.detail.node.id);
