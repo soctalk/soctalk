@@ -402,7 +402,64 @@ async def complete_run(
             raise HTTPException(409, "lease expired or run not active")
         investigation_id = row["investigation_id"]
 
+        # Safety floor, server side (issue #43): a ``close_fp`` must not commit
+        # while another ACTIVE investigation shares an attach-eligible entity
+        # with this one — the same active-incident veto the ingest plane
+        # enforces, applied to the worker's close disposition where only L1
+        # has the data to check it. The close becomes an escalate (audited),
+        # never a silent drop.
+        effective_disposition = payload.disposition
         if payload.status == "completed" and payload.disposition == "close_fp":
+            from soctalk.core.ir.correlation import (
+                find_other_active_investigation_sharing_keys,
+            )
+            from soctalk.core.observability.audit import log_audit
+            from soctalk.playbook.floor import FLOOR_AUDIT_ACTION, VETO_ACTIVE_INCIDENT
+
+            # Only an ACTIVE investigation can be floor-vetoed into an escalate.
+            # If an analyst closed/merged the case while the run was in flight,
+            # the close path below already no-ops (WHERE status = 'active');
+            # converting it to an escalate here would create a pending review
+            # on a closed investigation.
+            inv_status = (
+                await db.execute(
+                    text(
+                        "SELECT status FROM investigations "
+                        "WHERE id = :c AND tenant_id = :t"
+                    ),
+                    {"c": str(investigation_id), "t": str(tenant_id)},
+                )
+            ).scalar_one_or_none()
+            other = None
+            if inv_status == "active":
+                other = await find_other_active_investigation_sharing_keys(
+                    db, tenant_id=tenant_id, investigation_id=investigation_id
+                )
+            if other is not None:
+                effective_disposition = "escalate"
+                await log_audit(
+                    db,
+                    action=FLOOR_AUDIT_ACTION,
+                    actor_principal="system",
+                    actor_id="worker_runs",
+                    tenant_id=tenant_id,
+                    resource_type="investigation",
+                    resource_id=str(investigation_id),
+                    notes=(
+                        f'{{"veto":"{VETO_ACTIVE_INCIDENT}",'
+                        f'"blocked":"worker_close_fp",'
+                        f'"active_incident":"{other}"}}'
+                    ),
+                )
+                logger.warning(
+                    "close_floor_veto",
+                    run_id=str(run_id),
+                    investigation_id=str(investigation_id),
+                    veto=VETO_ACTIVE_INCIDENT,
+                    active_incident=str(other),
+                )
+
+        if payload.status == "completed" and effective_disposition == "close_fp":
             # Write the reopen signature/window alongside the close so an
             # LLM-dismissed FP stays resurrectable by _check_and_reopen()
             # when the same entities show up again — same contract as the
@@ -443,7 +500,7 @@ async def complete_run(
                 },
             )
             case_changed = (r.rowcount or 0) > 0
-        elif payload.status == "completed" and payload.disposition == "escalate":
+        elif payload.status == "completed" and effective_disposition == "escalate":
             # Event-sourced HIL request: appends the canonical event
             # AND performs the V1-schema side effects (severity bump +
             # pending_reviews queue row) in the same transaction. See
@@ -453,11 +510,20 @@ async def complete_run(
                 record_human_review_requested,
             )
 
+            # A floor-vetoed close arrives here with a close-shaped verdict
+            # summary — say so, or the reviewer reads a "close as FP"
+            # recommendation on an escalated case with no explanation.
+            reason = payload.verdict_summary
+            if payload.disposition == "close_fp":
+                reason = (
+                    "[SAFETY FLOOR: another active investigation shares this "
+                    f"case's entities — worker close_fp overridden] {reason or ''}"
+                ).strip()[:1024]
             await record_human_review_requested(
                 db,
                 investigation_id=investigation_id,
                 tenant_id=tenant_id,
-                reason=payload.verdict_summary,
+                reason=reason,
                 verdict_decision="escalate",
                 verdict_confidence=payload.verdict_confidence,
                 findings=payload.findings,
@@ -471,12 +537,14 @@ async def complete_run(
         # the run produced a disposition + confidence.
         if (
             payload.status == "completed"
-            and payload.disposition in ("close_fp", "escalate")
+            and effective_disposition in ("close_fp", "escalate")
             and payload.verdict_confidence is not None
         ):
+            # Memoize the EFFECTIVE disposition: a floor-vetoed close records
+            # ``escalate`` so the shape can never close-by-reference later.
             await _record_verdict_memo(
                 db, tenant_id, investigation_id,
-                decision="close" if payload.disposition == "close_fp" else "escalate",
+                decision="close" if effective_disposition == "close_fp" else "escalate",
                 confidence=float(payload.verdict_confidence),
             )
 
@@ -510,6 +578,7 @@ async def complete_run(
         status=payload.status,
         tokens_used=payload.tokens_used,
         disposition=payload.disposition,
+        effective_disposition=effective_disposition,
         case_changed=case_changed,
     )
     return {"ok": True, "case_changed": case_changed}

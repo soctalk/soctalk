@@ -218,3 +218,58 @@ async def find_correlated_investigation(
         )
     ).scalar_one_or_none()
     return UUID(str(row)) if row else None
+
+
+async def find_other_active_investigation_sharing_keys(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    investigation_id: UUID,
+) -> UUID | None:
+    """An ACTIVE investigation (other than this one) sharing an attach-eligible key
+    with this investigation — the "active incident" test for the close safety floor
+    (issue #43): a close disposition must not commit while the same entities are on
+    fire elsewhere.
+
+    Same eligibility discipline as ``find_correlated_investigation``: strong keys
+    always count; conditional keys only when not hub-demoted; weak keys never. BOTH
+    sides' keys must still be within their correlation windows — a long-lived case
+    whose host key expired days ago is not "the same incident" as a fresh case on
+    that host, and holding its close forever would make common entities a chronic
+    escalation source. Returns the oldest matching active investigation, or None.
+    """
+    row = (
+        await db.execute(
+            text(
+                """
+                SELECT other.investigation_id
+                FROM alert_entity_keys mine
+                JOIN alert_entity_keys other
+                  ON other.tenant_id = mine.tenant_id
+                 AND other.key_type = mine.key_type
+                 AND other.key_value = mine.key_value
+                 AND other.investigation_id IS NOT NULL
+                 AND other.investigation_id <> mine.investigation_id
+                JOIN investigations i ON i.id = other.investigation_id
+                LEFT JOIN entity_key_stats s
+                  ON s.tenant_id = mine.tenant_id
+                 AND s.key_type = mine.key_type
+                 AND s.key_value = mine.key_value
+                WHERE mine.tenant_id = :t
+                  AND mine.investigation_id = :c
+                  AND i.status = 'active'
+                  AND mine.expires_at > now()
+                  AND other.expires_at > now()
+                  AND (
+                        mine.strength = 'strong'
+                        OR (mine.strength = 'conditional'
+                            AND COALESCE(s.seen_count, 0) <= :hub)
+                      )
+                ORDER BY i.opened_at ASC
+                LIMIT 1
+                """
+            ),
+            {"t": str(tenant_id), "c": str(investigation_id), "hub": _HUB_THRESHOLD},
+        )
+    ).scalar_one_or_none()
+    return UUID(str(row)) if row else None
