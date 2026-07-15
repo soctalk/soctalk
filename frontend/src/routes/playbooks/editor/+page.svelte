@@ -386,11 +386,11 @@
 </script>
 
 <svelte:head>
-	<title>{mode === 'edit' ? `Edit ${editId}` : 'New playbook'} - SocTalk</title>
+	<title>{mode === 'edit' ? `Edit ${editId}` : 'New triage policy'} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-1">
-	<h1 class="h2">{mode === 'edit' ? `Edit playbook` : 'New playbook'}</h1>
+	<h1 class="h2">{mode === 'edit' ? `Edit triage policy` : 'New triage policy'}</h1>
 	<div class="flex gap-2">
 		<button class="btn btn-sm variant-soft" on:click={openJson}>View as JSON</button>
 		<a class="btn btn-sm variant-soft" href="/playbooks">Cancel</a>
@@ -410,7 +410,7 @@
 </p>
 
 {#if !tenantId}
-	<div class="card p-6 opacity-60 text-sm">Pin a tenant (from Tenants) to author playbooks.</div>
+	<div class="card p-6 opacity-60 text-sm">Pin a tenant (from Tenants) to author triage policies.</div>
 {:else if loadError}
 	<div class="alert variant-filled-error"><span>{loadError}</span></div>
 {:else if !loaded}
@@ -425,12 +425,12 @@
 				<h3 class="h4">Identity</h3>
 				<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
 					<label class="label text-sm sm:col-span-2">
-						<span class="opacity-70">Playbook id (slug)</span>
+						<span class="opacity-70">Triage policy id (slug)</span>
 						<input
 							class="input font-mono"
 							bind:value={pid}
 							disabled={mode === 'edit'}
-							placeholder="my-playbook"
+							placeholder="my-triage-policy"
 						/>
 					</label>
 					<label class="label text-sm">
@@ -727,7 +727,7 @@
 								guardrail {(simResult.index ?? 0) + 1} fired ({simResult.effect})
 							</span>
 						{:else if simResult.stage === 'floor'}
-							<span class="text-xs opacity-70">safety floor (not this playbook)</span>
+							<span class="text-xs opacity-70">safety floor (not this policy)</span>
 						{:else if simResult.stage === 'signoff'}
 							<span class="text-xs opacity-70">close sign-off interrupt</span>
 						{/if}
@@ -746,7 +746,7 @@
 {#if showJson}
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
 		<div class="card p-6 max-w-2xl w-full space-y-3">
-			<h3 class="h4">Playbook document</h3>
+			<h3 class="h4">Triage policy document</h3>
 			<p class="text-xs opacity-60">
 				The form and this JSON are the same document. Edit here and apply, or copy it out — the
 				YAML export uses the identical structure.
