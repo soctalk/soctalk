@@ -1,0 +1,153 @@
+import { test, expect } from '@playwright/test';
+
+const TID = '11111111-1111-1111-1111-111111111111';
+
+const BUILTINS = [
+	{
+		id: 'dual-use-privileged-exec',
+		version: 2,
+		tenant: '*',
+		status: 'active',
+		priority: 10,
+		source: 'built-in',
+		applies_to: { rule_groups: ['sudo', 'su'], rule_ids: [], authorization_tracks: ['account'] },
+		required_steps: ['gather_authorization_context'],
+		decision_modules: ['authorization_engine'],
+		deterministic_disposition: null,
+		legal_actions: { triage: ['ENRICH', 'VERDICT'], decide: ['ENRICH', 'VERDICT'] },
+		close_signoff_data_classes: ['pci'],
+		guardrails: []
+	},
+	{
+		id: 'agent-health-operational',
+		version: 1,
+		tenant: '*',
+		status: 'active',
+		priority: 50,
+		source: 'built-in',
+		applies_to: { rule_groups: ['agent_flooding'], rule_ids: ['202'], authorization_tracks: [] },
+		required_steps: [],
+		decision_modules: [],
+		deterministic_disposition: 'close_operational',
+		legal_actions: {},
+		close_signoff_data_classes: [],
+		guardrails: []
+	}
+];
+
+function authoredRow(id: string) {
+	return {
+		playbook_id: id,
+		revision: 1,
+		status: 'shadow',
+		definition: { id, priority: 70, status: 'shadow', applies_to: { rule_groups: ['g'] } }
+	};
+}
+
+test.describe('Playbooks page', () => {
+	test.beforeEach(async ({ page }) => {
+		// authored store, mutated by POST so the create flow round-trips
+		const authored = [authoredRow('existing-pb')];
+
+		// Specific mocks only — a catch-all '**/api/**' also intercepts the app's
+		// own dev module graph and blanks the page.
+		// MSSP identity pinned to a tenant so the authored section is active
+		await page.route('**/auth/me', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					user_id: 'u1',
+					email: 'admin@mssp.example',
+					user_type: 'mssp',
+					role: 'mssp_admin',
+					tenant_id: null,
+					current_tenant: TID,
+					current_tenant_slug: 'acme'
+				})
+			});
+		});
+		await page.route('**/api/mssp/playbooks', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify(BUILTINS)
+			});
+		});
+		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+			const req = route.request();
+			if (req.method() === 'POST') {
+				const body = JSON.parse(req.postData() || '{}');
+				const row = authoredRow(body.definition.id);
+				authored.push(row);
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify(row)
+				});
+			} else {
+				await route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify(authored)
+				});
+			}
+		});
+	});
+
+	test('renders the built-in playbooks with status + source', async ({ page }) => {
+		await page.goto('/playbooks');
+		await expect(page).toHaveTitle(/Playbooks/);
+		await expect(page.getByText('dual-use-privileged-exec')).toBeVisible();
+		await expect(page.getByText('agent-health-operational')).toBeVisible();
+		// source + status badges render
+		await expect(page.getByText('built-in').first()).toBeVisible();
+	});
+
+	test('expands a built-in to show its gates', async ({ page }) => {
+		await page.goto('/playbooks');
+		await page.getByText('dual-use-privileged-exec').click();
+		await expect(page.getByText('Required steps before verdict:')).toBeVisible();
+		await expect(page.getByText('gather_authorization_context')).toBeVisible();
+		await expect(page.getByText('Close requires human sign-off for data classes:')).toBeVisible();
+	});
+
+	test('lists authored playbooks for the pinned tenant', async ({ page }) => {
+		await page.goto('/playbooks');
+		await expect(page.getByRole('heading', { name: 'Authored playbooks' })).toBeVisible();
+		await expect(page.getByText('existing-pb')).toBeVisible();
+		await expect(page.getByRole('button', { name: '+ New playbook' })).toBeVisible();
+	});
+
+	test('creates an authored playbook via the editor', async ({ page }) => {
+		await page.goto('/playbooks');
+		await page.getByRole('button', { name: '+ New playbook' }).click();
+		const editor = page.locator('textarea');
+		await expect(editor).toBeVisible();
+		await editor.fill(
+			JSON.stringify({ id: 'brand-new-pb', priority: 70, applies_to: { rule_groups: ['x'] } })
+		);
+		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		await expect(page.getByText('brand-new-pb')).toBeVisible();
+	});
+
+	test('surfaces a server validation error', async ({ page }) => {
+		// override POST to reject
+		await page.route('**/api/mssp/tenants/*/playbooks', async (route) => {
+			if (route.request().method() === 'POST') {
+				await route.fulfill({
+					status: 400,
+					contentType: 'application/json',
+					body: JSON.stringify({ detail: 'priority must be >= 60' })
+				});
+			} else {
+				await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+			}
+		});
+		await page.goto('/playbooks');
+		await page.getByRole('button', { name: '+ New playbook' }).click();
+		await page.locator('textarea').fill(JSON.stringify({ id: 'x', priority: 5 }));
+		await page.getByRole('button', { name: 'Save', exact: true }).click();
+		await expect(page.getByText('priority must be >= 60')).toBeVisible();
+	});
+});

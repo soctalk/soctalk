@@ -1,11 +1,108 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Playbook } from '$lib/api/client';
+	import { api, type Playbook, type AuthoredPlaybook } from '$lib/api/client';
+	import { currentTenantId } from '$lib/stores';
 
 	let playbooks: Playbook[] = [];
 	let loading = true;
 	let error: string | null = null;
 	let expanded = new Set<string>();
+
+	// --- authored (per-tenant, shadow/draft) ---
+	let authored: AuthoredPlaybook[] = [];
+	let authoredLoading = false;
+	let authoredError: string | null = null;
+	let editorOpen = false;
+	let editorMode: 'create' | 'edit' = 'create';
+	let editorPid = '';
+	let editorText = '';
+	let editorSaving = false;
+	let editorError: string | null = null;
+
+	$: tenantId = $currentTenantId;
+	$: if (tenantId) loadAuthored(tenantId);
+
+	async function loadAuthored(tid: string) {
+		authoredLoading = true;
+		authoredError = null;
+		try {
+			authored = await api.playbooks.listAuthored(tid);
+		} catch (e) {
+			authoredError = e instanceof Error ? e.message : 'Failed to load authored playbooks';
+		} finally {
+			authoredLoading = false;
+		}
+	}
+
+	function openCreate() {
+		editorMode = 'create';
+		editorPid = '';
+		editorError = null;
+		editorText = JSON.stringify(
+			{ id: 'my-playbook', priority: 70, applies_to: { rule_groups: [] }, guardrails: [] },
+			null,
+			2
+		);
+		editorOpen = true;
+	}
+
+	function openEdit(pb: AuthoredPlaybook) {
+		editorMode = 'edit';
+		editorPid = pb.playbook_id;
+		editorError = null;
+		editorText = JSON.stringify(pb.definition, null, 2);
+		editorOpen = true;
+	}
+
+	async function save() {
+		if (!tenantId) return;
+		let def: Record<string, unknown>;
+		try {
+			def = JSON.parse(editorText);
+		} catch {
+			editorError = 'Invalid JSON.';
+			return;
+		}
+		editorSaving = true;
+		editorError = null;
+		try {
+			if (editorMode === 'create') await api.playbooks.createAuthored(tenantId, def);
+			else await api.playbooks.updateAuthored(tenantId, editorPid, def);
+			editorOpen = false;
+			await loadAuthored(tenantId);
+		} catch (e) {
+			editorError = e instanceof Error ? e.message : 'Save failed.';
+		} finally {
+			editorSaving = false;
+		}
+	}
+
+	async function retire(pid: string) {
+		if (!tenantId || !confirm(`Retire playbook "${pid}"? This removes it from the tenant.`))
+			return;
+		try {
+			await api.playbooks.retireAuthored(tenantId, pid);
+			await loadAuthored(tenantId);
+		} catch (e) {
+			authoredError = e instanceof Error ? e.message : 'Retire failed.';
+		}
+	}
+
+	async function exportYaml(pid: string) {
+		if (!tenantId) return;
+		try {
+			const res = await api.playbooks.exportAuthored(tenantId, pid);
+			const blob = new Blob([res.yaml], { type: 'text/yaml' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${pid}.yaml`;
+			a.click();
+			URL.revokeObjectURL(url);
+		} catch (e) {
+			authoredError = e instanceof Error ? e.message : 'Export failed.';
+		}
+	}
 
 	onMount(loadPlaybooks);
 
@@ -218,5 +315,85 @@
 				{/if}
 			</div>
 		{/each}
+	</div>
+{/if}
+
+<!-- Authored playbooks (per-tenant, shadow/draft) -->
+<div class="mt-10">
+	<div class="flex items-center justify-between mb-2">
+		<h2 class="h3">Authored playbooks</h2>
+		{#if tenantId}
+			<button class="btn btn-sm variant-filled-primary" on:click={openCreate}>+ New playbook</button>
+		{/if}
+	</div>
+
+	{#if !tenantId}
+		<div class="card p-6 opacity-60 text-sm">
+			Pin a tenant (from Tenants) to author shadow playbooks for it.
+		</div>
+	{:else}
+		<p class="opacity-60 text-sm mb-3">
+			Shadow/draft playbooks for this tenant, validated server-side. Authored playbooks never
+			govern triage directly — export to YAML and roll out via the worker to activate.
+		</p>
+		{#if authoredError}
+			<div class="alert variant-filled-error mb-3"><span>{authoredError}</span></div>
+		{/if}
+		{#if authoredLoading}
+			<div class="card p-6 text-center opacity-60 text-sm">Loading…</div>
+		{:else if authored.length === 0}
+			<div class="card p-6 opacity-60 text-sm">No authored playbooks yet.</div>
+		{:else}
+			<div class="grid gap-2">
+				{#each authored as pb (pb.playbook_id)}
+					<div class="card p-4 flex items-center justify-between gap-3">
+						<div class="flex items-center gap-2 min-w-0">
+							<span class="font-mono font-semibold truncate">{pb.playbook_id}</span>
+							<span class="badge variant-soft-warning text-xs">{pb.status}</span>
+							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
+						</div>
+						<div class="flex items-center gap-2 flex-shrink-0">
+							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)}>Edit</button>
+							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.playbook_id)}>
+								Export
+							</button>
+							<button
+								class="btn btn-sm variant-soft-error"
+								on:click={() => retire(pb.playbook_id)}
+							>
+								Delete
+							</button>
+						</div>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	{/if}
+</div>
+
+{#if editorOpen}
+	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+		<div class="card p-6 max-w-2xl w-full space-y-4">
+			<h3 class="h4">
+				{editorMode === 'create' ? 'New playbook' : `Edit ${editorPid}`}
+			</h3>
+			<p class="text-xs opacity-60">
+				Definition (JSON). Validated server-side: shadow-only, priority ≥ 60, no
+				deterministic_disposition, id must not collide with a built-in, sandboxed guardrail
+				conditions.
+			</p>
+			<textarea class="textarea font-mono text-xs h-80" bind:value={editorText}></textarea>
+			{#if editorError}
+				<div class="alert variant-filled-error text-sm"><span>{editorError}</span></div>
+			{/if}
+			<div class="flex justify-end gap-2">
+				<button class="btn variant-soft" on:click={() => (editorOpen = false)} disabled={editorSaving}>
+					Cancel
+				</button>
+				<button class="btn variant-filled-primary" on:click={save} disabled={editorSaving}>
+					{editorSaving ? 'Saving…' : 'Save'}
+				</button>
+			</div>
+		</div>
 	</div>
 {/if}
