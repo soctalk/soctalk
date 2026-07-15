@@ -170,7 +170,7 @@ test.describe('Triage Policies page', () => {
 			}
 		});
 		await page.goto('/triage-policies');
-		await page.getByRole('button', { name: '+ New playbook' }).click();
+		await page.getByRole('button', { name: 'JSON', exact: true }).first().click();
 		await page.locator('textarea').fill(JSON.stringify({ id: 'x', priority: 5 }));
 		await page.getByRole('button', { name: 'Save', exact: true }).click();
 		await expect(page.getByText('priority must be >= 60')).toBeVisible();
