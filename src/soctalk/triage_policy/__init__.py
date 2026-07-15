@@ -1,4 +1,4 @@
-"""Playbook layer: deterministic guardrails over the agentic triage loop (issue #43).
+"""Triage-policy layer: deterministic guardrails over the agentic triage loop (issue #43).
 
 The pattern, everywhere: the LLM proposes and a deterministic gate disposes —
 
@@ -21,7 +21,7 @@ incident) on every auto-close plane. No tenant-authored playbooks and no sandbox
 condition language yet — the schema is the contract either way.
 """
 
-from soctalk.playbook.models import Playbook, PlaybookMatch
-from soctalk.playbook.registry import BUILTIN_PLAYBOOKS, match_playbook
+from soctalk.triage_policy.models import TriagePolicy, TriagePolicyMatch
+from soctalk.triage_policy.registry import BUILTIN_TRIAGE_POLICIES, match_triage_policy
 
-__all__ = ["BUILTIN_PLAYBOOKS", "Playbook", "PlaybookMatch", "match_playbook"]
+__all__ = ["BUILTIN_TRIAGE_POLICIES", "TriagePolicy", "TriagePolicyMatch", "match_triage_policy"]

@@ -115,7 +115,7 @@ async def close_fp_floor_veto(
     from soctalk.core.ir.policies import effective_policy
     from soctalk.core.ir.triage import volume_cap_exceeded
     from soctalk.core.observability.audit import log_audit
-    from soctalk.playbook.floor import (
+    from soctalk.triage_policy.floor import (
         FLOOR_AUDIT_ACTION,
         VETO_ACTIVE_INCIDENT,
         VETO_KILL_SWITCH,
@@ -566,7 +566,7 @@ async def complete_run(
                 import json as _json
 
                 from soctalk.core.observability.audit import log_audit
-                from soctalk.playbook.floor import PLAYBOOK_AUDIT_ACTION
+                from soctalk.triage_policy.floor import PLAYBOOK_AUDIT_ACTION
 
                 await log_audit(
                     db,

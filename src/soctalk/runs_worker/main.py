@@ -582,7 +582,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         # guard is bypassed (supervisor CLOSE short-circuit, future graph
         # changes), a close over malicious signal cannot reach complete().
         if disposition == "close_fp":
-            from soctalk.playbook.floor import apply_worker_floor
+            from soctalk.triage_policy.floor import apply_worker_floor
 
             disposition, floor_vetoes = apply_worker_floor(final, disposition)
             if floor_vetoes:

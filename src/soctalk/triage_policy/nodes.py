@@ -2,7 +2,7 @@
 
 Three plain LangGraph nodes — no LLM calls, no I/O beyond state:
 
-- ``resolve_playbook_node``: entry node; matches the investigation against the
+- ``resolve_triage_policy_node``: entry node; matches the investigation against the
   built-in registry and writes the active playbook into state.
 - ``gather_authorization_context_node``: the required step the pre-verdict gate
   reroutes to. Connectors are separate work, so today it gathers from the sources
@@ -15,7 +15,7 @@ Three plain LangGraph nodes — no LLM calls, no I/O beyond state:
   it did not stand.
 - ``operational_close_node``: the ``close_operational`` deterministic disposition —
   closes an operational-class alert without any LLM call, reached only when
-  ``route_from_resolve_playbook`` found no security-indicator veto.
+  ``route_from_resolve_triage_policy`` found no security-indicator veto.
 """
 
 from __future__ import annotations
@@ -27,23 +27,23 @@ import structlog
 
 from soctalk.authorization.engine import evaluate_authorization
 from soctalk.authorization.render import has_malicious_signal, parse_authorization_context
-from soctalk.playbook.guard import (
+from soctalk.triage_policy.guard import (
     decision_value,
     evaluate_guard,
     shadow_guardrail_audits,
 )
-from soctalk.playbook.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
-from soctalk.playbook.registry import match_playbook, match_shadow_playbooks
+from soctalk.triage_policy.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
+from soctalk.triage_policy.registry import match_triage_policy, match_shadow_triage_policies
 
 logger = structlog.get_logger()
 
 
-async def resolve_playbook_node(state: dict[str, Any]) -> dict[str, Any]:
+async def resolve_triage_policy_node(state: dict[str, Any]) -> dict[str, Any]:
     """Match the alert against the playbook registry; write the winner into state.
     Matching SHADOW playbooks are recorded alongside (#44) — their guardrails get
     would-fire audit records at the guard, but they never govern anything."""
     investigation = state.get("investigation", {}) or {}
-    playbook = match_playbook(investigation)
+    playbook = match_triage_policy(investigation)
     if playbook is not None:
         state["playbook"] = playbook.model_dump()
         logger.info(
@@ -54,7 +54,7 @@ async def resolve_playbook_node(state: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         logger.debug("playbook_none_matched")
-    shadow = match_shadow_playbooks(investigation)
+    shadow = match_shadow_triage_policies(investigation)
     if shadow:
         state["playbook_shadow"] = [p.model_dump() for p in shadow]
         logger.info(
@@ -105,7 +105,7 @@ async def gather_authorization_context_node(state: dict[str, Any]) -> dict[str, 
 async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
     """Deterministically close an operational-class alert — no LLM involved.
 
-    Reached only via ``route_from_resolve_playbook`` after the security-indicator
+    Reached only via ``route_from_resolve_triage_policy`` after the security-indicator
     check came back clean. Writes a supervisor-shaped CLOSE decision (the worker's
     disposition mapping and the close node already understand that shape) plus a
     playbook_audit record, so the close reason and the audit trail both say this

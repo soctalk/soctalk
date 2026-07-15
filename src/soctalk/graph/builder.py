@@ -11,18 +11,18 @@ from langgraph.graph import END, StateGraph
 from soctalk.graph.close import close_investigation_node
 from soctalk.graph.hil import human_review_node
 from soctalk.models.enums import HumanDecision, VerdictDecision
-from soctalk.playbook.gate import legal_actions_for, missing_required_steps
-from soctalk.playbook.models import (
+from soctalk.triage_policy.gate import legal_actions_for, missing_required_steps
+from soctalk.triage_policy.models import (
     GATHER_AUTHORIZATION_CONTEXT,
     KNOWN_DISPOSITIONS,
 )
-from soctalk.playbook.nodes import (
+from soctalk.triage_policy.nodes import (
     gather_authorization_context_node,
     operational_close_node,
-    resolve_playbook_node,
+    resolve_triage_policy_node,
     verdict_guard_node,
 )
-from soctalk.playbook.operational import operational_close_vetoes
+from soctalk.triage_policy.operational import operational_close_vetoes
 from soctalk.supervisor.node import MAX_ITERATIONS, supervisor_node
 from soctalk.supervisor.verdict import verdict_node
 from soctalk.workers.cortex import cortex_worker_node
@@ -33,7 +33,7 @@ from soctalk.workers.wazuh import wazuh_worker_node
 logger = structlog.get_logger()
 
 
-def route_from_resolve_playbook(state: dict[str, Any]) -> Literal[
+def route_from_resolve_triage_policy(state: dict[str, Any]) -> Literal[
     "operational_close",
     "supervisor",
 ]:
@@ -277,7 +277,7 @@ def build_secops_graph(
         thehive_worker -> close_investigation
         close_investigation -> END
 
-    Playbook layer (issue #43): ``resolve_playbook`` writes the active playbook into
+    Triage-policy layer (issue #43): ``resolve_triage_policy`` writes the active triage policy into
     state; the supervisor's conditional edge reroutes a VERDICT proposal to
     ``gather_authorization_context`` until the playbook's required steps have run; and
     every verdict passes through the deterministic ``verdict_guard`` before routing —
@@ -295,7 +295,7 @@ def build_secops_graph(
     graph = StateGraph(dict)
 
     # Add nodes
-    graph.add_node("resolve_playbook", resolve_playbook_node)
+    graph.add_node("resolve_playbook", resolve_triage_policy_node)
     graph.add_node("operational_close", operational_close_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("wazuh_worker", wazuh_worker_node)
@@ -314,7 +314,7 @@ def build_secops_graph(
     graph.set_entry_point("resolve_playbook")
     graph.add_conditional_edges(
         "resolve_playbook",
-        route_from_resolve_playbook,
+        route_from_resolve_triage_policy,
         {
             "operational_close": "operational_close",
             "supervisor": "supervisor",

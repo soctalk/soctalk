@@ -1,6 +1,6 @@
-"""Playbook registry: vetted built-ins plus declarative YAML files (#44).
+"""Triage-policy registry: vetted built-ins plus declarative YAML files (#44).
 
-``match_playbook`` is pure and deterministic — the resolver node calls it once per
+``match_triage_policy`` is pure and deterministic — the resolver node calls it once per
 run and writes the winner into graph state. Priority order (lower first) puts
 security-judgment playbooks before operational ones, so an alert that somehow
 matches both gets the stricter treatment; file-loaded playbooks default below the
@@ -26,11 +26,11 @@ from typing import Any
 
 import structlog
 
-from soctalk.playbook.models import (
+from soctalk.triage_policy.models import (
     CLOSE_OPERATIONAL,
     GATHER_AUTHORIZATION_CONTEXT,
-    Playbook,
-    PlaybookMatch,
+    TriagePolicy,
+    TriagePolicyMatch,
 )
 
 logger = structlog.get_logger()
@@ -39,11 +39,11 @@ logger = structlog.get_logger()
 # observable event is routine administration under a covering record and an incident
 # without one. Matches natively on sudo/su rule groups, and on any investigation that
 # carries an account-track authorization context (the M1 claim/fixture seam).
-PRIVILEGED_EXEC_PLAYBOOK = Playbook(
+PRIVILEGED_EXEC_PLAYBOOK = TriagePolicy(
     id="dual-use-privileged-exec",
     version=2,
     priority=10,
-    applies_to=PlaybookMatch(
+    applies_to=TriagePolicyMatch(
         rule_groups=["sudo", "su"],
         authorization_tracks=["account"],
     ),
@@ -66,14 +66,14 @@ PRIVILEGED_EXEC_PLAYBOOK = Playbook(
 # event queue is flooded", buffer full/flooded) — an infrastructure or agent-health
 # condition, not a security event, unless security indicators say otherwise. The
 # deterministic disposition closes it as operational WITHOUT an LLM look; any veto
-# in soctalk.playbook.operational (MITRE mapping, IOCs, critical severity,
+# in soctalk.triage_policy.operational (MITRE mapping, IOCs, critical severity,
 # malicious signal) sends it to full triage instead. This is what makes verdicts
 # on this class consistent: a pure function cannot flip between 30% and 50%.
-AGENT_HEALTH_PLAYBOOK = Playbook(
+AGENT_HEALTH_PLAYBOOK = TriagePolicy(
     id="agent-health-operational",
     version=1,
     priority=50,
-    applies_to=PlaybookMatch(
+    applies_to=TriagePolicyMatch(
         # Wazuh internal agent-health rules: 202 "Agent event queue is flooded"
         # and its buffer siblings carry the agent_flooding/agent_buffer groups.
         rule_groups=["agent_flooding", "agent_buffer"],
@@ -82,7 +82,7 @@ AGENT_HEALTH_PLAYBOOK = Playbook(
     deterministic_disposition=CLOSE_OPERATIONAL,
 )
 
-BUILTIN_PLAYBOOKS: tuple[Playbook, ...] = (
+BUILTIN_TRIAGE_POLICIES: tuple[TriagePolicy, ...] = (
     PRIVILEGED_EXEC_PLAYBOOK,
     AGENT_HEALTH_PLAYBOOK,
 )
@@ -110,7 +110,7 @@ def _process_tenant_identifiers() -> frozenset[str]:
     )
 
 
-def parse_playbook_text(text: str) -> Playbook:
+def parse_triage_policy_text(text: str) -> TriagePolicy:
     """Parse + fully validate one YAML playbook document. Raises on ANY problem —
     unknown fields, bad enums, invalid guardrail conditions (fail closed). Text
     is the unit of validation so callers that also SHIP the content (render.py)
@@ -124,7 +124,7 @@ def parse_playbook_text(text: str) -> Playbook:
     if not isinstance(raw, dict):
         raise ValueError("playbook file must be a mapping at its root")
     raw.setdefault("status", "shadow")
-    pb = Playbook.model_validate(raw)
+    pb = TriagePolicy.model_validate(raw)
     if pb.priority < FILE_PRIORITY_FLOOR:
         raise ValueError(
             f"file playbooks must have priority >= {FILE_PRIORITY_FLOOR} "
@@ -142,14 +142,14 @@ def parse_playbook_text(text: str) -> Playbook:
     return pb
 
 
-def load_playbook_file(path: Path) -> Playbook:
-    """Read + validate one playbook file (see ``parse_playbook_text``)."""
+def load_triage_policy_file(path: Path) -> TriagePolicy:
+    """Read + validate one playbook file (see ``parse_triage_policy_text``)."""
     if path.stat().st_size > _MAX_FILE_BYTES:
         raise ValueError(f"playbook file exceeds {_MAX_FILE_BYTES} bytes")
-    return parse_playbook_text(path.read_text())
+    return parse_triage_policy_text(path.read_text())
 
 
-def _load_file_playbooks() -> list[Playbook]:
+def _load_file_triage_policies() -> list[TriagePolicy]:
     directory = os.getenv("SOCTALK_PLAYBOOK_DIR", "")
     if not directory:
         return []
@@ -158,10 +158,10 @@ def _load_file_playbooks() -> list[Playbook]:
         logger.warning("playbook_dir_missing", dir=directory)
         return []
     tenants = _process_tenant_identifiers()
-    loaded: list[Playbook] = []
+    loaded: list[TriagePolicy] = []
     for path in sorted(root.glob("*.y*ml")):
         try:
-            pb = load_playbook_file(path)
+            pb = load_triage_policy_file(path)
         except Exception as exc:  # noqa: BLE001 — a bad file must never govern
             logger.error(
                 "playbook_file_rejected", file=str(path), error=str(exc)[:300]
@@ -173,7 +173,7 @@ def _load_file_playbooks() -> list[Playbook]:
                 file=str(path), playbook=pb.id, tenant=pb.tenant,
             )
             continue
-        if any(pb.id == b.id for b in BUILTIN_PLAYBOOKS):
+        if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
             logger.error(
                 "playbook_file_rejected", file=str(path), playbook=pb.id,
                 error="id collides with a built-in playbook",
@@ -189,11 +189,11 @@ def _load_file_playbooks() -> list[Playbook]:
 
 
 @lru_cache(maxsize=1)
-def _registry() -> tuple[Playbook, ...]:
+def _registry() -> tuple[TriagePolicy, ...]:
     """Built-ins + validated file playbooks, priority-sorted (stable). Cached for
     process lifetime — a playbook edit rolls out with the worker, which is the
     #44 activation gate working as intended."""
-    merged = list(BUILTIN_PLAYBOOKS) + _load_file_playbooks()
+    merged = list(BUILTIN_TRIAGE_POLICIES) + _load_file_triage_policies()
     merged.sort(key=lambda p: p.priority)
     return tuple(merged)
 
@@ -203,7 +203,7 @@ def reset_registry_cache() -> None:
     _registry.cache_clear()
 
 
-def all_playbooks() -> tuple[Playbook, ...]:
+def all_triage_policies() -> tuple[TriagePolicy, ...]:
     """Every playbook the process governs by — built-ins plus validated file
     playbooks, priority-sorted. Read-only view for governance/observability
     surfaces; reflects THIS process's SOCTALK_PLAYBOOK_DIR + tenant scoping."""
@@ -211,7 +211,7 @@ def all_playbooks() -> tuple[Playbook, ...]:
 
 
 def is_builtin(playbook_id: str) -> bool:
-    return any(playbook_id == b.id for b in BUILTIN_PLAYBOOKS)
+    return any(playbook_id == b.id for b in BUILTIN_TRIAGE_POLICIES)
 
 
 def _alert_rule_groups(investigation: dict[str, Any]) -> set[str]:
@@ -241,7 +241,7 @@ def _authorization_track(investigation: dict[str, Any]) -> str | None:
     return str(track) if track else None
 
 
-def _matches(pb: Playbook, groups: set[str], rule_ids: set[str], track: str | None) -> bool:
+def _matches(pb: TriagePolicy, groups: set[str], rule_ids: set[str], track: str | None) -> bool:
     if pb.applies_to.rule_groups and groups.intersection(
         g.lower() for g in pb.applies_to.rule_groups
     ):
@@ -251,7 +251,7 @@ def _matches(pb: Playbook, groups: set[str], rule_ids: set[str], track: str | No
     return track is not None and track in pb.applies_to.authorization_tracks
 
 
-def match_playbook(investigation: dict[str, Any]) -> Playbook | None:
+def match_triage_policy(investigation: dict[str, Any]) -> TriagePolicy | None:
     """Highest-priority matching ACTIVE playbook for this investigation, or None.
 
     Matching reads only the projected alert dicts (``rule_groups``/``rule_id``) and
@@ -269,7 +269,7 @@ def match_playbook(investigation: dict[str, Any]) -> Playbook | None:
     return None
 
 
-def match_shadow_playbooks(investigation: dict[str, Any]) -> list[Playbook]:
+def match_shadow_triage_policies(investigation: dict[str, Any]) -> list[TriagePolicy]:
     """Every matching SHADOW playbook — evaluated for audit only, never enforced."""
     groups = _alert_rule_groups(investigation)
     rule_ids = _alert_rule_ids(investigation)

@@ -12,12 +12,12 @@ from uuid import uuid4
 os.environ.setdefault("SOCTALK_JWT_SIGNING_KEY", "test-signing-key-32-bytes-plaintext")
 os.environ.setdefault("SOCTALK_ADAPTER_SIGNING_KEY", "adapter-signing-key-32-bytes-plaintext")
 
-from soctalk.core.api.ir import list_playbooks_route  # noqa: E402
-from soctalk.playbook.registry import reset_registry_cache  # noqa: E402
+from soctalk.core.api.ir import list_triage_policies_route  # noqa: E402
+from soctalk.triage_policy.registry import reset_registry_cache  # noqa: E402
 
 
 async def test_lists_builtin_playbooks():
-    playbooks = await list_playbooks_route(None)  # handler doesn't touch the request/DB
+    playbooks = await list_triage_policies_route(None)  # handler doesn't touch the request/DB
     by_id = {p.id: p for p in playbooks}
 
     assert "dual-use-privileged-exec" in by_id
@@ -49,7 +49,7 @@ async def test_endpoint_is_builtins_only_ignores_file_dir(tmp_path, monkeypatch)
     monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
     reset_registry_cache()
     try:
-        playbooks = await list_playbooks_route(None)
+        playbooks = await list_triage_policies_route(None)
         assert all(p.source == "built-in" for p in playbooks)
         assert "custom-shadow-pb" not in {p.id for p in playbooks}
     finally:

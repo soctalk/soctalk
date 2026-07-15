@@ -647,7 +647,7 @@ def test_wazuh_values_no_storage_override_for_poc():
 
 
 # ---------------------------------------------------------------------------
-# Playbook provisioning (issue #44 level 2: chart + render wiring)
+# TriagePolicy provisioning (issue #44 level 2: chart + render wiring)
 # ---------------------------------------------------------------------------
 
 _VALID_PLAYBOOK_YAML = """\
@@ -679,11 +679,11 @@ def _values_with_playbooks() -> dict:
 
 
 def test_render_playbook_values_env_gated_and_validated(tmp_path, monkeypatch):
-    from soctalk.core.provisioning.render import render_playbook_values
+    from soctalk.core.provisioning.render import render_triage_policy_values
 
     # unset env -> {}
     monkeypatch.delenv("SOCTALK_TENANT_PLAYBOOKS_DIR", raising=False)
-    assert render_playbook_values("acme") == {}
+    assert render_triage_policy_values("acme") == {}
 
     (tmp_path / "good.yaml").write_text(_VALID_PLAYBOOK_YAML)
     (tmp_path / "bad.yaml").write_text("id: broken\nbogus_field: 1\n")
@@ -692,7 +692,7 @@ def test_render_playbook_values_env_gated_and_validated(tmp_path, monkeypatch):
         "applies_to:\n  rule_groups: [x]\n"
     )
     monkeypatch.setenv("SOCTALK_TENANT_PLAYBOOKS_DIR", str(tmp_path))
-    out = render_playbook_values("acme")
+    out = render_triage_policy_values("acme")
     assert list(out) == ["good.yaml"], "invalid + foreign files must not ship"
     assert "custom-ops-noise" in out["good.yaml"]
 
@@ -758,7 +758,7 @@ def test_render_playbook_values_codex_fixes(tmp_path, monkeypatch):
     the chart schema would reject is skipped (not shipped to fail helm); the
     per-tenant total budget drops overflow files; content is validated from the
     same read that ships."""
-    from soctalk.core.provisioning.render import render_playbook_values
+    from soctalk.core.provisioning.render import render_triage_policy_values
 
     tenant_id = "0d4a2566-100a-42fd-8cc9-adac6e276691"
     (tmp_path / "byid.yaml").write_text(
@@ -772,7 +772,7 @@ def test_render_playbook_values_codex_fixes(tmp_path, monkeypatch):
         )
     monkeypatch.setenv("SOCTALK_TENANT_PLAYBOOKS_DIR", str(tmp_path))
 
-    out = render_playbook_values("acme", tenant_id)
+    out = render_triage_policy_values("acme", tenant_id)
     assert "byid.yaml" in out, "UUID-scoped playbook must ship to its tenant"
     assert "odd.yamml" not in out, "schema-rejected filename must be skipped"
     total = sum(len(v.encode()) for v in out.values())
@@ -780,5 +780,5 @@ def test_render_playbook_values_codex_fixes(tmp_path, monkeypatch):
     assert len(out) < 15, "budget must have dropped overflow files"
 
     # foreign tenant: neither slug nor id matches -> not shipped
-    out2 = render_playbook_values("other", "11111111-2222-3333-4444-555555555555")
+    out2 = render_triage_policy_values("other", "11111111-2222-3333-4444-555555555555")
     assert "byid.yaml" not in out2

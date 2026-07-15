@@ -30,9 +30,9 @@ from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
 from soctalk.core.tenancy.models import Role
-from soctalk.playbook.authoring import (
-    PlaybookConflictError,
-    PlaybookValidationError,
+from soctalk.triage_policy.authoring import (
+    TriagePolicyConflictError,
+    TriagePolicyValidationError,
     get_authored,
     list_authored,
     retire_authored,
@@ -40,7 +40,7 @@ from soctalk.playbook.authoring import (
     to_yaml,
     upsert_authored,
 )
-from soctalk.playbook.registry import BUILTIN_PLAYBOOKS
+from soctalk.triage_policy.registry import BUILTIN_TRIAGE_POLICIES
 
 mssp_investigations_router = APIRouter(prefix="/api/mssp/investigations", tags=["ir-mssp"])
 tenant_investigations_router = APIRouter(prefix="/api/tenant/investigations", tags=["ir-tenant"])
@@ -919,61 +919,61 @@ async def revoke_engagement_route(
 # ---------------------------------------------------------------------------
 
 
-class PlaybookGuardrailDTO(BaseModel):
+class TriagePolicyGuardrailDTO(BaseModel):
     when: dict[str, Any]
     effect: str
     to: str
     reason: str
 
 
-class PlaybookMatchDTO(BaseModel):
+class TriagePolicyMatchDTO(BaseModel):
     rule_groups: list[str]
     rule_ids: list[str]
     authorization_tracks: list[str]
 
 
-class PlaybookDTO(BaseModel):
+class TriagePolicyDTO(BaseModel):
     id: str
     version: int
     tenant: str
     status: str  # active | shadow
     priority: int
     source: str  # built-in | file
-    applies_to: PlaybookMatchDTO
+    applies_to: TriagePolicyMatchDTO
     required_steps: list[str]
     decision_modules: list[str]
     deterministic_disposition: str | None
     legal_actions: dict[str, list[str]]
     close_signoff_data_classes: list[str]
-    guardrails: list[PlaybookGuardrailDTO]
+    guardrails: list[TriagePolicyGuardrailDTO]
 
 
 @triage_policies_router.get(
     "",
-    response_model=list[PlaybookDTO],
+    response_model=list[TriagePolicyDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
 )
 @playbooks_router.get(
     "",
-    response_model=list[PlaybookDTO],
+    response_model=list[TriagePolicyDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
     deprecated=True,
 )
-async def list_playbooks_route(request: Request) -> list[PlaybookDTO]:
+async def list_triage_policies_route(request: Request) -> list[TriagePolicyDTO]:
     """The compiled-in (built-in) playbooks that govern triage. Deliberately
     scoped to built-ins: file playbooks (``SOCTALK_PLAYBOOK_DIR``) load per-PROCESS
     in the runs-worker, so the API can't truthfully report which govern — listing
     the API process's own files would show playbooks that no worker enforces (and
     hide tenant-scoped ones that do). Read-only; built-ins are vetted code."""
     return [
-        PlaybookDTO(
+        TriagePolicyDTO(
             id=pb.id,
             version=pb.version,
             tenant=pb.tenant,
             status=pb.status,
             priority=pb.priority,
             source="built-in",
-            applies_to=PlaybookMatchDTO(
+            applies_to=TriagePolicyMatchDTO(
                 rule_groups=list(pb.applies_to.rule_groups),
                 rule_ids=list(pb.applies_to.rule_ids),
                 authorization_tracks=list(pb.applies_to.authorization_tracks),
@@ -984,31 +984,31 @@ async def list_playbooks_route(request: Request) -> list[PlaybookDTO]:
             legal_actions={k: list(v) for k, v in pb.legal_actions.items()},
             close_signoff_data_classes=list(pb.close_signoff_data_classes),
             guardrails=[
-                PlaybookGuardrailDTO(when=g.when, effect=g.effect, to=g.to, reason=g.reason)
+                TriagePolicyGuardrailDTO(when=g.when, effect=g.effect, to=g.to, reason=g.reason)
                 for g in pb.guardrails
             ],
         )
-        for pb in sorted(BUILTIN_PLAYBOOKS, key=lambda p: p.priority)
+        for pb in sorted(BUILTIN_TRIAGE_POLICIES, key=lambda p: p.priority)
     ]
 
 
 # --- authored playbooks (DB-backed shadow/draft + export) ---
 
 
-class AuthoredPlaybookRequest(BaseModel):
+class AuthoredTriagePolicyRequest(BaseModel):
     definition: dict[str, Any]
     status: str = "shadow"  # draft | shadow (authoring lifecycle; never active)
 
 
-class AuthoredPlaybookDTO(BaseModel):
+class AuthoredTriagePolicyDTO(BaseModel):
     playbook_id: str
     revision: int
     status: str
     definition: dict[str, Any]
 
 
-def _authored_dto(row: dict[str, Any]) -> AuthoredPlaybookDTO:
-    return AuthoredPlaybookDTO(
+def _authored_dto(row: dict[str, Any]) -> AuthoredTriagePolicyDTO:
+    return AuthoredTriagePolicyDTO(
         playbook_id=row["playbook_id"],
         revision=row["revision"],
         status=row["status"],
@@ -1018,18 +1018,18 @@ def _authored_dto(row: dict[str, Any]) -> AuthoredPlaybookDTO:
 
 @authored_playbooks_router.get(
     "/{tenant_id}/triage-policies",
-    response_model=list[AuthoredPlaybookDTO],
+    response_model=list[AuthoredTriagePolicyDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
 )
 @authored_playbooks_router.get(
     "/{tenant_id}/playbooks",
-    response_model=list[AuthoredPlaybookDTO],
+    response_model=list[AuthoredTriagePolicyDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
     deprecated=True,
 )
-async def list_authored_playbooks_route(
+async def list_authored_triage_policies_route(
     tenant_id: UUID, request: Request
-) -> list[AuthoredPlaybookDTO]:
+) -> list[AuthoredTriagePolicyDTO]:
     db = _db(request)
     async with tenant_context(db, tenant_id):
         rows = await list_authored(db, tenant_id=tenant_id)
@@ -1038,18 +1038,18 @@ async def list_authored_playbooks_route(
 
 @authored_playbooks_router.post(
     "/{tenant_id}/triage-policies",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.post(
     "/{tenant_id}/playbooks",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
-async def create_authored_playbook_route(
-    tenant_id: UUID, payload: AuthoredPlaybookRequest, request: Request
-) -> AuthoredPlaybookDTO:
+async def create_authored_triage_policy_route(
+    tenant_id: UUID, payload: AuthoredTriagePolicyRequest, request: Request
+) -> AuthoredTriagePolicyDTO:
     db = _db(request)
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
@@ -1061,9 +1061,9 @@ async def create_authored_playbook_route(
                 db, tenant_id=tenant_id, definition=payload.definition,
                 status=payload.status, created_by=identity.user_id,
             )
-        except PlaybookValidationError as exc:
+        except TriagePolicyValidationError as exc:
             raise HTTPException(400, str(exc))
-        except PlaybookConflictError as exc:
+        except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         await log_audit(
             db, action="ir.playbook.authored_created",
@@ -1075,18 +1075,18 @@ async def create_authored_playbook_route(
 
 @authored_playbooks_router.put(
     "/{tenant_id}/triage-policies/{playbook_id}",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.put(
     "/{tenant_id}/playbooks/{playbook_id}",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
-async def update_authored_playbook_route(
-    tenant_id: UUID, playbook_id: str, payload: AuthoredPlaybookRequest, request: Request
-) -> AuthoredPlaybookDTO:
+async def update_authored_triage_policy_route(
+    tenant_id: UUID, playbook_id: str, payload: AuthoredTriagePolicyRequest, request: Request
+) -> AuthoredTriagePolicyDTO:
     db = _db(request)
     identity = current_identity(request)
     if str(payload.definition.get("id") or "") != playbook_id:
@@ -1108,9 +1108,9 @@ async def update_authored_playbook_route(
                     db, tenant_id=tenant_id, playbook_id=playbook_id, status="active",
                     created_by=identity.user_id,
                 )
-        except PlaybookValidationError as exc:
+        except TriagePolicyValidationError as exc:
             raise HTTPException(400, str(exc))
-        except PlaybookConflictError as exc:
+        except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         await log_audit(
             db, action="ir.playbook.authored_updated",
@@ -1119,7 +1119,7 @@ async def update_authored_playbook_route(
             notes=f"revision {result['revision']}",
         )
         if prior["status"] == "active":
-            await _enqueue_playbook_reconcile(db, tenant_id)
+            await _enqueue_triage_policy_reconcile(db, tenant_id)
     return _authored_dto(result)
 
 
@@ -1132,7 +1132,7 @@ async def update_authored_playbook_route(
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
-async def retire_authored_playbook_route(
+async def retire_authored_triage_policy_route(
     tenant_id: UUID, playbook_id: str, request: Request
 ) -> dict[str, str]:
     db = _db(request)
@@ -1151,11 +1151,11 @@ async def retire_authored_playbook_route(
         )
         # Retiring a governing playbook must stop it governing.
         if prior is not None and prior["status"] == "active":
-            await _enqueue_playbook_reconcile(db, tenant_id)
+            await _enqueue_triage_policy_reconcile(db, tenant_id)
     return {"ok": "retired"}
 
 
-async def _enqueue_playbook_reconcile(db: AsyncSession, tenant_id: UUID) -> None:
+async def _enqueue_triage_policy_reconcile(db: AsyncSession, tenant_id: UUID) -> None:
     """Queue a tenant reconcile so an activation/deactivation re-renders the ConfigMap and
     rolls the worker (rollout is the activation gate, same as an LLM-key rotation). No-op for
     non-ACTIVE tenants (no live worker); the active-job unique index makes it idempotent."""
@@ -1183,7 +1183,7 @@ async def _enqueue_playbook_reconcile(db: AsyncSession, tenant_id: UUID) -> None
 
 async def _set_authored_and_reconcile(
     tenant_id: UUID, playbook_id: str, status: str, request: Request, action: str
-) -> AuthoredPlaybookDTO:
+) -> AuthoredTriagePolicyDTO:
     db = _db(request)
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
@@ -1192,9 +1192,9 @@ async def _set_authored_and_reconcile(
                 db, tenant_id=tenant_id, playbook_id=playbook_id, status=status,
                 created_by=identity.user_id,
             )
-        except PlaybookValidationError as exc:
+        except TriagePolicyValidationError as exc:
             raise HTTPException(400, str(exc))
-        except PlaybookConflictError as exc:
+        except TriagePolicyConflictError as exc:
             raise HTTPException(409, str(exc))
         if result is None:
             raise HTTPException(404, "playbook not found or retired")
@@ -1202,24 +1202,24 @@ async def _set_authored_and_reconcile(
             db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
         )
-        await _enqueue_playbook_reconcile(db, tenant_id)
+        await _enqueue_triage_policy_reconcile(db, tenant_id)
     return _authored_dto(result)
 
 
 @authored_playbooks_router.post(
     "/{tenant_id}/triage-policies/{playbook_id}/activate",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.post(
     "/{tenant_id}/playbooks/{playbook_id}/activate",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
-async def activate_authored_playbook_route(
+async def activate_authored_triage_policy_route(
     tenant_id: UUID, playbook_id: str, request: Request
-) -> AuthoredPlaybookDTO:
+) -> AuthoredTriagePolicyDTO:
     """Activate an authored playbook so it governs triage. Materialized into the tenant's
     playbook ConfigMap on the queued reconcile (rollout is the activation gate)."""
     return await _set_authored_and_reconcile(
@@ -1229,18 +1229,18 @@ async def activate_authored_playbook_route(
 
 @authored_playbooks_router.post(
     "/{tenant_id}/triage-policies/{playbook_id}/deactivate",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
 )
 @authored_playbooks_router.post(
     "/{tenant_id}/playbooks/{playbook_id}/deactivate",
-    response_model=AuthoredPlaybookDTO,
+    response_model=AuthoredTriagePolicyDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
     deprecated=True,
 )
-async def deactivate_authored_playbook_route(
+async def deactivate_authored_triage_policy_route(
     tenant_id: UUID, playbook_id: str, request: Request
-) -> AuthoredPlaybookDTO:
+) -> AuthoredTriagePolicyDTO:
     """Deactivate (back to shadow) — the reconcile drops it from the ConfigMap."""
     return await _set_authored_and_reconcile(
         tenant_id, playbook_id, "shadow", request, "ir.playbook.authored_deactivated"
@@ -1256,7 +1256,7 @@ async def deactivate_authored_playbook_route(
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
     deprecated=True,
 )
-async def export_authored_playbook_route(
+async def export_authored_triage_policy_route(
     tenant_id: UUID, playbook_id: str, request: Request
 ) -> dict[str, str]:
     """Export the authored definition as YAML for git / worker rollout (activation)."""

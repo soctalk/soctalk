@@ -1,10 +1,10 @@
-"""Playbook schema — declarative data, interpreted by the graph.
+"""Triage-policy schema — declarative data, interpreted by the graph.
 
 A playbook is data, not code: it names required deterministic steps and (later)
 capabilities; it can never supply new code. Guardrail conditions stay OUT of the
 schema in this increment — the two enforced edges (contradicted→escalate,
-IOC→escalate) live in ``soctalk.playbook.guard`` as code until a second playbook
-justifies a sandboxed condition language. The safety floor (``soctalk.playbook.floor``)
+IOC→escalate) live in ``soctalk.triage_policy.guard`` as code until a second playbook
+justifies a sandboxed condition language. The safety floor (``soctalk.triage_policy.floor``)
 is enforced by the executor and is deliberately not expressible here: a playbook can
 only add stricter gates, never weaken the floor.
 """
@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from soctalk.playbook.conditions import validate_condition
+from soctalk.triage_policy.conditions import validate_condition
 
 # Required steps must name deterministic graph nodes (never supervisor actions — the
 # action enum is fixed); the pre-verdict gate reroutes to them by name.
@@ -38,7 +38,7 @@ DECISION_RANK = {"close": 0, "needs_more_info": 1, "escalate": 2}
 class Guardrail(BaseModel):
     """One declarative guardrail: a sandboxed condition over the state contract
     plus an effect. Conditions are the ONLY logic an author writes (#43); the
-    operators and referencable fields live in ``soctalk.playbook.conditions``.
+    operators and referencable fields live in ``soctalk.triage_policy.conditions``.
     Effects can only raise suspicion: ``override`` moves the decision up the
     close < needs_more_info < escalate ladder; ``interrupt`` keeps the draft and
     routes to human sign-off. (``cap``/``veto`` from the #43 vocabulary are
@@ -61,7 +61,7 @@ class Guardrail(BaseModel):
         return self
 
 
-class PlaybookMatch(BaseModel):
+class TriagePolicyMatch(BaseModel):
     """Alert-matching rules. Criteria are OR'd: the playbook applies when ANY listed
     criterion matches (each criterion is itself an any-of over its values)."""
 
@@ -74,7 +74,7 @@ class PlaybookMatch(BaseModel):
     authorization_tracks: list[str] = Field(default_factory=list)
 
 
-class Playbook(BaseModel):
+class TriagePolicy(BaseModel):
     """One procedural playbook: which alerts it owns and what must run before VERDICT.
 
     ``extra="forbid"``: a typo'd field in an authored file rejects the whole file at
@@ -96,14 +96,14 @@ class Playbook(BaseModel):
     # Registry priority: lower wins on a multi-match (built-ins use 10/50;
     # file-loaded playbooks default below them).
     priority: int = 100
-    applies_to: PlaybookMatch = Field(default_factory=PlaybookMatch)
+    applies_to: TriagePolicyMatch = Field(default_factory=TriagePolicyMatch)
     # Deterministic node names that must have run before VERDICT is legal.
     required_steps: list[str] = Field(default_factory=list)
     # Vetted decision modules the guard consults (capability names; only the
     # authorization engine exists today).
     decision_modules: list[str] = Field(default_factory=list)
     # A KNOWN_DISPOSITIONS capability applied INSTEAD of LLM triage when no
-    # security-indicator veto fires (see soctalk.playbook.operational). The class
+    # security-indicator veto fires (see soctalk.triage_policy.operational). The class
     # decision is deterministic; the model is invoked only for the ambiguous rest.
     deterministic_disposition: str | None = None
     # Legal supervisor actions per phase ("triage" until required_steps ran, then

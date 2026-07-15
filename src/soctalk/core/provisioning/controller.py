@@ -1005,7 +1005,7 @@ class TenantController:
         # Materialize DB-authored ACTIVE playbooks into the tenant chart values (#44).
         # Fail-closed: an invalid/oversized active row raises here → the reconcile step
         # fails → the job surfaces the failure (never a silent "active but not governing").
-        from soctalk.playbook.authoring import render_active_authored_values
+        from soctalk.triage_policy.authoring import render_active_authored_values
 
         authored_pb = await render_active_authored_values(
             self.session, tenant_id=ctx.tenant.id

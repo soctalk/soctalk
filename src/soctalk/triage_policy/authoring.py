@@ -3,7 +3,7 @@
 Authoring is strictly SHADOW/DRAFT + export-to-YAML — authored playbooks NEVER govern the
 worker directly. Active enforcement stays on the vetted file -> git -> worker-rollout path.
 
-Every authored definition is validated with the SAME ``Playbook`` model and the same
+Every authored definition is validated with the SAME ``TriagePolicy`` model and the same
 fail-closed restrictions as file playbooks (shadow-only status, priority floor, no
 ``deterministic_disposition``, no built-in id collision, ``extra="forbid"``, sandboxed
 guardrail conditions), PLUS stricter reference checks: unknown required steps / legal
@@ -25,13 +25,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.models.enums import SupervisorAction
-from soctalk.playbook.models import KNOWN_STEP_NODES, Playbook
-from soctalk.playbook.registry import BUILTIN_PLAYBOOKS, FILE_PRIORITY_FLOOR
+from soctalk.triage_policy.models import KNOWN_STEP_NODES, TriagePolicy
+from soctalk.triage_policy.registry import BUILTIN_TRIAGE_POLICIES, FILE_PRIORITY_FLOOR
 
 # Only the authorization engine exists as a decision module today (registry.py).
 KNOWN_DECISION_MODULES = frozenset({"authorization_engine"})
 _VALID_ACTIONS = frozenset(a.value for a in SupervisorAction)
-# The only phases the gate reads (soctalk.playbook.gate); an unknown phase key would
+# The only phases the gate reads (soctalk.triage_policy.gate); an unknown phase key would
 # fail open (unconstrained) if promoted, so reject it at author time.
 KNOWN_PHASES = frozenset({"triage", "decide"})
 # Authoring lifecycle statuses (the DB row's status; the stored DEFINITION is always
@@ -44,61 +44,61 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 _MAX_AUTHORED_BYTES = 64 * 1024
 
 
-class PlaybookValidationError(ValueError):
+class TriagePolicyValidationError(ValueError):
     """An authored playbook definition failed validation (author-facing message)."""
 
 
-class PlaybookConflictError(Exception):
+class TriagePolicyConflictError(Exception):
     """A concurrent create/edit collided on the revision number — retry."""
 
 
-def validate_authored(raw: dict[str, Any]) -> Playbook:
-    """Validate an authored playbook definition fail-closed. Returns the parsed Playbook
+def validate_authored(raw: dict[str, Any]) -> TriagePolicy:
+    """Validate an authored playbook definition fail-closed. Returns the parsed TriagePolicy
     (status forced to 'shadow' — authored playbooks are never active). Raises
-    ``PlaybookValidationError`` with an author-facing message on any problem."""
+    ``TriagePolicyValidationError`` with an author-facing message on any problem."""
     if not isinstance(raw, dict):
-        raise PlaybookValidationError("playbook must be a mapping")
+        raise TriagePolicyValidationError("playbook must be a mapping")
     if len(json.dumps(raw, default=str)) > _MAX_AUTHORED_BYTES:
-        raise PlaybookValidationError(f"playbook definition exceeds {_MAX_AUTHORED_BYTES} bytes")
+        raise TriagePolicyValidationError(f"playbook definition exceeds {_MAX_AUTHORED_BYTES} bytes")
     # The stored definition is always shadow — an authored playbook cannot declare itself
     # active. (The DB row carries the draft/shadow lifecycle separately.)
     definition = {**raw, "status": "shadow"}
     try:
-        pb = Playbook.model_validate(definition)
+        pb = TriagePolicy.model_validate(definition)
     except Exception as exc:  # noqa: BLE001 — surface pydantic errors as author feedback
-        raise PlaybookValidationError(str(exc)) from exc
+        raise TriagePolicyValidationError(str(exc)) from exc
 
     if not _SLUG_RE.match(pb.id):
-        raise PlaybookValidationError(
+        raise TriagePolicyValidationError(
             "id must be a slug: lowercase letters, digits, hyphens (^[a-z0-9][a-z0-9-]{0,127}$)"
         )
     bad_phases = [p for p in pb.legal_actions if p not in KNOWN_PHASES]
     if bad_phases:
-        raise PlaybookValidationError(
+        raise TriagePolicyValidationError(
             f"unknown legal_actions phases (only triage|decide): {', '.join(bad_phases)}"
         )
     if pb.priority < FILE_PRIORITY_FLOOR:
-        raise PlaybookValidationError(
+        raise TriagePolicyValidationError(
             f"priority must be >= {FILE_PRIORITY_FLOOR} — built-in protections may not be "
             f"outranked (got {pb.priority})"
         )
     if pb.deterministic_disposition is not None:
-        raise PlaybookValidationError(
+        raise TriagePolicyValidationError(
             "deterministic_disposition is a built-in-only capability and cannot be authored"
         )
-    if any(pb.id == b.id for b in BUILTIN_PLAYBOOKS):
-        raise PlaybookValidationError(f"id '{pb.id}' collides with a built-in playbook")
+    if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
+        raise TriagePolicyValidationError(f"id '{pb.id}' collides with a built-in playbook")
 
     bad_steps = [s for s in pb.required_steps if s not in KNOWN_STEP_NODES]
     if bad_steps:
-        raise PlaybookValidationError(f"unknown required_steps: {', '.join(bad_steps)}")
+        raise TriagePolicyValidationError(f"unknown required_steps: {', '.join(bad_steps)}")
     bad_modules = [m for m in pb.decision_modules if m not in KNOWN_DECISION_MODULES]
     if bad_modules:
-        raise PlaybookValidationError(f"unknown decision_modules: {', '.join(bad_modules)}")
+        raise TriagePolicyValidationError(f"unknown decision_modules: {', '.join(bad_modules)}")
     for phase, actions in pb.legal_actions.items():
         bad = [a for a in actions if a not in _VALID_ACTIONS]
         if bad:
-            raise PlaybookValidationError(
+            raise TriagePolicyValidationError(
                 f"unknown legal_actions in phase '{phase}': {', '.join(bad)}"
             )
     return pb
@@ -169,9 +169,9 @@ async def upsert_authored(
     status: str = "shadow", created_by: UUID | None = None,
 ) -> dict[str, Any]:
     """Create or edit an authored playbook (appends a new revision). Validates fail-closed.
-    ``status`` is the authoring lifecycle (draft|shadow). Raises PlaybookValidationError."""
+    ``status`` is the authoring lifecycle (draft|shadow). Raises TriagePolicyValidationError."""
     if status not in AUTHORED_STATUSES:
-        raise PlaybookValidationError("status must be 'draft' or 'shadow'")
+        raise TriagePolicyValidationError("status must be 'draft' or 'shadow'")
     # Force the concrete tenant: a tenant-authored playbook must never store/export
     # tenant="*" (which the file registry treats as applies-everywhere).
     pb = validate_authored({**definition, "tenant": str(tenant_id)})
@@ -185,7 +185,7 @@ async def upsert_authored(
         )
         await db.flush()  # surface a duplicate-revision race here, not at commit
     except IntegrityError as exc:
-        raise PlaybookConflictError(
+        raise TriagePolicyConflictError(
             "a concurrent edit created a newer revision — reload and retry"
         ) from exc
     return {"playbook_id": pb.id, "revision": revision, "status": status, "definition": stored}
@@ -215,7 +215,7 @@ async def set_authored_status(
     (Codex: old rows must re-clear the validator). Returns the new state, or None if the
     playbook doesn't exist / is retired."""
     if status not in ("active", "shadow"):
-        raise PlaybookValidationError("status must be 'active' or 'shadow'")
+        raise TriagePolicyValidationError("status must be 'active' or 'shadow'")
     latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=playbook_id)
     if latest is None or latest["status"] == "retired":
         return None
@@ -233,7 +233,7 @@ async def set_authored_status(
         )
         await db.flush()
     except IntegrityError as exc:
-        raise PlaybookConflictError("a concurrent edit collided — reload and retry") from exc
+        raise TriagePolicyConflictError("a concurrent edit collided — reload and retry") from exc
     return {"playbook_id": playbook_id, "revision": revision, "status": status,
             "definition": definition}
 
@@ -244,10 +244,10 @@ async def render_active_authored_values(
     """Active authored playbooks as ``{configmap_filename: yaml_text}`` for chart delivery.
 
     FAIL-CLOSED: each active row is rendered to YAML (status forced 'active', tenant pinned)
-    and re-validated with ``parse_playbook_text`` — the worker's own loader. Raises on ANY
+    and re-validated with ``parse_triage_policy_text`` — the worker's own loader. Raises on ANY
     invalid/oversized row so the reconcile fails loudly instead of silently under-enforcing
     what the UI reports as active."""
-    from soctalk.playbook.registry import parse_playbook_text
+    from soctalk.triage_policy.registry import parse_triage_policy_text
 
     rows = (await db.execute(
         text(
@@ -272,7 +272,7 @@ async def render_active_authored_values(
         validate_authored(dict(r["definition"]))
         doc = {**dict(r["definition"]), "status": "active", "tenant": str(tenant_id)}
         yaml_text = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)
-        parse_playbook_text(yaml_text)
+        parse_triage_policy_text(yaml_text)
         out[f"authored-{r['playbook_id']}.yaml"] = yaml_text
     return out
 

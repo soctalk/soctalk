@@ -21,7 +21,7 @@ from soctalk.core.ir.correlation import (
 from soctalk.core.ir.memoization import record_verdict, shape_key
 from soctalk.core.ir.policies import set_tenant_policy
 from soctalk.core.ir.triage import triage_event
-from soctalk.playbook.floor import FLOOR_AUDIT_ACTION
+from soctalk.triage_policy.floor import FLOOR_AUDIT_ACTION
 
 SKIP_INTEGRATION = os.getenv("SKIP_INTEGRATION", "0") == "1"
 
