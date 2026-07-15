@@ -28,7 +28,7 @@
 		try {
 			authored = await api.playbooks.listAuthored(tid);
 		} catch (e) {
-			authoredError = e instanceof Error ? e.message : 'Failed to load authored playbooks';
+			authoredError = e instanceof Error ? e.message : 'Failed to load authored triage policies';
 		} finally {
 			authoredLoading = false;
 		}
@@ -39,7 +39,7 @@
 		editorPid = '';
 		editorError = null;
 		editorText = JSON.stringify(
-			{ id: 'my-playbook', priority: 70, applies_to: { rule_groups: [] }, guardrails: [] },
+			{ id: 'my-triage-policy', priority: 70, applies_to: { rule_groups: [] }, guardrails: [] },
 			null,
 			2
 		);
@@ -78,7 +78,7 @@
 	}
 
 	async function retire(pid: string) {
-		if (!tenantId || !confirm(`Retire playbook "${pid}"? This removes it from the tenant.`))
+		if (!tenantId || !confirm(`Retire triage policy "${pid}"? This removes it from the tenant.`))
 			return;
 		try {
 			await api.playbooks.retireAuthored(tenantId, pid);
@@ -137,7 +137,7 @@
 		try {
 			playbooks = await api.playbooks.list();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load playbooks';
+			error = e instanceof Error ? e.message : 'Failed to load triage policies';
 		} finally {
 			loading = false;
 		}
@@ -170,11 +170,11 @@
 </script>
 
 <svelte:head>
-	<title>Playbooks - SocTalk</title>
+	<title>Triage Policies - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-2">
-	<h1 class="h2">Playbooks</h1>
+	<h1 class="h2">Triage Policies</h1>
 	<button class="btn variant-soft btn-sm" on:click={loadPlaybooks} disabled={loading}>
 		{#if loading}
 			<span
@@ -185,8 +185,8 @@
 	</button>
 </div>
 <p class="opacity-60 text-sm mb-6">
-	Deterministic guardrails over the AI triage loop — the LLM proposes, a playbook disposes.
-	Shows the compiled-in (built-in) playbooks that govern triage; these are vetted code and
+	Deterministic guardrails over the AI triage loop — the LLM proposes, a triage policy disposes.
+	Shows the compiled-in (built-in) triage policies that govern triage; these are vetted code and
 	read-only here.
 </p>
 
@@ -197,7 +197,7 @@
 {:else if error}
 	<div class="alert variant-filled-error"><span>Error: {error}</span></div>
 {:else if playbooks.length === 0}
-	<div class="card p-8 text-center opacity-60">No playbooks configured.</div>
+	<div class="card p-8 text-center opacity-60">No triage policies configured.</div>
 {:else}
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
 		<div class="card p-3">
@@ -343,10 +343,10 @@
 	</div>
 {/if}
 
-<!-- Authored playbooks (per-tenant, shadow/draft) -->
+<!-- Authored triage policies (per-tenant, shadow/draft) -->
 <div class="mt-10">
 	<div class="flex items-center justify-between mb-2">
-		<h2 class="h3">Authored playbooks</h2>
+		<h2 class="h3">Authored triage policies</h2>
 		{#if tenantId}
 			<div class="flex gap-2">
 				<a class="btn btn-sm variant-filled-primary" href="/playbooks/editor">+ New playbook</a>
@@ -359,11 +359,11 @@
 
 	{#if !tenantId}
 		<div class="card p-6 opacity-60 text-sm">
-			Pin a tenant (from Tenants) to author shadow playbooks for it.
+			Pin a tenant (from Tenants) to author shadow triage policies for it.
 		</div>
 	{:else}
 		<p class="opacity-60 text-sm mb-3">
-			Playbooks for this tenant, validated server-side. Activate one to govern triage (queues a
+			Triage policies for this tenant, validated server-side. Activate one to govern triage (queues a
 			worker rollout); deactivate returns it to shadow. Export to YAML for git-managed rollout.
 		</p>
 		{#if authoredError}
@@ -375,7 +375,7 @@
 		{#if authoredLoading}
 			<div class="card p-6 text-center opacity-60 text-sm">Loading…</div>
 		{:else if authored.length === 0}
-			<div class="card p-6 opacity-60 text-sm">No authored playbooks yet.</div>
+			<div class="card p-6 opacity-60 text-sm">No authored triage policies yet.</div>
 		{:else}
 			<div class="grid gap-2">
 				{#each authored as pb (pb.playbook_id)}
@@ -435,7 +435,7 @@
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
 		<div class="card p-6 max-w-2xl w-full space-y-4">
 			<h3 class="h4">
-				{editorMode === 'create' ? 'New playbook' : `Edit ${editorPid}`}
+				{editorMode === 'create' ? 'New triage policy' : `Edit ${editorPid}`}
 			</h3>
 			<p class="text-xs opacity-60">
 				Definition (JSON). Validated server-side: shadow-only, priority ≥ 60, no
