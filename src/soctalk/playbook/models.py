@@ -84,6 +84,10 @@ class Playbook(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     version: int = 1
+    # "*" (default) applies everywhere; a concrete value may be the tenant SLUG
+    # or UUID — the worker matches against both of its identities, and render.py
+    # filters the same way. Do NOT give a tenant a UUID-shaped slug: a slug that
+    # collides with another tenant's UUID makes the scope ambiguous.
     tenant: str = "*"
     # active playbooks govern; shadow playbooks are matched and evaluated for
     # audit only — decisions logged, nothing enforced (#44: shadow-run before
