@@ -446,3 +446,46 @@ class TenantPolicy(SQLModel, table=True):
     key: str = Field(primary_key=True)
     value: Any = Field(default=None, sa_column=Column(JSONB, nullable=False))
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class AuthorizationFactRow(SQLModel, table=True):
+    """Durable, tenant-scoped store for a typed AuthorizationFact (models.authorization).
+
+    The full validated fact rides in ``body`` (JSONB); the envelope fields are lifted into
+    columns for lookup. Revocation is soft (``revoked_at`` set, never a hard delete) so the
+    audit trail survives, and a superseding fact points back via ``superseded_by``. The run
+    loader consumes this store-primary (paired with alembic ``v1_0034_authorization_facts``).
+    """
+
+    __tablename__ = "authorization_facts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "fact_id", name="uq_authz_facts_tenant_factid"),
+        Index("ix_authz_facts_tenant_current", "tenant_id", "revoked_at"),
+        Index("ix_authz_facts_tenant_scope", "tenant_id", "subject", "target", "action"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(
+        sa_column=Column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    )
+    fact_id: str  # the fact's own envelope id; unique per tenant
+    kind: str  # grant | prohibition | change_freeze | entity_context
+    track: str  # account | fim
+    source_type: str  # telemetry_routine | analyst_asserted | system_asserted | connector_verified
+    trust: int
+    # queryable scope, lifted from the envelope (kind-dependent; nullable)
+    subject: str | None = None
+    target: str | None = None
+    action: str | None = None
+    entity_name: str | None = None
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+    superseded_by: str | None = None
+    # lifecycle / revocation (soft-delete)
+    revoked_at: datetime | None = None
+    revoked_by: UUID | None = None
+    revoke_reason: str | None = None
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    # the full validated fact, AUTHORIZATION_FACT_ADAPTER.dump_python(mode="json")
+    body: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
