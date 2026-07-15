@@ -51,6 +51,9 @@ integrations_router = APIRouter(
 )
 engagements_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-engagements"])
 playbooks_router = APIRouter(prefix="/api/mssp/playbooks", tags=["ir-playbooks"])
+triage_policies_router = APIRouter(
+    prefix="/api/mssp/triage-policies", tags=["ir-triage-policies"]
+)
 authored_playbooks_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-playbooks"])
 
 
@@ -945,10 +948,16 @@ class PlaybookDTO(BaseModel):
     guardrails: list[PlaybookGuardrailDTO]
 
 
+@triage_policies_router.get(
+    "",
+    response_model=list[PlaybookDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
 @playbooks_router.get(
     "",
     response_model=list[PlaybookDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    deprecated=True,
 )
 async def list_playbooks_route(request: Request) -> list[PlaybookDTO]:
     """The compiled-in (built-in) playbooks that govern triage. Deliberately
@@ -1008,9 +1017,15 @@ def _authored_dto(row: dict[str, Any]) -> AuthoredPlaybookDTO:
 
 
 @authored_playbooks_router.get(
+    "/{tenant_id}/triage-policies",
+    response_model=list[AuthoredPlaybookDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+@authored_playbooks_router.get(
     "/{tenant_id}/playbooks",
     response_model=list[AuthoredPlaybookDTO],
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    deprecated=True,
 )
 async def list_authored_playbooks_route(
     tenant_id: UUID, request: Request
@@ -1022,9 +1037,15 @@ async def list_authored_playbooks_route(
 
 
 @authored_playbooks_router.post(
+    "/{tenant_id}/triage-policies",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+@authored_playbooks_router.post(
     "/{tenant_id}/playbooks",
     response_model=AuthoredPlaybookDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+    deprecated=True,
 )
 async def create_authored_playbook_route(
     tenant_id: UUID, payload: AuthoredPlaybookRequest, request: Request
@@ -1053,9 +1074,15 @@ async def create_authored_playbook_route(
 
 
 @authored_playbooks_router.put(
+    "/{tenant_id}/triage-policies/{playbook_id}",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+@authored_playbooks_router.put(
     "/{tenant_id}/playbooks/{playbook_id}",
     response_model=AuthoredPlaybookDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+    deprecated=True,
 )
 async def update_authored_playbook_route(
     tenant_id: UUID, playbook_id: str, payload: AuthoredPlaybookRequest, request: Request
@@ -1097,8 +1124,13 @@ async def update_authored_playbook_route(
 
 
 @authored_playbooks_router.delete(
+    "/{tenant_id}/triage-policies/{playbook_id}",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+@authored_playbooks_router.delete(
     "/{tenant_id}/playbooks/{playbook_id}",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+    deprecated=True,
 )
 async def retire_authored_playbook_route(
     tenant_id: UUID, playbook_id: str, request: Request
@@ -1175,9 +1207,15 @@ async def _set_authored_and_reconcile(
 
 
 @authored_playbooks_router.post(
+    "/{tenant_id}/triage-policies/{playbook_id}/activate",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+@authored_playbooks_router.post(
     "/{tenant_id}/playbooks/{playbook_id}/activate",
     response_model=AuthoredPlaybookDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+    deprecated=True,
 )
 async def activate_authored_playbook_route(
     tenant_id: UUID, playbook_id: str, request: Request
@@ -1190,9 +1228,15 @@ async def activate_authored_playbook_route(
 
 
 @authored_playbooks_router.post(
+    "/{tenant_id}/triage-policies/{playbook_id}/deactivate",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+@authored_playbooks_router.post(
     "/{tenant_id}/playbooks/{playbook_id}/deactivate",
     response_model=AuthoredPlaybookDTO,
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+    deprecated=True,
 )
 async def deactivate_authored_playbook_route(
     tenant_id: UUID, playbook_id: str, request: Request
@@ -1204,8 +1248,13 @@ async def deactivate_authored_playbook_route(
 
 
 @authored_playbooks_router.get(
+    "/{tenant_id}/triage-policies/{playbook_id}/export",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+@authored_playbooks_router.get(
     "/{tenant_id}/playbooks/{playbook_id}/export",
     dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    deprecated=True,
 )
 async def export_authored_playbook_route(
     tenant_id: UUID, playbook_id: str, request: Request
@@ -1226,6 +1275,7 @@ __all__ = [
     "integrations_router",
     "mssp_investigations_router",
     "playbooks_router",
+    "triage_policies_router",
     "proposals_router",
     "tenant_investigations_router",
 ]
