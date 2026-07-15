@@ -16,6 +16,7 @@ import soctalk.graph.builder as builder
 from soctalk.graph.builder import (
     build_secops_graph,
     missing_required_steps,
+    route_from_resolve_playbook,
     route_from_supervisor,
 )
 from soctalk.models.authorization import (
@@ -44,13 +45,26 @@ from soctalk.playbook.guard import (
     derive_authz_class,
     evaluate_guard,
 )
-from soctalk.playbook.models import GATHER_AUTHORIZATION_CONTEXT
+from soctalk.playbook.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
 from soctalk.playbook.nodes import (
     gather_authorization_context_node,
+    operational_close_node,
     resolve_playbook_node,
     verdict_guard_node,
 )
-from soctalk.playbook.registry import PRIVILEGED_EXEC_PLAYBOOK, match_playbook
+from soctalk.playbook.operational import (
+    VETO_MALICIOUS,
+    VETO_MITRE,
+    VETO_OBSERVABLES,
+    VETO_SEVERITY,
+    VETO_UNATTESTED_CLASS,
+    operational_close_vetoes,
+)
+from soctalk.playbook.registry import (
+    AGENT_HEALTH_PLAYBOOK,
+    PRIVILEGED_EXEC_PLAYBOOK,
+    match_playbook,
+)
 from soctalk.runs_worker.main import _disposition_from_final
 
 T = datetime(2026, 7, 14, 14, 32, tzinfo=UTC)
@@ -569,3 +583,187 @@ async def test_graph_without_playbook_goes_straight_to_verdict(monkeypatch):
     # clean close commits: no context, no IOC — guard stays out of the way
     assert final["verdict"]["decision"] == "close"
     assert _disposition_from_final(final, "completed") == "close_fp"
+
+
+# ---------------------------------------------------------------------------
+# agent-health-operational playbook (the representative second playbook)
+# ---------------------------------------------------------------------------
+
+
+def _flooding_investigation(**alert_overrides: Any) -> dict[str, Any]:
+    alert = {
+        "id": "a-flood",
+        "severity": "high",
+        "level": 9,
+        "rule_id": "202",
+        "rule_description": "Agent event queue is flooded",
+        "rule_groups": ["wazuh", "agent_flooding"],
+        "mitre": {},
+        "source": {"agent_name": "web-01"},
+    }
+    alert.update(alert_overrides)
+    return {
+        "id": "run-flood",
+        "alerts": [alert],
+        "enrichments": [],
+        "findings": [],
+        "observables": [],
+        "misp_context": {},
+    }
+
+
+def test_match_playbook_agent_health_by_group_and_rule_id():
+    pb = match_playbook(_flooding_investigation())
+    assert pb is not None and pb.id == AGENT_HEALTH_PLAYBOOK.id
+    # rule id alone still ROUTES to the playbook when the groups drift — but the
+    # deterministic close then fails class attestation (tested below), so the
+    # only effect is playbook governance, never a close
+    pb2 = match_playbook(_flooding_investigation(rule_groups=["wazuh"]))
+    assert pb2 is not None and pb2.id == AGENT_HEALTH_PLAYBOOK.id
+
+
+def test_security_playbook_outranks_operational_on_double_match():
+    inv = _flooding_investigation(rule_groups=["sudo", "agent_flooding"])
+    pb = match_playbook(inv)
+    assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+
+
+_CLASS_GROUPS = AGENT_HEALTH_PLAYBOOK.applies_to.rule_groups
+
+
+def test_operational_vetoes_mirror_security_indicators():
+    assert operational_close_vetoes(_flooding_investigation(), _CLASS_GROUPS) == []
+    assert VETO_MITRE in operational_close_vetoes(
+        _flooding_investigation(mitre={"ids": ["T1499"]}), _CLASS_GROUPS
+    )
+    # legacy singular MITRE key counts too — a missed key is a bypass
+    assert VETO_MITRE in operational_close_vetoes(
+        _flooding_investigation(mitre={"id": "T1499"}), _CLASS_GROUPS
+    )
+    inv = _flooding_investigation()
+    inv["observables"] = [{"type": "ip", "value": "203.0.113.5"}]
+    assert VETO_OBSERVABLES in operational_close_vetoes(inv, _CLASS_GROUPS)
+    assert VETO_SEVERITY in operational_close_vetoes(
+        _flooding_investigation(level=12), _CLASS_GROUPS
+    )
+    inv2 = _flooding_investigation()
+    inv2["misp_context"] = {"matches": [{"value": "evil.example"}]}
+    assert VETO_MALICIOUS in operational_close_vetoes(inv2, _CLASS_GROUPS)
+
+
+def test_operational_close_requires_every_alert_to_attest_the_class():
+    """Codex full-module blocker: a correlated investigation with one agent-health
+    alert plus ANY other alert must never be closed as operational — every member
+    must carry a class group. Rule-id-only identity (groups drifted) fails the
+    attestation too, and so does an investigation with no alerts at all."""
+    mixed = _flooding_investigation()
+    mixed["alerts"].append(
+        {
+            "id": "a-auth",
+            "level": 9,
+            "rule_id": "5710",
+            "rule_description": "sshd: brute force trying to get access",
+            "rule_groups": ["syslog", "sshd"],
+            "mitre": {},
+        }
+    )
+    assert VETO_UNATTESTED_CLASS in operational_close_vetoes(mixed, _CLASS_GROUPS)
+    assert route_from_resolve_playbook(
+        {"playbook": AGENT_HEALTH_PLAYBOOK.model_dump(), "investigation": mixed}
+    ) == "supervisor"
+
+    id_only = _flooding_investigation(rule_groups=["wazuh"])
+    assert VETO_UNATTESTED_CLASS in operational_close_vetoes(id_only, _CLASS_GROUPS)
+
+    empty = {"alerts": [], "observables": []}
+    assert VETO_UNATTESTED_CLASS in operational_close_vetoes(empty, _CLASS_GROUPS)
+
+
+def test_route_from_resolve_playbook_fails_closed_toward_triage():
+    clean = {
+        "playbook": AGENT_HEALTH_PLAYBOOK.model_dump(),
+        "investigation": _flooding_investigation(),
+    }
+    assert route_from_resolve_playbook(clean) == "operational_close"
+    # any veto -> full triage
+    vetoed = dict(clean)
+    vetoed["investigation"] = _flooding_investigation(mitre={"ids": ["T1499"]})
+    assert route_from_resolve_playbook(vetoed) == "supervisor"
+    # no playbook / no disposition / unknown capability name -> full triage
+    assert route_from_resolve_playbook({"investigation": {}}) == "supervisor"
+    no_disp = dict(clean)
+    no_disp["playbook"] = PRIVILEGED_EXEC_PLAYBOOK.model_dump()
+    assert route_from_resolve_playbook(no_disp) == "supervisor"
+    unknown = dict(clean)
+    unknown["playbook"] = {**AGENT_HEALTH_PLAYBOOK.model_dump(),
+                           "deterministic_disposition": "wipe_all_alerts"}
+    assert route_from_resolve_playbook(unknown) == "supervisor"
+
+
+async def test_operational_close_node_writes_close_and_audit():
+    state = {
+        "playbook": AGENT_HEALTH_PLAYBOOK.model_dump(),
+        "investigation": _flooding_investigation(),
+    }
+    state = await operational_close_node(state)
+    assert state["supervisor_decision"]["next_action"] == "CLOSE"
+    assert state["operational_close"] is True
+    (audit,) = state["playbook_audit"]
+    assert audit["playbook"] == AGENT_HEALTH_PLAYBOOK.id
+    assert audit["disposition"] == CLOSE_OPERATIONAL
+
+
+async def test_graph_operational_close_never_touches_the_llm(monkeypatch):
+    """Representative e2e: a clean agent-health alert closes deterministically —
+    the supervisor and verdict nodes are never invoked, the worker maps it to
+    close_fp, and the terminal floor lets it commit."""
+
+    async def exploding_supervisor(state: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("supervisor must not run for an operational close")
+
+    async def exploding_verdict(state: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("verdict must not run for an operational close")
+
+    monkeypatch.setattr(builder, "supervisor_node", exploding_supervisor)
+    monkeypatch.setattr(builder, "verdict_node", exploding_verdict)
+
+    graph = build_secops_graph()
+    final = await graph.ainvoke(
+        {"investigation": _flooding_investigation()}, {"recursion_limit": 50}
+    )
+
+    assert final["operational_close"] is True
+    assert final["playbook_audit"][0]["disposition"] == CLOSE_OPERATIONAL
+    disposition = _disposition_from_final(final, "completed")
+    assert disposition == "close_fp"
+    assert apply_worker_floor(final, disposition) == ("close_fp", [])
+
+
+async def test_graph_operational_close_vetoed_falls_back_to_triage(monkeypatch):
+    """The same alert carrying a MITRE mapping is more than its class: it goes
+    through normal LLM triage (supervisor -> verdict -> guard) instead."""
+
+    async def fake_supervisor(state: dict[str, Any]) -> dict[str, Any]:
+        state["supervisor_decision"] = {"next_action": "VERDICT"}
+        return state
+
+    async def fake_verdict(state: dict[str, Any]) -> dict[str, Any]:
+        state["verdict"] = _verdict("escalate")
+        return state
+
+    async def fake_human_review(state: dict[str, Any]) -> dict[str, Any]:
+        return state
+
+    monkeypatch.setattr(builder, "supervisor_node", fake_supervisor)
+    monkeypatch.setattr(builder, "verdict_node", fake_verdict)
+    monkeypatch.setattr(builder, "human_review_node", fake_human_review)
+
+    graph = build_secops_graph()
+    final = await graph.ainvoke(
+        {"investigation": _flooding_investigation(mitre={"ids": ["T1499"]})},
+        {"recursion_limit": 50},
+    )
+
+    assert final.get("operational_close") is None
+    assert final["verdict"]["decision"] == "escalate"
+    assert _disposition_from_final(final, "completed") == "escalate"

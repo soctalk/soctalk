@@ -94,6 +94,55 @@ def _db(request: Request) -> AsyncSession:
     return session
 
 
+async def close_fp_floor_veto(
+    db: AsyncSession, *, tenant_id: UUID, investigation_id: UUID
+) -> UUID | None:
+    """Server-side safety floor for a worker ``close_fp`` (issue #43).
+
+    Returns the ACTIVE sibling investigation that vetoes the close (with the
+    audit row written), or None when the close may commit. Only a still-active
+    investigation can be vetoed into an escalate: if an analyst closed/merged
+    the case while the run was in flight, the close path already no-ops via its
+    ``WHERE status = 'active'`` guard, and converting it to an escalate would
+    create a pending review on a closed investigation. Extracted so the veto
+    logic is integration-testable without the HTTP/JWT plumbing.
+    """
+    from soctalk.core.ir.correlation import (
+        find_other_active_investigation_sharing_keys,
+    )
+    from soctalk.core.observability.audit import log_audit
+    from soctalk.playbook.floor import FLOOR_AUDIT_ACTION, VETO_ACTIVE_INCIDENT
+
+    inv_status = (
+        await db.execute(
+            text("SELECT status FROM investigations WHERE id = :c AND tenant_id = :t"),
+            {"c": str(investigation_id), "t": str(tenant_id)},
+        )
+    ).scalar_one_or_none()
+    if inv_status != "active":
+        return None
+    other = await find_other_active_investigation_sharing_keys(
+        db, tenant_id=tenant_id, investigation_id=investigation_id
+    )
+    if other is None:
+        return None
+    await log_audit(
+        db,
+        action=FLOOR_AUDIT_ACTION,
+        actor_principal="system",
+        actor_id="worker_runs",
+        tenant_id=tenant_id,
+        resource_type="investigation",
+        resource_id=str(investigation_id),
+        notes=(
+            f'{{"veto":"{VETO_ACTIVE_INCIDENT}",'
+            f'"blocked":"worker_close_fp",'
+            f'"active_incident":"{other}"}}'
+        ),
+    )
+    return other
+
+
 def _verify_worker_jwt(request: Request) -> UUID:
     from soctalk.core.tenancy.auth import verify_worker_token
 
@@ -410,53 +459,16 @@ async def complete_run(
         # never a silent drop.
         effective_disposition = payload.disposition
         if payload.status == "completed" and payload.disposition == "close_fp":
-            from soctalk.core.ir.correlation import (
-                find_other_active_investigation_sharing_keys,
+            vetoing_sibling = await close_fp_floor_veto(
+                db, tenant_id=tenant_id, investigation_id=investigation_id
             )
-            from soctalk.core.observability.audit import log_audit
-            from soctalk.playbook.floor import FLOOR_AUDIT_ACTION, VETO_ACTIVE_INCIDENT
-
-            # Only an ACTIVE investigation can be floor-vetoed into an escalate.
-            # If an analyst closed/merged the case while the run was in flight,
-            # the close path below already no-ops (WHERE status = 'active');
-            # converting it to an escalate here would create a pending review
-            # on a closed investigation.
-            inv_status = (
-                await db.execute(
-                    text(
-                        "SELECT status FROM investigations "
-                        "WHERE id = :c AND tenant_id = :t"
-                    ),
-                    {"c": str(investigation_id), "t": str(tenant_id)},
-                )
-            ).scalar_one_or_none()
-            other = None
-            if inv_status == "active":
-                other = await find_other_active_investigation_sharing_keys(
-                    db, tenant_id=tenant_id, investigation_id=investigation_id
-                )
-            if other is not None:
+            if vetoing_sibling is not None:
                 effective_disposition = "escalate"
-                await log_audit(
-                    db,
-                    action=FLOOR_AUDIT_ACTION,
-                    actor_principal="system",
-                    actor_id="worker_runs",
-                    tenant_id=tenant_id,
-                    resource_type="investigation",
-                    resource_id=str(investigation_id),
-                    notes=(
-                        f'{{"veto":"{VETO_ACTIVE_INCIDENT}",'
-                        f'"blocked":"worker_close_fp",'
-                        f'"active_incident":"{other}"}}'
-                    ),
-                )
                 logger.warning(
                     "close_floor_veto",
                     run_id=str(run_id),
                     investigation_id=str(investigation_id),
-                    veto=VETO_ACTIVE_INCIDENT,
-                    active_incident=str(other),
+                    active_incident=str(vetoing_sibling),
                 )
 
         if payload.status == "completed" and effective_disposition == "close_fp":
@@ -500,6 +512,28 @@ async def complete_run(
                 },
             )
             case_changed = (r.rowcount or 0) > 0
+
+            # Persist the graph-plane playbook audit trail for closes (issue #43):
+            # escalates carry it into pending_reviews via enrichments, but a close
+            # has no review row — without this, a deterministic operational close
+            # would leave only free-text close_reason behind.
+            playbook_audit = (payload.enrichments or {}).get("playbook_audit")
+            if case_changed and playbook_audit:
+                import json as _json
+
+                from soctalk.core.observability.audit import log_audit
+                from soctalk.playbook.floor import PLAYBOOK_AUDIT_ACTION
+
+                await log_audit(
+                    db,
+                    action=PLAYBOOK_AUDIT_ACTION,
+                    actor_principal="system",
+                    actor_id="worker_runs",
+                    tenant_id=tenant_id,
+                    resource_type="investigation",
+                    resource_id=str(investigation_id),
+                    notes=_json.dumps(playbook_audit[:5], default=str)[:4096],
+                )
         elif payload.status == "completed" and effective_disposition == "escalate":
             # Event-sourced HIL request: appends the canonical event
             # AND performs the V1-schema side effects (severity bump +

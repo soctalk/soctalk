@@ -11,12 +11,18 @@ from langgraph.graph import END, StateGraph
 from soctalk.graph.close import close_investigation_node
 from soctalk.graph.hil import human_review_node
 from soctalk.models.enums import HumanDecision, VerdictDecision
-from soctalk.playbook.models import GATHER_AUTHORIZATION_CONTEXT, KNOWN_STEP_NODES
+from soctalk.playbook.models import (
+    GATHER_AUTHORIZATION_CONTEXT,
+    KNOWN_DISPOSITIONS,
+    KNOWN_STEP_NODES,
+)
 from soctalk.playbook.nodes import (
     gather_authorization_context_node,
+    operational_close_node,
     resolve_playbook_node,
     verdict_guard_node,
 )
+from soctalk.playbook.operational import operational_close_vetoes
 from soctalk.supervisor.node import supervisor_node
 from soctalk.supervisor.verdict import verdict_node
 from soctalk.workers.cortex import cortex_worker_node
@@ -50,6 +56,41 @@ def missing_required_steps(state: dict[str, Any]) -> list[str]:
             continue
         missing.append(step)
     return missing
+
+
+def route_from_resolve_playbook(state: dict[str, Any]) -> Literal[
+    "operational_close",
+    "supervisor",
+]:
+    """Route from the resolver: a playbook with a deterministic disposition and a
+    clean security-indicator check skips the LLM entirely; everything else — no
+    playbook, no disposition, an unknown capability name, or any veto — goes to
+    full triage. Unknown names fail closed TOWARD triage: a close capability that
+    cannot be resolved must never close (pure; unit-tested).
+    """
+    playbook = state.get("playbook") or {}
+    disposition = playbook.get("deterministic_disposition")
+    if not disposition:
+        return "supervisor"
+    if disposition not in KNOWN_DISPOSITIONS:
+        logger.warning(
+            "playbook_unknown_disposition",
+            playbook=playbook.get("id"),
+            disposition=disposition,
+        )
+        return "supervisor"
+    vetoes = operational_close_vetoes(
+        state.get("investigation") or {},
+        class_rule_groups=(playbook.get("applies_to") or {}).get("rule_groups"),
+    )
+    if vetoes:
+        logger.info(
+            "operational_close_vetoed",
+            playbook=playbook.get("id"),
+            vetoes=vetoes,
+        )
+        return "supervisor"
+    return "operational_close"
 
 
 def route_from_supervisor(state: dict[str, Any]) -> Literal[
@@ -214,7 +255,8 @@ def build_secops_graph(
         Compiled StateGraph ready for execution.
 
     Graph structure:
-        START -> resolve_playbook -> supervisor
+        START -> resolve_playbook -> [operational_close | supervisor]
+        operational_close -> close_investigation
         supervisor -> [wazuh_worker | cortex_worker | misp_worker |
                        gather_authorization_context | verdict | close_investigation]
         wazuh_worker -> supervisor
@@ -246,6 +288,7 @@ def build_secops_graph(
 
     # Add nodes
     graph.add_node("resolve_playbook", resolve_playbook_node)
+    graph.add_node("operational_close", operational_close_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("wazuh_worker", wazuh_worker_node)
     graph.add_node("cortex_worker", cortex_worker_node)
@@ -258,8 +301,18 @@ def build_secops_graph(
     graph.add_node("close_investigation", close_investigation_node)
 
     # Set entry point: deterministic playbook resolution before the first LLM look.
+    # An operational-class alert with no security indicators closes without ever
+    # reaching the supervisor; everything else proceeds to triage.
     graph.set_entry_point("resolve_playbook")
-    graph.add_edge("resolve_playbook", "supervisor")
+    graph.add_conditional_edges(
+        "resolve_playbook",
+        route_from_resolve_playbook,
+        {
+            "operational_close": "operational_close",
+            "supervisor": "supervisor",
+        },
+    )
+    graph.add_edge("operational_close", "close_investigation")
 
     # Add conditional edges from supervisor
     graph.add_conditional_edges(

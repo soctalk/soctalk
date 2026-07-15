@@ -18,12 +18,20 @@ from pydantic import BaseModel, Field
 GATHER_AUTHORIZATION_CONTEXT = "gather_authorization_context"
 KNOWN_STEP_NODES = frozenset({GATHER_AUTHORIZATION_CONTEXT})
 
+# Deterministic dispositions are vetted capability names, exactly like steps: a
+# playbook references one by name and can reference nothing else. Resolution of an
+# unknown name fails closed — to FULL triage, never to a close (the safe direction
+# for a close-shaped capability).
+CLOSE_OPERATIONAL = "close_operational"
+KNOWN_DISPOSITIONS = frozenset({CLOSE_OPERATIONAL})
+
 
 class PlaybookMatch(BaseModel):
     """Alert-matching rules. Criteria are OR'd: the playbook applies when ANY listed
     criterion matches (each criterion is itself an any-of over its values)."""
 
     rule_groups: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
     # Match when the investigation carries an authorization context whose activity
     # track is listed — the definitive marker of the dual-use class this layer serves.
     authorization_tracks: list[str] = Field(default_factory=list)
@@ -41,3 +49,7 @@ class Playbook(BaseModel):
     # Vetted decision modules the guard consults (capability names; only the
     # authorization engine exists today).
     decision_modules: list[str] = Field(default_factory=list)
+    # A KNOWN_DISPOSITIONS capability applied INSTEAD of LLM triage when no
+    # security-indicator veto fires (see soctalk.playbook.operational). The class
+    # decision is deterministic; the model is invoked only for the ambiguous rest.
+    deterministic_disposition: str | None = None
