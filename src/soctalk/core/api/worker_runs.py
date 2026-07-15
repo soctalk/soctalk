@@ -193,6 +193,10 @@ class ClaimedRun(BaseModel):
     # reasons over every alert #27 grouped onto the investigation.
     alert: dict[str, Any]
     alerts: list[dict[str, Any]] = Field(default_factory=list)
+    # Store-primary authorization context (epic): the tenant's durable facts bound to this
+    # alert's activity, built at claim time. None when no activity is extractable or the store
+    # is empty; the worker then falls back to the fixture/claim authorization path.
+    authorization_context: dict[str, Any] | None = None
 
 
 class WorkerHeartbeatPayload(BaseModel):
@@ -358,6 +362,23 @@ async def claim_run(request: Request) -> ClaimedRun | None:
             for a in alert
         ]
 
+        # Store-primary authorization: bind the tenant's durable facts to this alert's
+        # activity now (the worker has no DB). Guarded — a failure never blocks a claim.
+        authz_ctx: dict[str, Any] | None = None
+        try:
+            from soctalk.core.ir.authz_shadow import authorization_context_for_alert
+
+            authz_ctx = await authorization_context_for_alert(
+                db,
+                tenant_id=tenant_id,
+                source=alert[0]["source"],
+                rule_id=alert[0]["rule_id"],
+                entities=list(alert[0]["entities"] or []),
+                ts=datetime.now(timezone.utc),
+            )
+        except Exception as exc:  # noqa: BLE001 — authz load must never block a claim
+            logger.warning("authz_context_load_failed", error=str(exc))
+
     return ClaimedRun(
         run_id=row["id"],
         investigation_id=row["investigation_id"],
@@ -369,6 +390,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
         lease_expires_at=lease_expires,
         alert=alert_payloads[0],
         alerts=alert_payloads,
+        authorization_context=authz_ctx,
     )
 
 

@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from soctalk.core.agents import api as agents_routes
 from soctalk.core.api import adapter as adapter_routes
+from soctalk.core.api import authorization as authorization_routes
 from soctalk.core.api import auth as auth_routes
 from soctalk.core.api import branding as branding_routes
 from soctalk.core.api import chat as chat_routes
@@ -236,6 +237,8 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(llm_routes.router)
     app.include_router(llm_routes.tenant_router)
     app.include_router(adapter_routes.router)
+    app.include_router(authorization_routes.router)
+    app.include_router(authorization_routes.mssp_router)
     app.include_router(worker_runs_routes.router)
     # Slug-driven tenant landing: /api/public/tenant-by-slug/{slug} —
     # no auth, returns identity + branding so the canonical UI can
