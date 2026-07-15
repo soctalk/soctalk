@@ -767,3 +767,41 @@ async def test_graph_operational_close_vetoed_falls_back_to_triage(monkeypatch):
     assert final.get("operational_close") is None
     assert final["verdict"]["decision"] == "escalate"
     assert _disposition_from_final(final, "completed") == "escalate"
+
+
+# ---------------------------------------------------------------------------
+# issue #46: kill switch (pure surface)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_close_killed_env_and_policy(monkeypatch):
+    from soctalk.playbook.floor import auto_close_killed
+
+    monkeypatch.delenv("SOCTALK_AUTO_CLOSE_KILL", raising=False)
+    assert auto_close_killed({}) is False
+    assert auto_close_killed(None) is False
+    assert auto_close_killed({"auto_close_kill": True}) is True
+    # stringly/truthy values are NOT the boolean True — a JSON "true" string in
+    # a policy row must not silently arm (same discipline as the shadow flags)
+    assert auto_close_killed({"auto_close_kill": "true"}) is False
+    assert auto_close_killed({"auto_close_kill": 1}) is False
+    for v in ("1", "true", "YES"):
+        monkeypatch.setenv("SOCTALK_AUTO_CLOSE_KILL", v)
+        assert auto_close_killed({}) is True
+    monkeypatch.setenv("SOCTALK_AUTO_CLOSE_KILL", "0")
+    assert auto_close_killed({}) is False
+
+
+def test_volume_cap_policy_parse_rejects_booleans_and_garbage():
+    """Codex #46 finding: tenant policies are unvalidated JSONB — a stray JSON
+    ``true`` must fall back to the install default, not become cap=1 (which
+    would shut off auto-close after a single close)."""
+    from soctalk.core.ir.triage import _int_policy
+
+    assert _int_policy({}, "auto_close_volume_cap", 500) == 500
+    assert _int_policy({"auto_close_volume_cap": True}, "auto_close_volume_cap", 500) == 500
+    assert _int_policy({"auto_close_volume_cap": None}, "auto_close_volume_cap", 500) == 500
+    assert _int_policy({"auto_close_volume_cap": "50"}, "auto_close_volume_cap", 500) == 50
+    assert _int_policy({"auto_close_volume_cap": "junk"}, "auto_close_volume_cap", 500) == 500
+    # explicit 0 / negative = operator intent to disable (passed through)
+    assert _int_policy({"auto_close_volume_cap": 0}, "auto_close_volume_cap", 500) == 0

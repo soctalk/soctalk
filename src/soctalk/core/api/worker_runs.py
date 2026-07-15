@@ -96,22 +96,32 @@ def _db(request: Request) -> AsyncSession:
 
 async def close_fp_floor_veto(
     db: AsyncSession, *, tenant_id: UUID, investigation_id: UUID
-) -> UUID | None:
-    """Server-side safety floor for a worker ``close_fp`` (issue #43).
+) -> str | None:
+    """Server-side safety floor for a worker ``close_fp`` (issues #43/#46).
 
-    Returns the ACTIVE sibling investigation that vetoes the close (with the
-    audit row written), or None when the close may commit. Only a still-active
-    investigation can be vetoed into an escalate: if an analyst closed/merged
-    the case while the run was in flight, the close path already no-ops via its
-    ``WHERE status = 'active'`` guard, and converting it to an escalate would
-    create a pending review on a closed investigation. Extracted so the veto
-    logic is integration-testable without the HTTP/JWT plumbing.
+    Returns the veto reason (kill switch, active key-sharing sibling, or spent
+    close-volume cap) with the audit row written, or None when the close may
+    commit. Only a still-active investigation can be vetoed into an escalate: if
+    an analyst closed/merged the case while the run was in flight, the close path
+    already no-ops via its ``WHERE status = 'active'`` guard, and converting it
+    to an escalate would create a pending review on a closed investigation.
+    Extracted so the veto logic is integration-testable without the HTTP/JWT
+    plumbing.
     """
     from soctalk.core.ir.correlation import (
         find_other_active_investigation_sharing_keys,
     )
+    from soctalk.core.ir.events import canonical_json
+    from soctalk.core.ir.policies import effective_policy
+    from soctalk.core.ir.triage import volume_cap_exceeded
     from soctalk.core.observability.audit import log_audit
-    from soctalk.playbook.floor import FLOOR_AUDIT_ACTION, VETO_ACTIVE_INCIDENT
+    from soctalk.playbook.floor import (
+        FLOOR_AUDIT_ACTION,
+        VETO_ACTIVE_INCIDENT,
+        VETO_KILL_SWITCH,
+        VETO_VOLUME_CAP,
+        auto_close_killed,
+    )
 
     inv_status = (
         await db.execute(
@@ -121,11 +131,24 @@ async def close_fp_floor_veto(
     ).scalar_one_or_none()
     if inv_status != "active":
         return None
-    other = await find_other_active_investigation_sharing_keys(
-        db, tenant_id=tenant_id, investigation_id=investigation_id
-    )
-    if other is None:
+
+    policy = await effective_policy(db, tenant_id)
+    veto: str | None = None
+    detail: dict[str, Any] = {}
+    if auto_close_killed(policy):
+        veto = VETO_KILL_SWITCH
+    else:
+        other = await find_other_active_investigation_sharing_keys(
+            db, tenant_id=tenant_id, investigation_id=investigation_id
+        )
+        if other is not None:
+            veto = VETO_ACTIVE_INCIDENT
+            detail["active_incident"] = str(other)
+        elif await volume_cap_exceeded(db, tenant_id=tenant_id, policy=policy):
+            veto = VETO_VOLUME_CAP
+    if veto is None:
         return None
+
     await log_audit(
         db,
         action=FLOOR_AUDIT_ACTION,
@@ -134,13 +157,11 @@ async def close_fp_floor_veto(
         tenant_id=tenant_id,
         resource_type="investigation",
         resource_id=str(investigation_id),
-        notes=(
-            f'{{"veto":"{VETO_ACTIVE_INCIDENT}",'
-            f'"blocked":"worker_close_fp",'
-            f'"active_incident":"{other}"}}'
-        ),
+        # canonical_json: the same compact serializer the ingest plane uses, so
+        # string-based audit filters match vetoes from every plane.
+        notes=canonical_json({"veto": veto, "blocked": "worker_close_fp", **detail}),
     )
-    return other
+    return veto
 
 
 def _verify_worker_jwt(request: Request) -> UUID:
@@ -458,17 +479,18 @@ async def complete_run(
         # has the data to check it. The close becomes an escalate (audited),
         # never a silent drop.
         effective_disposition = payload.disposition
+        floor_veto: str | None = None
         if payload.status == "completed" and payload.disposition == "close_fp":
-            vetoing_sibling = await close_fp_floor_veto(
+            floor_veto = await close_fp_floor_veto(
                 db, tenant_id=tenant_id, investigation_id=investigation_id
             )
-            if vetoing_sibling is not None:
+            if floor_veto is not None:
                 effective_disposition = "escalate"
                 logger.warning(
                     "close_floor_veto",
                     run_id=str(run_id),
                     investigation_id=str(investigation_id),
-                    active_incident=str(vetoing_sibling),
+                    veto=floor_veto,
                 )
 
         if payload.status == "completed" and effective_disposition == "close_fp":
@@ -550,8 +572,8 @@ async def complete_run(
             reason = payload.verdict_summary
             if payload.disposition == "close_fp":
                 reason = (
-                    "[SAFETY FLOOR: another active investigation shares this "
-                    f"case's entities — worker close_fp overridden] {reason or ''}"
+                    f"[SAFETY FLOOR: {floor_veto} — worker close_fp overridden] "
+                    f"{reason or ''}"
                 ).strip()[:1024]
             await record_human_review_requested(
                 db,

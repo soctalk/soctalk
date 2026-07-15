@@ -229,14 +229,17 @@ async def test_close_fp_floor_veto_helper_end_to_end(
         assert r["action"] == "promoted"
         ids.append(UUID(r["investigation_id"]))
 
-    other = await close_fp_floor_veto(
+    veto = await close_fp_floor_veto(
         mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=ids[0]
     )
     await mssp_session.commit()
-    assert other == ids[1]
+    assert veto == "active_incident"
     audits = await _floor_audit_rows(mssp_session, tenant_a.tenant_id)
+    # canonical_json (compact, sorted keys) on every plane — string-based audit
+    # filters must match worker vetoes and ingest vetoes identically.
     assert any(
         '"blocked":"worker_close_fp"' in a["notes"]
+        and str(ids[1]) in a["notes"]
         and a["resource_id"] == str(ids[0])
         for a in audits
     )
@@ -250,3 +253,94 @@ async def test_close_fp_floor_veto_helper_end_to_end(
     assert await close_fp_floor_veto(
         mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=ids[0]
     ) is None
+
+
+# ---------------------------------------------------------------------------
+# issue #46: kill switch + close-volume cap
+# ---------------------------------------------------------------------------
+
+
+async def test_kill_switch_policy_vetoes_rules_auto_close(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Per-tenant ``auto_close_kill`` flips a clean rules-band auto-close to
+    promotion, audited — no env change, no rollout."""
+    tenant_a, _ = seed_two_tenants
+    await set_tenant_policy(mssp_session, tenant_a.tenant_id, "auto_close_kill", True)
+    await mssp_session.commit()
+
+    result = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="1002", severity=1, asset_ids=["kill-1"],
+        initial_iocs=[], source_event_id="kill-sw-1", ts=datetime.now(UTC),
+        description="clean low-sev noise under kill switch",
+        evidence={"schema_version": 2},
+    )
+    await mssp_session.commit()
+    assert result["action"] == "promoted"
+    audits = await _floor_audit_rows(mssp_session, tenant_a.tenant_id)
+    assert any('"veto":"auto_close_killed"' in a["notes"] for a in audits)
+
+
+async def test_kill_switch_env_vetoes_worker_close(
+    mssp_session: AsyncSession, seed_two_tenants, monkeypatch
+):
+    """Install-wide SOCTALK_AUTO_CLOSE_KILL vetoes a worker close_fp at
+    complete_run's floor helper, regardless of tenant policy."""
+    from uuid import UUID
+
+    from soctalk.core.api.worker_runs import close_fp_floor_veto
+
+    tenant_a, _ = seed_two_tenants
+    r = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="5910", severity=9, asset_ids=["kill-2"],
+        initial_iocs=[], source_event_id="kill-env-1", ts=datetime.now(UTC),
+        description="promoted case",
+        evidence={"entities": [{"type": "host", "value": "kill-2", "role": "target"}],
+                  "mitre": {}, "schema_version": 2},
+    )
+    await mssp_session.commit()
+    inv = UUID(r["investigation_id"])
+
+    monkeypatch.setenv("SOCTALK_AUTO_CLOSE_KILL", "true")
+    assert await close_fp_floor_veto(
+        mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=inv
+    ) == "auto_close_killed"
+    monkeypatch.delenv("SOCTALK_AUTO_CLOSE_KILL")
+    assert await close_fp_floor_veto(
+        mssp_session, tenant_id=tenant_a.tenant_id, investigation_id=inv
+    ) is None
+
+
+async def test_volume_cap_vetoes_after_cap_spent(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """auto_close_volume_cap=1: the first clean auto-close commits, the second is
+    vetoed to promotion with a close_volume_cap audit row — runaway close loops
+    degrade to humans looking, never mass suppression."""
+    tenant_a, _ = seed_two_tenants
+    await set_tenant_policy(
+        mssp_session, tenant_a.tenant_id, "auto_close_volume_cap", 1
+    )
+    await mssp_session.commit()
+
+    r1 = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="1002", severity=1, asset_ids=["cap-1"],
+        initial_iocs=[], source_event_id="cap-1", ts=datetime.now(UTC),
+        description="first clean noise", evidence={"schema_version": 2},
+    )
+    await mssp_session.commit()
+    assert r1["action"] == "auto_closed", "cap not yet spent — close commits"
+
+    r2 = await triage_event(
+        mssp_session, tenant_id=tenant_a.tenant_id,
+        source="wazuh", rule_id="1003", severity=1, asset_ids=["cap-2"],
+        initial_iocs=[], source_event_id="cap-2", ts=datetime.now(UTC),
+        description="second clean noise", evidence={"schema_version": 2},
+    )
+    await mssp_session.commit()
+    assert r2["action"] == "promoted", "cap spent — close vetoed to promotion"
+    audits = await _floor_audit_rows(mssp_session, tenant_a.tenant_id)
+    assert any('"veto":"close_volume_cap"' in a["notes"] for a in audits)

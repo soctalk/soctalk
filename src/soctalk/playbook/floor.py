@@ -26,10 +26,26 @@ VETO_IOC = "ioc_present"
 VETO_UNVERIFIED_IOC = "ioc_unverified"
 VETO_ACTIVE_INCIDENT = "active_incident"
 VETO_AUTHZ_CONTRADICTED = "authorization_contradicted"
+VETO_KILL_SWITCH = "auto_close_killed"
+VETO_VOLUME_CAP = "close_volume_cap"
 
 # Audit actions on the API/IR planes (queried like other ir.* rows).
 FLOOR_AUDIT_ACTION = "ir.playbook.close_floor_veto"
 PLAYBOOK_AUDIT_ACTION = "ir.playbook.audit"
+
+
+def auto_close_killed(policy: dict[str, Any] | None = None) -> bool:
+    """The auto-close kill switch (issue #46): install-wide via the
+    ``SOCTALK_AUTO_CLOSE_KILL`` env on the API process, or per tenant via the
+    ``auto_close_kill`` policy row (a runtime flip, no rollout). Either being on
+    kills EVERY automatic close — rules band, memoized close, worker close_fp,
+    playbook operational disposition — flipping them to promote/escalate. The
+    policy flag must be a real boolean True (a stringly "false" is not True)."""
+    import os
+
+    if os.getenv("SOCTALK_AUTO_CLOSE_KILL", "").lower() in ("1", "true", "yes"):
+        return True
+    return bool(policy) and policy.get("auto_close_kill") is True
 
 
 def worker_close_vetoes(final_state: dict[str, Any]) -> list[str]:

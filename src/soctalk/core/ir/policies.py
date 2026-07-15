@@ -30,6 +30,19 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     "auto_close_threshold": 0.90,
     "auto_close_requires_ioc_anchor": True,
     "reopen_window_days": 30,
+    # Safety-floor members (issue #46) — enforced by the executor at every
+    # auto-close site (rules band, memoized close, worker close_fp incl. the
+    # playbook operational disposition), never expressible in playbook data:
+    # ``auto_close_kill`` — per-tenant kill switch: True flips every automatic
+    #   close to promote/escalate, no rollout needed (the install-wide analogue
+    #   is the SOCTALK_AUTO_CLOSE_KILL env on the API).
+    # ``auto_close_volume_cap`` — rolling cap on automatic closes per tenant
+    #   per ``auto_close_volume_window_hours``; at/above the cap further closes
+    #   are vetoed to promotion/escalation (audited) — a runaway close loop
+    #   must degrade to "humans look", not mass suppression. <= 0 disables.
+    "auto_close_kill": False,
+    "auto_close_volume_cap": 500,
+    "auto_close_volume_window_hours": 24,
     # Run budget
     "max_tokens_per_investigation": 200_000,
     "max_dollars_per_investigation": 5.0,
