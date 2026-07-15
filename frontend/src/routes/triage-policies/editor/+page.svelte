@@ -4,8 +4,8 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { currentTenantId } from '$lib/stores';
-	import ConditionBuilder from '$lib/playbook/ConditionBuilder.svelte';
-	import PlaybookFlowPreview from '$lib/playbook/PlaybookFlowPreview.svelte';
+	import ConditionBuilder from '$lib/triage-policy/ConditionBuilder.svelte';
+	import TriagePolicyFlowPreview from '$lib/triage-policy/TriagePolicyFlowPreview.svelte';
 	import {
 		AUTHORIZATION_TRACKS,
 		FILE_PRIORITY_FLOOR,
@@ -22,9 +22,9 @@
 		simulateGuard,
 		validateDefinition,
 		type GuardrailDef,
-		type PlaybookDef,
+		type TriagePolicyDef,
 		type RuleGroup
-	} from '$lib/playbook/schema';
+	} from '$lib/triage-policy/schema';
 
 	// ---------------------------------------------------------------- state
 
@@ -104,10 +104,10 @@
 		}
 	}
 
-	function buildDefinition(..._deps: unknown[]): PlaybookDef {
-		const def: PlaybookDef = { id: pid, priority: Number(priority) };
+	function buildDefinition(..._deps: unknown[]): TriagePolicyDef {
+		const def: TriagePolicyDef = { id: pid, priority: Number(priority) };
 		if (version !== 1) def.version = version;
-		const applies: PlaybookDef['applies_to'] = {};
+		const applies: TriagePolicyDef['applies_to'] = {};
 		if (csv(ruleGroupsText).length) applies.rule_groups = csv(ruleGroupsText);
 		if (csv(ruleIdsText).length) applies.rule_ids = csv(ruleIdsText);
 		const activeTracks = AUTHORIZATION_TRACKS.filter((t) => tracks[t]);
@@ -210,7 +210,7 @@
 	async function loadExisting(tid: string, id: string) {
 		try {
 			// listAuthored + find: there is no single-get endpoint yet.
-			const all = await api.playbooks.listAuthored(tid);
+			const all = await api.triagePolicies.listAuthored(tid);
 			const row = all.find((p) => p.playbook_id === id);
 			if (!row) throw new Error(`playbook '${id}' not found for this tenant`);
 			lifecycleStatus = row.status === 'draft' ? 'draft' : 'shadow';
@@ -368,8 +368,8 @@
 		saveError = null;
 		try {
 			const doc = definition as unknown as Record<string, unknown>;
-			if (mode === 'create') await api.playbooks.createAuthored(tenantId, doc, lifecycleStatus);
-			else await api.playbooks.updateAuthored(tenantId, editId!, doc, lifecycleStatus);
+			if (mode === 'create') await api.triagePolicies.createAuthored(tenantId, doc, lifecycleStatus);
+			else await api.triagePolicies.updateAuthored(tenantId, editId!, doc, lifecycleStatus);
 			goto('/playbooks');
 		} catch (e) {
 			saveError = e instanceof Error ? e.message : 'Save failed.';
@@ -654,7 +654,7 @@
 					Projection of this document onto the triage pipeline — click a guardrail to jump to it.
 				</p>
 				<div class="h-[32rem]">
-					<PlaybookFlowPreview
+					<TriagePolicyFlowPreview
 						{definition}
 						{firedNodeId}
 						compact={flowCompact}

@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type Playbook, type AuthoredPlaybook } from '$lib/api/client';
+	import { api, type TriagePolicy, type AuthoredTriagePolicy } from '$lib/api/client';
 	import { currentTenantId } from '$lib/stores';
 
-	let playbooks: Playbook[] = [];
+	let playbooks: TriagePolicy[] = [];
 	let loading = true;
 	let error: string | null = null;
 	let expanded = new Set<string>();
 
 	// --- authored (per-tenant, shadow/draft) ---
-	let authored: AuthoredPlaybook[] = [];
+	let authored: AuthoredTriagePolicy[] = [];
 	let authoredLoading = false;
 	let authoredError: string | null = null;
 	let editorOpen = false;
@@ -26,7 +26,7 @@
 		authoredLoading = true;
 		authoredError = null;
 		try {
-			authored = await api.playbooks.listAuthored(tid);
+			authored = await api.triagePolicies.listAuthored(tid);
 		} catch (e) {
 			authoredError = e instanceof Error ? e.message : 'Failed to load authored triage policies';
 		} finally {
@@ -46,7 +46,7 @@
 		editorOpen = true;
 	}
 
-	function openEdit(pb: AuthoredPlaybook) {
+	function openEdit(pb: AuthoredTriagePolicy) {
 		editorMode = 'edit';
 		editorPid = pb.playbook_id;
 		editorError = null;
@@ -66,8 +66,8 @@
 		editorSaving = true;
 		editorError = null;
 		try {
-			if (editorMode === 'create') await api.playbooks.createAuthored(tenantId, def);
-			else await api.playbooks.updateAuthored(tenantId, editorPid, def);
+			if (editorMode === 'create') await api.triagePolicies.createAuthored(tenantId, def);
+			else await api.triagePolicies.updateAuthored(tenantId, editorPid, def);
 			editorOpen = false;
 			await loadAuthored(tenantId);
 		} catch (e) {
@@ -81,7 +81,7 @@
 		if (!tenantId || !confirm(`Retire triage policy "${pid}"? This removes it from the tenant.`))
 			return;
 		try {
-			await api.playbooks.retireAuthored(tenantId, pid);
+			await api.triagePolicies.retireAuthored(tenantId, pid);
 			await loadAuthored(tenantId);
 		} catch (e) {
 			authoredError = e instanceof Error ? e.message : 'Retire failed.';
@@ -91,7 +91,7 @@
 	async function exportYaml(pid: string) {
 		if (!tenantId) return;
 		try {
-			const res = await api.playbooks.exportAuthored(tenantId, pid);
+			const res = await api.triagePolicies.exportAuthored(tenantId, pid);
 			const blob = new Blob([res.yaml], { type: 'text/yaml' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -110,8 +110,8 @@
 		if (!tenantId) return;
 		authoredError = null;
 		try {
-			if (active) await api.playbooks.activateAuthored(tenantId, pid);
-			else await api.playbooks.deactivateAuthored(tenantId, pid);
+			if (active) await api.triagePolicies.activateAuthored(tenantId, pid);
+			else await api.triagePolicies.deactivateAuthored(tenantId, pid);
 			rolloutNote = active
 				? `Activating "${pid}" — a worker rollout was queued; it governs once the reconcile completes.`
 				: `Deactivating "${pid}" — a worker rollout was queued.`;
@@ -135,7 +135,7 @@
 		loading = true;
 		error = null;
 		try {
-			playbooks = await api.playbooks.list();
+			playbooks = await api.triagePolicies.list();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load triage policies';
 		} finally {
@@ -156,7 +156,7 @@
 		return source === 'built-in' ? 'variant-soft' : 'variant-soft-primary';
 	}
 
-	function matchSummary(pb: Playbook): string {
+	function matchSummary(pb: TriagePolicy): string {
 		const parts: string[] = [];
 		const m = pb.applies_to;
 		if (m.rule_groups.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
@@ -349,7 +349,7 @@
 		<h2 class="h3">Authored triage policies</h2>
 		{#if tenantId}
 			<div class="flex gap-2">
-				<a class="btn btn-sm variant-filled-primary" href="/playbooks/editor">+ New playbook</a>
+				<a class="btn btn-sm variant-filled-primary" href="/triage-policies/editor">+ New playbook</a>
 				<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">
 					JSON
 				</button>
@@ -403,7 +403,7 @@
 							{/if}
 							<a
 								class="btn btn-sm variant-filled-primary"
-								href="/playbooks/editor?id={encodeURIComponent(pb.playbook_id)}"
+								href="/triage-policies/editor?id={encodeURIComponent(pb.playbook_id)}"
 							>
 								Edit
 							</a>

@@ -151,7 +151,7 @@ export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 export const MAX_DEFINITION_BYTES = 64 * 1024;
 export const MAX_REASON_LEN = 512;
 
-/** Top-level fields an authored definition may carry (Playbook is extra="forbid";
+/** Top-level fields an authored definition may carry (TriagePolicy is extra="forbid";
  * deterministic_disposition is built-in-only and rejected for authored docs). */
 export const AUTHORABLE_FIELDS = new Set([
 	'id',
@@ -180,7 +180,7 @@ export interface GuardrailDef {
 	reason: string;
 }
 
-export interface PlaybookDef {
+export interface TriagePolicyDef {
 	id: string;
 	version?: number;
 	tenant?: string;
@@ -501,7 +501,7 @@ export interface SimOutcome {
 
 /** What the guard would do to a draft verdict — floor edges, then first-match
  * guardrail (raise-only overrides), then close sign-off, mirroring guard.py. */
-export function simulateGuard(def: PlaybookDef, ctx: Record<string, unknown>): SimOutcome {
+export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>): SimOutcome {
 	const verdict = String(lookup(ctx, 'verdict') ?? '');
 	const ioc = Boolean(lookup(ctx, 'enrichment.ioc'));
 	const authzClass = String(lookup(ctx, 'authz.class') ?? 'absent');

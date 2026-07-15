@@ -17,9 +17,9 @@
 	import '@xyflow/svelte/dist/style.css';
 	import dagre from '@dagrejs/dagre';
 	import FlowNode from './FlowNode.svelte';
-	import { conditionToSentence, type PlaybookDef } from './schema';
+	import { conditionToSentence, type TriagePolicyDef } from './schema';
 
-	export let definition: PlaybookDef;
+	export let definition: TriagePolicyDef;
 	/** Node id the Try-it simulation says would dispose the draft — highlighted. */
 	export let firedNodeId: string | null = null;
 	/** Compact mode: intake chain merged into one node, subtitles hidden. */
@@ -36,7 +36,7 @@
 	// the projected structure changes so it re-fits (cheap at this graph size).
 	let layoutKey = '';
 
-	function matchSummary(def: PlaybookDef): string {
+	function matchSummary(def: TriagePolicyDef): string {
 		const m = def.applies_to ?? {};
 		const parts: string[] = [];
 		if (m.rule_groups?.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
@@ -90,7 +90,7 @@
 
 	// ------------------------------------------------------------- projection
 
-	function rebuild(def: PlaybookDef, dense: boolean) {
+	function rebuild(def: TriagePolicyDef, dense: boolean) {
 		const ns: Node[] = [];
 		const es: Edge[] = [];
 		const outcomesUsed = new Map<string, string>();
