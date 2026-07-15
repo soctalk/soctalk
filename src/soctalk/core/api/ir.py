@@ -25,10 +25,20 @@ from soctalk.core.ir.runtime import (
     consume_new_events,
     reject_proposal,
 )
+from soctalk.core.observability.audit import log_audit
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_role, require_tenant_role
 from soctalk.core.tenancy.models import Role
+from soctalk.playbook.authoring import (
+    PlaybookConflictError,
+    PlaybookValidationError,
+    get_authored,
+    list_authored,
+    retire_authored,
+    to_yaml,
+    upsert_authored,
+)
 from soctalk.playbook.registry import BUILTIN_PLAYBOOKS
 
 mssp_investigations_router = APIRouter(prefix="/api/mssp/investigations", tags=["ir-mssp"])
@@ -40,6 +50,7 @@ integrations_router = APIRouter(
 )
 engagements_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-engagements"])
 playbooks_router = APIRouter(prefix="/api/mssp/playbooks", tags=["ir-playbooks"])
+authored_playbooks_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-playbooks"])
 
 
 # ---------------------------------------------------------------------------
@@ -971,8 +982,150 @@ async def list_playbooks_route(request: Request) -> list[PlaybookDTO]:
     ]
 
 
+# --- authored playbooks (DB-backed shadow/draft + export) ---
+
+
+class AuthoredPlaybookRequest(BaseModel):
+    definition: dict[str, Any]
+    status: str = "shadow"  # draft | shadow (authoring lifecycle; never active)
+
+
+class AuthoredPlaybookDTO(BaseModel):
+    playbook_id: str
+    revision: int
+    status: str
+    definition: dict[str, Any]
+
+
+def _authored_dto(row: dict[str, Any]) -> AuthoredPlaybookDTO:
+    return AuthoredPlaybookDTO(
+        playbook_id=row["playbook_id"],
+        revision=row["revision"],
+        status=row["status"],
+        definition=dict(row["definition"]),
+    )
+
+
+@authored_playbooks_router.get(
+    "/{tenant_id}/playbooks",
+    response_model=list[AuthoredPlaybookDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def list_authored_playbooks_route(
+    tenant_id: UUID, request: Request
+) -> list[AuthoredPlaybookDTO]:
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        rows = await list_authored(db, tenant_id=tenant_id)
+    return [_authored_dto(r) for r in rows]
+
+
+@authored_playbooks_router.post(
+    "/{tenant_id}/playbooks",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def create_authored_playbook_route(
+    tenant_id: UUID, payload: AuthoredPlaybookRequest, request: Request
+) -> AuthoredPlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        pid = str(payload.definition.get("id") or "")
+        if pid and await get_authored(db, tenant_id=tenant_id, playbook_id=pid) is not None:
+            raise HTTPException(409, f"playbook '{pid}' already exists — use PUT to edit")
+        try:
+            result = await upsert_authored(
+                db, tenant_id=tenant_id, definition=payload.definition,
+                status=payload.status, created_by=identity.user_id,
+            )
+        except PlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except PlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        await log_audit(
+            db, action="ir.playbook.authored_created",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="playbook", resource_id=result["playbook_id"],
+        )
+    return _authored_dto(result)
+
+
+@authored_playbooks_router.put(
+    "/{tenant_id}/playbooks/{playbook_id}",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def update_authored_playbook_route(
+    tenant_id: UUID, playbook_id: str, payload: AuthoredPlaybookRequest, request: Request
+) -> AuthoredPlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    if str(payload.definition.get("id") or "") != playbook_id:
+        raise HTTPException(400, "definition.id must match the playbook id in the path")
+    async with tenant_context(db, tenant_id):
+        if await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id) is None:
+            raise HTTPException(404, "playbook not found")
+        try:
+            result = await upsert_authored(
+                db, tenant_id=tenant_id, definition=payload.definition,
+                status=payload.status, created_by=identity.user_id,
+            )
+        except PlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except PlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        await log_audit(
+            db, action="ir.playbook.authored_updated",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+            notes=f"revision {result['revision']}",
+        )
+    return _authored_dto(result)
+
+
+@authored_playbooks_router.delete(
+    "/{tenant_id}/playbooks/{playbook_id}",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def retire_authored_playbook_route(
+    tenant_id: UUID, playbook_id: str, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        ok = await retire_authored(
+            db, tenant_id=tenant_id, playbook_id=playbook_id, retired_by=identity.user_id,
+        )
+        if not ok:
+            raise HTTPException(404, "playbook not found or already retired")
+        await log_audit(
+            db, action="ir.playbook.authored_retired",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+        )
+    return {"ok": "retired"}
+
+
+@authored_playbooks_router.get(
+    "/{tenant_id}/playbooks/{playbook_id}/export",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+)
+async def export_authored_playbook_route(
+    tenant_id: UUID, playbook_id: str, request: Request
+) -> dict[str, str]:
+    """Export the authored definition as YAML for git / worker rollout (activation)."""
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        row = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
+    if row is None:
+        raise HTTPException(404, "playbook not found")
+    return {"playbook_id": playbook_id, "yaml": to_yaml(dict(row["definition"]))}
+
+
 __all__ = [
     "alerts_router",
+    "authored_playbooks_router",
     "engagements_router",
     "integrations_router",
     "mssp_investigations_router",

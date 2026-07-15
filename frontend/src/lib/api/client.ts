@@ -436,6 +436,13 @@ export interface Playbook {
 	guardrails: PlaybookGuardrail[];
 }
 
+export interface AuthoredPlaybook {
+	playbook_id: string;
+	revision: number;
+	status: string;
+	definition: Record<string, unknown>;
+}
+
 // API methods
 export const api = {
 	auth: {
@@ -763,7 +770,32 @@ export const api = {
 	},
 
 	playbooks: {
-		list: () => request<Playbook[]>('/mssp/playbooks')
+		list: () => request<Playbook[]>('/mssp/playbooks'),
+		listAuthored: (tenantId: string) =>
+			request<AuthoredPlaybook[]>(`/mssp/tenants/${tenantId}/playbooks`),
+		createAuthored: (tenantId: string, definition: Record<string, unknown>, status = 'shadow') =>
+			request<AuthoredPlaybook>(`/mssp/tenants/${tenantId}/playbooks`, {
+				method: 'POST',
+				body: JSON.stringify({ definition, status })
+			}),
+		updateAuthored: (
+			tenantId: string,
+			playbookId: string,
+			definition: Record<string, unknown>,
+			status = 'shadow'
+		) =>
+			request<AuthoredPlaybook>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
+				method: 'PUT',
+				body: JSON.stringify({ definition, status })
+			}),
+		retireAuthored: (tenantId: string, playbookId: string) =>
+			request<{ ok: string }>(`/mssp/tenants/${tenantId}/playbooks/${playbookId}`, {
+				method: 'DELETE'
+			}),
+		exportAuthored: (tenantId: string, playbookId: string) =>
+			request<{ playbook_id: string; yaml: string }>(
+				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/export`
+			)
 	}
 	};
 
