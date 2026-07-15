@@ -17,14 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 os.environ.setdefault("SOCTALK_JWT_SIGNING_KEY", "test-signing-key-32-bytes-plaintext")
 os.environ.setdefault("SOCTALK_ADAPTER_SIGNING_KEY", "adapter-signing-key-32-bytes-plaintext")
 
+from sqlalchemy import text  # noqa: E402
+
 from soctalk.core.api.ir import (  # noqa: E402
     AuthoredPlaybookRequest,
+    activate_authored_playbook_route,
     create_authored_playbook_route,
+    deactivate_authored_playbook_route,
     export_authored_playbook_route,
     list_authored_playbooks_route,
     retire_authored_playbook_route,
     update_authored_playbook_route,
 )
+from soctalk.playbook.authoring import render_active_authored_values  # noqa: E402
 
 SKIP_INTEGRATION = os.getenv("SKIP_INTEGRATION", "0") == "1"
 
@@ -125,6 +130,50 @@ async def test_invalid_definitions_rejected(mssp_session, seed_two_tenants, bad)
     with pytest.raises(HTTPException) as ei:
         await create_authored_playbook_route(t.tenant_id, payload, _req(mssp_session))
     assert ei.value.status_code == 400
+
+
+async def _reconcile_jobs(session, tenant_id):
+    return (await session.execute(
+        text("SELECT count(*) FROM provisioning_jobs WHERE tenant_id = :t "
+             "AND kind = 'tenant.reconcile' AND status = 'pending'"),
+        {"t": str(tenant_id)},
+    )).scalar_one()
+
+
+async def test_activate_deactivate_governs_and_reconciles(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    t, _ = seed_two_tenants  # seeded tenants are ACTIVE → activation enqueues a reconcile
+    req = _req(mssp_session)
+    await create_authored_playbook_route(t.tenant_id, _valid(id="gov-pb"), req)
+    await mssp_session.commit()
+
+    # not active yet → not delivered
+    assert await render_active_authored_values(mssp_session, tenant_id=t.tenant_id) == {}
+
+    activated = await activate_authored_playbook_route(t.tenant_id, "gov-pb", req)
+    await mssp_session.commit()
+    assert activated.status == "active"
+    assert await _reconcile_jobs(mssp_session, t.tenant_id) >= 1
+
+    # now materialized for chart delivery, status forced active in the YAML
+    rendered = await render_active_authored_values(mssp_session, tenant_id=t.tenant_id)
+    assert set(rendered) == {"authored-gov-pb.yaml"}
+    doc = yaml.safe_load(rendered["authored-gov-pb.yaml"])
+    assert doc["id"] == "gov-pb" and doc["status"] == "active"
+    assert doc["tenant"] == str(t.tenant_id)
+
+    deactivated = await deactivate_authored_playbook_route(t.tenant_id, "gov-pb", req)
+    await mssp_session.commit()
+    assert deactivated.status == "shadow"
+    assert await render_active_authored_values(mssp_session, tenant_id=t.tenant_id) == {}
+
+
+async def test_activate_unknown_returns_404(mssp_session: AsyncSession, seed_two_tenants):
+    t, _ = seed_two_tenants
+    with pytest.raises(HTTPException) as ei:
+        await activate_authored_playbook_route(t.tenant_id, "ghost", _req(mssp_session))
+    assert ei.value.status_code == 404
 
 
 async def test_oversized_definition_rejected(mssp_session: AsyncSession, seed_two_tenants):

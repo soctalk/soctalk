@@ -182,7 +182,7 @@ class ControllerSettings:
     tenant_network_policies_enabled: bool = True
 
     @classmethod
-    def from_env(cls) -> "ControllerSettings":
+    def from_env(cls) -> ControllerSettings:
         ns = os.getenv("SOCTALK_SYSTEM_NS", "soctalk-system")
         release = os.getenv("SOCTALK_SYSTEM_RELEASE_NAME", "soctalk-system")
         return cls(
@@ -260,7 +260,7 @@ class TenantController:
 
     def __init__(
         self,
-        session: "AsyncSession",
+        session: AsyncSession,
         *,
         k8s: K8sClient | None = None,
         settings: ControllerSettings | None = None,
@@ -1002,10 +1002,19 @@ class TenantController:
             f"{self.settings.api_service_name}."
             f"{self.settings.soctalk_system_namespace}.svc.cluster.local"
         )
+        # Materialize DB-authored ACTIVE playbooks into the tenant chart values (#44).
+        # Fail-closed: an invalid/oversized active row raises here → the reconcile step
+        # fails → the job surfaces the failure (never a silent "active but not governing").
+        from soctalk.playbook.authoring import render_active_authored_values
+
+        authored_pb = await render_active_authored_values(
+            self.session, tenant_id=ctx.tenant.id
+        )
         values = render_tenant_values(
             tenant=ctx.tenant,
             integration=ctx.integration,
             branding=ctx.branding,
+            authored_playbooks=authored_pb,
             mssp_id=str(ctx.organization.mssp_id),
             install_id=str(ctx.organization.install_id),
             llm_secret_name=ctx.llm_secret_name,

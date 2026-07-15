@@ -795,6 +795,16 @@ export const api = {
 		exportAuthored: (tenantId: string, playbookId: string) =>
 			request<{ playbook_id: string; yaml: string }>(
 				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/export`
+			),
+		activateAuthored: (tenantId: string, playbookId: string) =>
+			request<AuthoredPlaybook>(
+				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/activate`,
+				{ method: 'POST' }
+			),
+		deactivateAuthored: (tenantId: string, playbookId: string) =>
+			request<AuthoredPlaybook>(
+				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/deactivate`,
+				{ method: 'POST' }
 			)
 	}
 	};

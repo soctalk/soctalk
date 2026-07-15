@@ -104,6 +104,31 @@
 		}
 	}
 
+	let rolloutNote: string | null = null;
+
+	async function setActive(pid: string, active: boolean) {
+		if (!tenantId) return;
+		authoredError = null;
+		try {
+			if (active) await api.playbooks.activateAuthored(tenantId, pid);
+			else await api.playbooks.deactivateAuthored(tenantId, pid);
+			rolloutNote = active
+				? `Activating "${pid}" — a worker rollout was queued; it governs once the reconcile completes.`
+				: `Deactivating "${pid}" — a worker rollout was queued.`;
+			await loadAuthored(tenantId);
+		} catch (e) {
+			authoredError = e instanceof Error ? e.message : 'Activation change failed.';
+		}
+	}
+
+	function authoredStatusBadge(s: string): string {
+		return s === 'active'
+			? 'variant-filled-success'
+			: s === 'shadow'
+				? 'variant-soft-warning'
+				: 'variant-soft';
+	}
+
 	onMount(loadPlaybooks);
 
 	async function loadPlaybooks() {
@@ -333,11 +358,14 @@
 		</div>
 	{:else}
 		<p class="opacity-60 text-sm mb-3">
-			Shadow/draft playbooks for this tenant, validated server-side. Authored playbooks never
-			govern triage directly — export to YAML and roll out via the worker to activate.
+			Playbooks for this tenant, validated server-side. Activate one to govern triage (queues a
+			worker rollout); deactivate returns it to shadow. Export to YAML for git-managed rollout.
 		</p>
 		{#if authoredError}
 			<div class="alert variant-filled-error mb-3"><span>{authoredError}</span></div>
+		{/if}
+		{#if rolloutNote}
+			<div class="alert variant-soft-primary mb-3 text-sm"><span>{rolloutNote}</span></div>
 		{/if}
 		{#if authoredLoading}
 			<div class="card p-6 text-center opacity-60 text-sm">Loading…</div>
@@ -349,10 +377,25 @@
 					<div class="card p-4 flex items-center justify-between gap-3">
 						<div class="flex items-center gap-2 min-w-0">
 							<span class="font-mono font-semibold truncate">{pb.playbook_id}</span>
-							<span class="badge variant-soft-warning text-xs">{pb.status}</span>
+							<span class="badge {authoredStatusBadge(pb.status)} text-xs">{pb.status}</span>
 							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
 						</div>
 						<div class="flex items-center gap-2 flex-shrink-0">
+							{#if pb.status === 'active'}
+								<button
+									class="btn btn-sm variant-soft"
+									on:click={() => setActive(pb.playbook_id, false)}
+								>
+									Deactivate
+								</button>
+							{:else}
+								<button
+									class="btn btn-sm variant-filled-success"
+									on:click={() => setActive(pb.playbook_id, true)}
+								>
+									Activate
+								</button>
+							{/if}
 							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)}>Edit</button>
 							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.playbook_id)}>
 								Export

@@ -206,6 +206,68 @@ async def retire_authored(
     return True
 
 
+async def set_authored_status(
+    db: AsyncSession, *, tenant_id: UUID, playbook_id: str, status: str,
+    created_by: UUID | None = None,
+) -> dict[str, Any] | None:
+    """Activate ('active') or deactivate ('shadow') an authored playbook by appending a
+    status revision. Re-validates the stored definition fail-closed before it can govern
+    (Codex: old rows must re-clear the validator). Returns the new state, or None if the
+    playbook doesn't exist / is retired."""
+    if status not in ("active", "shadow"):
+        raise PlaybookValidationError("status must be 'active' or 'shadow'")
+    latest = await _latest_revision(db, tenant_id=tenant_id, playbook_id=playbook_id)
+    if latest is None or latest["status"] == "retired":
+        return None
+    definition = dict(latest["definition"])
+    validate_authored(definition)  # fail-closed; unsafe stored rows can't be activated
+    revision = latest["revision"] + 1
+    try:
+        await _insert_revision(
+            db, tenant_id=tenant_id, playbook_id=playbook_id, revision=revision,
+            status=status, definition=definition, created_by=created_by,
+        )
+        await db.flush()
+    except IntegrityError as exc:
+        raise PlaybookConflictError("a concurrent edit collided — reload and retry") from exc
+    return {"playbook_id": playbook_id, "revision": revision, "status": status,
+            "definition": definition}
+
+
+async def render_active_authored_values(
+    db: AsyncSession, *, tenant_id: UUID
+) -> dict[str, str]:
+    """Active authored playbooks as ``{configmap_filename: yaml_text}`` for chart delivery.
+
+    FAIL-CLOSED: each active row is rendered to YAML (status forced 'active', tenant pinned)
+    and re-validated with ``parse_playbook_text`` — the worker's own loader. Raises on ANY
+    invalid/oversized row so the reconcile fails loudly instead of silently under-enforcing
+    what the UI reports as active."""
+    from soctalk.playbook.registry import parse_playbook_text
+
+    rows = (await db.execute(
+        text(
+            """
+            SELECT DISTINCT ON (playbook_id) playbook_id, revision, status, definition
+            FROM authored_playbook_revisions
+            WHERE tenant_id = :t
+            ORDER BY playbook_id, revision DESC
+            """
+        ),
+        {"t": str(tenant_id)},
+    )).mappings().all()
+
+    out: dict[str, str] = {}
+    for r in rows:
+        if r["status"] != "active":
+            continue
+        doc = {**dict(r["definition"]), "status": "active", "tenant": str(tenant_id)}
+        yaml_text = yaml.safe_dump(doc, sort_keys=True, default_flow_style=False)
+        parse_playbook_text(yaml_text)  # fail-closed: raises on any problem
+        out[f"authored-{r['playbook_id']}.yaml"] = yaml_text
+    return out
+
+
 def to_yaml(definition: dict[str, Any]) -> str:
     """Export an authored definition as YAML for git / worker rollout. The author sets
     ``status: active`` in git when promoting — export keeps it shadow."""

@@ -36,6 +36,7 @@ from soctalk.playbook.authoring import (
     get_authored,
     list_authored,
     retire_authored,
+    set_authored_status,
     to_yaml,
     upsert_authored,
 )
@@ -1094,6 +1095,7 @@ async def retire_authored_playbook_route(
     db = _db(request)
     identity = current_identity(request)
     async with tenant_context(db, tenant_id):
+        prior = await get_authored(db, tenant_id=tenant_id, playbook_id=playbook_id)
         ok = await retire_authored(
             db, tenant_id=tenant_id, playbook_id=playbook_id, retired_by=identity.user_id,
         )
@@ -1104,7 +1106,90 @@ async def retire_authored_playbook_route(
             actor_principal="analyst", actor_id=str(identity.user_id),
             tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
         )
+        # Retiring a governing playbook must stop it governing.
+        if prior is not None and prior["status"] == "active":
+            await _enqueue_playbook_reconcile(db, tenant_id)
     return {"ok": "retired"}
+
+
+async def _enqueue_playbook_reconcile(db: AsyncSession, tenant_id: UUID) -> None:
+    """Queue a tenant reconcile so an activation/deactivation re-renders the ConfigMap and
+    rolls the worker (rollout is the activation gate, same as an LLM-key rotation). No-op for
+    non-ACTIVE tenants (no live worker); the active-job unique index makes it idempotent."""
+    from sqlalchemy import select
+
+    from soctalk.core.tenancy.models import ProvisioningJob, Tenant, TenantState
+
+    state = (
+        await db.execute(select(Tenant.state).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if state != TenantState.ACTIVE.value:
+        return
+    existing = (
+        await db.execute(
+            select(ProvisioningJob).where(
+                ProvisioningJob.tenant_id == tenant_id,
+                ProvisioningJob.kind == "tenant.reconcile",
+                ProvisioningJob.status.in_(["pending", "in_flight"]),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(ProvisioningJob(tenant_id=tenant_id, kind="tenant.reconcile", status="pending"))
+
+
+async def _set_authored_and_reconcile(
+    tenant_id: UUID, playbook_id: str, status: str, request: Request, action: str
+) -> AuthoredPlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        try:
+            result = await set_authored_status(
+                db, tenant_id=tenant_id, playbook_id=playbook_id, status=status,
+                created_by=identity.user_id,
+            )
+        except PlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except PlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        if result is None:
+            raise HTTPException(404, "playbook not found or retired")
+        await log_audit(
+            db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="playbook", resource_id=playbook_id,
+        )
+        await _enqueue_playbook_reconcile(db, tenant_id)
+    return _authored_dto(result)
+
+
+@authored_playbooks_router.post(
+    "/{tenant_id}/playbooks/{playbook_id}/activate",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def activate_authored_playbook_route(
+    tenant_id: UUID, playbook_id: str, request: Request
+) -> AuthoredPlaybookDTO:
+    """Activate an authored playbook so it governs triage. Materialized into the tenant's
+    playbook ConfigMap on the queued reconcile (rollout is the activation gate)."""
+    return await _set_authored_and_reconcile(
+        tenant_id, playbook_id, "active", request, "ir.playbook.authored_activated"
+    )
+
+
+@authored_playbooks_router.post(
+    "/{tenant_id}/playbooks/{playbook_id}/deactivate",
+    response_model=AuthoredPlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def deactivate_authored_playbook_route(
+    tenant_id: UUID, playbook_id: str, request: Request
+) -> AuthoredPlaybookDTO:
+    """Deactivate (back to shadow) — the reconcile drops it from the ConfigMap."""
+    return await _set_authored_and_reconcile(
+        tenant_id, playbook_id, "shadow", request, "ir.playbook.authored_deactivated"
+    )
 
 
 @authored_playbooks_router.get(
