@@ -246,7 +246,7 @@ def evaluate_guard(
                     continue  # raise-only: a non-raising override never fires
                 overrides.append(
                     GuardOverride(
-                        guardrail=f"playbook_guardrail_{i}",
+                        guardrail=f"triage_policy_guardrail_{i}",
                         from_decision=verdict_decision,
                         to_decision=to,
                         reason=reason,
@@ -258,7 +258,7 @@ def evaluate_guard(
                 interrupted = True
                 overrides.append(
                     GuardOverride(
-                        guardrail=f"playbook_guardrail_{i}",
+                        guardrail=f"triage_policy_guardrail_{i}",
                         effect="interrupt",
                         from_decision=verdict_decision,
                         to_decision="human_review",
@@ -331,8 +331,8 @@ def shadow_guardrail_audits(
             audits.append(
                 {
                     "shadow": True,
-                    "playbook": pb.get("id"),
-                    "guardrail": f"playbook_guardrail_{i}",
+                    "triage_policy": pb.get("id"),
+                    "guardrail": f"triage_policy_guardrail_{i}",
                     "would_effect": rule.get("effect"),
                     "would_to": to,
                     "reason": str(rule.get("reason") or "")[:512],

@@ -35,17 +35,17 @@ def missing_required_steps(state: dict[str, Any]) -> list[str]:
     playbook is logged and skipped rather than deadlocking the run (there is nowhere
     to route to, and the post-verdict guard still enforces the floor edges).
     """
-    playbook = state.get("playbook") or {}
-    required = playbook.get("required_steps") or []
-    done = set(state.get("playbook_steps_run") or [])
+    triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
+    required = triage_policy.get("required_steps") or []
+    done = set((state.get("triage_policy_steps_run") or state.get("playbook_steps_run")) or [])
     missing = []
     for step in required:
         if step in done:
             continue
         if step not in KNOWN_STEP_NODES:
             logger.warning(
-                "playbook_unknown_required_step",
-                playbook=playbook.get("id"),
+                "triage_policy_unknown_required_step",
+                triage_policy=triage_policy.get("id"),
                 step=step,
             )
             continue
@@ -66,8 +66,8 @@ def legal_actions_for(state: dict[str, Any]) -> frozenset[str] | None:
     warning — and if that leaves an empty set, the constraint is VOID (None):
     an authoring error must degrade to full triage, never to a wedged run.
     """
-    playbook = state.get("playbook") or {}
-    legal_map = playbook.get("legal_actions") or {}
+    triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
+    legal_map = triage_policy.get("legal_actions") or {}
     if not legal_map:
         return None
     actions = legal_map.get(triage_policy_phase(state))
@@ -77,8 +77,8 @@ def legal_actions_for(state: dict[str, Any]) -> frozenset[str] | None:
     dropped = {str(a).upper() for a in actions} - valid
     if dropped:
         logger.warning(
-            "playbook_unknown_legal_actions",
-            playbook=playbook.get("id"),
+            "triage_policy_unknown_legal_actions",
+            triage_policy=triage_policy.get("id"),
             dropped=sorted(dropped),
         )
     return valid or None

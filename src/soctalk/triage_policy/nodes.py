@@ -43,22 +43,22 @@ async def resolve_triage_policy_node(state: dict[str, Any]) -> dict[str, Any]:
     Matching SHADOW playbooks are recorded alongside (#44) — their guardrails get
     would-fire audit records at the guard, but they never govern anything."""
     investigation = state.get("investigation", {}) or {}
-    playbook = match_triage_policy(investigation)
-    if playbook is not None:
-        state["playbook"] = playbook.model_dump()
+    triage_policy = match_triage_policy(investigation)
+    if triage_policy is not None:
+        state["triage_policy"] = state["playbook"] = triage_policy.model_dump()
         logger.info(
-            "playbook_resolved",
-            playbook=playbook.id,
-            version=playbook.version,
-            required_steps=playbook.required_steps,
+            "triage_policy_resolved",
+            triage_policy=triage_policy.id,
+            version=triage_policy.version,
+            required_steps=triage_policy.required_steps,
         )
     else:
-        logger.debug("playbook_none_matched")
+        logger.debug("triage_policy_none_matched")
     shadow = match_shadow_triage_policies(investigation)
     if shadow:
-        state["playbook_shadow"] = [p.model_dump() for p in shadow]
+        state["triage_policy_shadow"] = state["playbook_shadow"] = [p.model_dump() for p in shadow]
         logger.info(
-            "playbook_shadow_matched", playbooks=[p.id for p in shadow]
+            "triage_policy_shadow_matched", triage_policies=[p.id for p in shadow]
         )
     return state
 
@@ -70,7 +70,9 @@ async def gather_authorization_context_node(state: dict[str, Any]) -> dict[str, 
     pre-verdict gate reroutes here whenever the step is missing, so a step that could
     fail without recording itself would loop the graph forever.
     """
-    steps: list[str] = state.setdefault("playbook_steps_run", [])
+    steps: list[str] = state.setdefault(
+        "triage_policy_steps_run", state.setdefault("playbook_steps_run", [])
+    )
     if GATHER_AUTHORIZATION_CONTEXT not in steps:
         steps.append(GATHER_AUTHORIZATION_CONTEXT)
 
@@ -112,9 +114,9 @@ async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
     was a playbook disposition, not a model judgment. The terminal safety floor in
     the runs-worker still applies to the resulting ``close_fp``, unchanged.
     """
-    playbook = state.get("playbook") or {}
+    triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
     reasoning = (
-        f"playbook {playbook.get('id')}: operational alert class (agent health) "
+        f"playbook {triage_policy.get('id')}: operational alert class (agent health) "
         "with no security indicators — deterministic close, no LLM invoked"
     )
     state["supervisor_decision"] = {
@@ -123,17 +125,17 @@ async def operational_close_node(state: dict[str, Any]) -> dict[str, Any]:
         "tp_confidence": 0.0,
         "confidence_reasoning": "deterministic playbook disposition",
     }
-    state.setdefault("playbook_audit", []).append(
+    state.setdefault("triage_policy_audit", state.setdefault("playbook_audit", [])).append(
         {
             "at": datetime.now(UTC).isoformat(),
-            "playbook": playbook.get("id"),
+            "triage_policy": triage_policy.get("id"),
             "effect": "deterministic_disposition",
             "disposition": CLOSE_OPERATIONAL,
             "reason": reasoning,
         }
     )
     state["operational_close"] = True
-    logger.info("operational_close_applied", playbook=playbook.get("id"))
+    logger.info("operational_close_applied", triage_policy=triage_policy.get("id"))
     return state
 
 
@@ -148,8 +150,8 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     if state.get("verdict_error") or not verdict:
         return state
 
-    playbook = state.get("playbook") or {}
-    triage_policy_id = playbook.get("id")
+    triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
+    triage_policy_id = triage_policy.get("id")
     investigation = state.get("investigation", {}) or {}
     # Each verdict pass gets a fresh guard ruling — a stale interrupt flag from a
     # prior pass (e.g. human MORE_INFO -> supervisor -> new verdict) must not
@@ -166,8 +168,8 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         verdict_decision=draft_decision,
         context=parse_authorization_context(investigation),
         malicious_signal=has_malicious_signal(investigation),
-        close_signoff_data_classes=playbook.get("close_signoff_data_classes") or (),
-        guardrails=playbook.get("guardrails") or (),
+        close_signoff_data_classes=triage_policy.get("close_signoff_data_classes") or (),
+        guardrails=triage_policy.get("guardrails") or (),
         verdict_confidence=verdict_confidence,
         active_incident=bool(
             isinstance(correlation, dict) and correlation.get("active_incident")
@@ -178,13 +180,14 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     # Shadow playbooks (#44): would-fire records against the exact same context,
     # audit-only — this is the evidence that graduates a shadow playbook to active.
     shadow_audits = shadow_guardrail_audits(
-        state.get("playbook_shadow") or (), result.condition_ctx
+        (state.get("triage_policy_shadow") or state.get("playbook_shadow")) or (),
+        result.condition_ctx,
     )
     for entry in shadow_audits:
-        state.setdefault("playbook_audit", []).append(
+        state.setdefault("triage_policy_audit", state.setdefault("playbook_audit", [])).append(
             {"at": datetime.now(UTC).isoformat(), **entry}
         )
-        logger.info("playbook_shadow_would_fire", **entry)
+        logger.info("triage_policy_shadow_would_fire", **entry)
 
     if not result.overrides:
         logger.debug(
@@ -194,14 +197,14 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
 
     audit = {
         "at": datetime.now(UTC).isoformat(),
-        "playbook": triage_policy_id,
+        "triage_policy": triage_policy_id,
         "authz_class": result.authz_class,
         "components": result.components.model_dump() if result.components else None,
         "llm_draft_decision": draft_decision,
         "final_decision": result.final_decision,
         "overrides": [o.model_dump() for o in result.overrides],
     }
-    state.setdefault("playbook_audit", []).append(audit)
+    state.setdefault("triage_policy_audit", state.setdefault("playbook_audit", [])).append(audit)
 
     if result.interrupted:
         # The draft stands untouched — a human disposes. Routing (and the
@@ -232,7 +235,7 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         logger.warning(
             "verdict_guard_" + o.effect,
             guardrail=o.guardrail,
-            playbook=triage_policy_id,
+            triage_policy=triage_policy_id,
             from_decision=o.from_decision,
             to_decision=o.to_decision,
             authz_class=result.authz_class,
