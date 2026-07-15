@@ -43,25 +43,25 @@ def route_from_resolve_triage_policy(state: dict[str, Any]) -> Literal[
     full triage. Unknown names fail closed TOWARD triage: a close capability that
     cannot be resolved must never close (pure; unit-tested).
     """
-    playbook = state.get("playbook") or {}
-    disposition = playbook.get("deterministic_disposition")
+    triage_policy = (state.get("triage_policy") or state.get("playbook")) or {}
+    disposition = triage_policy.get("deterministic_disposition")
     if not disposition:
         return "supervisor"
     if disposition not in KNOWN_DISPOSITIONS:
         logger.warning(
-            "playbook_unknown_disposition",
-            playbook=playbook.get("id"),
+            "triage_policy_unknown_disposition",
+            triage_policy=triage_policy.get("id"),
             disposition=disposition,
         )
         return "supervisor"
     vetoes = operational_close_vetoes(
         state.get("investigation") or {},
-        class_rule_groups=(playbook.get("applies_to") or {}).get("rule_groups"),
+        class_rule_groups=(triage_policy.get("applies_to") or {}).get("rule_groups"),
     )
     if vetoes:
         logger.info(
             "operational_close_vetoed",
-            playbook=playbook.get("id"),
+            triage_policy=triage_policy.get("id"),
             vetoes=vetoes,
         )
         return "supervisor"
@@ -115,8 +115,10 @@ def route_from_supervisor(state: dict[str, Any]) -> Literal[
         if legal is not None and action not in legal:
             fallback = "VERDICT" if "VERDICT" in legal else sorted(legal)[0]
             logger.warning(
-                "playbook_illegal_action_remapped",
-                playbook=(state.get("playbook") or {}).get("id"),
+                "triage_policy_illegal_action_remapped",
+                triage_policy=(
+                    (state.get("triage_policy") or state.get("playbook")) or {}
+                ).get("id"),
                 action=action,
                 legal=sorted(legal),
                 fallback=fallback,
@@ -146,7 +148,9 @@ def route_from_supervisor(state: dict[str, Any]) -> Literal[
             if missing:
                 logger.info(
                     "pre_decision_gate_reroute",
-                    playbook=(state.get("playbook") or {}).get("id"),
+                    triage_policy=(
+                        (state.get("triage_policy") or state.get("playbook")) or {}
+                    ).get("id"),
                     action=action,
                     step=missing[0],
                 )
@@ -295,7 +299,7 @@ def build_secops_graph(
     graph = StateGraph(dict)
 
     # Add nodes
-    graph.add_node("resolve_playbook", resolve_triage_policy_node)
+    graph.add_node("resolve_triage_policy", resolve_triage_policy_node)
     graph.add_node("operational_close", operational_close_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("wazuh_worker", wazuh_worker_node)
@@ -311,9 +315,9 @@ def build_secops_graph(
     # Set entry point: deterministic playbook resolution before the first LLM look.
     # An operational-class alert with no security indicators closes without ever
     # reaching the supervisor; everything else proceeds to triage.
-    graph.set_entry_point("resolve_playbook")
+    graph.set_entry_point("resolve_triage_policy")
     graph.add_conditional_edges(
-        "resolve_playbook",
+        "resolve_triage_policy",
         route_from_resolve_triage_policy,
         {
             "operational_close": "operational_close",

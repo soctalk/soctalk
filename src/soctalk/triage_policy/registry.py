@@ -157,7 +157,7 @@ def _load_file_triage_policies() -> list[TriagePolicy]:
         return []
     root = Path(directory)
     if not root.is_dir():
-        logger.warning("playbook_dir_missing", dir=directory)
+        logger.warning("triage_policy_dir_missing", dir=directory)
         return []
     tenants = _process_tenant_identifiers()
     loaded: list[TriagePolicy] = []
@@ -166,24 +166,24 @@ def _load_file_triage_policies() -> list[TriagePolicy]:
             pb = load_triage_policy_file(path)
         except Exception as exc:  # noqa: BLE001 — a bad file must never govern
             logger.error(
-                "playbook_file_rejected", file=str(path), error=str(exc)[:300]
+                "triage_policy_file_rejected", file=str(path), error=str(exc)[:300]
             )
             continue
         if pb.tenant != "*" and pb.tenant not in tenants:
             logger.info(
-                "playbook_file_skipped_foreign_tenant",
-                file=str(path), playbook=pb.id, tenant=pb.tenant,
+                "triage_policy_file_skipped_foreign_tenant",
+                file=str(path), triage_policy=pb.id, tenant=pb.tenant,
             )
             continue
         if any(pb.id == b.id for b in BUILTIN_TRIAGE_POLICIES):
             logger.error(
-                "playbook_file_rejected", file=str(path), playbook=pb.id,
+                "triage_policy_file_rejected", file=str(path), triage_policy=pb.id,
                 error="id collides with a built-in playbook",
             )
             continue
         logger.info(
-            "playbook_loaded",
-            file=str(path), playbook=pb.id, version=pb.version,
+            "triage_policy_loaded",
+            file=str(path), triage_policy=pb.id, version=pb.version,
             status=pb.status, priority=pb.priority, tenant=pb.tenant,
         )
         loaded.append(pb)

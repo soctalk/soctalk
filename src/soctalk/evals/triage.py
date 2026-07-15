@@ -140,15 +140,15 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
     from soctalk.graph.builder import route_from_resolve_triage_policy
     from soctalk.triage_policy.registry import match_triage_policy
 
-    playbook = match_triage_policy(case.investigation)
+    triage_policy = match_triage_policy(case.investigation)
     state: dict[str, Any] = {"investigation": case.investigation}
-    if playbook is not None:
-        state["playbook"] = playbook.model_dump()
+    if triage_policy is not None:
+        state["triage_policy"] = state["playbook"] = triage_policy.model_dump()
     route = route_from_resolve_triage_policy(state)
 
     expected = [str(r) for r in case.expect["playbook_route"]]
     expected_id = case.expect.get("triage_policy_id")
-    matched_id = playbook.id if playbook else None
+    matched_id = triage_policy.id if triage_policy else None
     passed = route in expected and (expected_id is None or matched_id == expected_id)
     detail = ""
     if expected_id is not None and matched_id != expected_id:
@@ -216,9 +216,9 @@ async def _run_routing_trial(case: GoldenCase, config: Any) -> TrialResult:
     # entry node would, so a playbook-matched case runs with the same narrowed
     # action schema production uses. Without this, the harness could score an
     # action production can no longer sample.
-    playbook = match_triage_policy(case.investigation)
-    if playbook is not None:
-        state["playbook"] = playbook.model_dump()
+    triage_policy = match_triage_policy(case.investigation)
+    if triage_policy is not None:
+        state["triage_policy"] = state["playbook"] = triage_policy.model_dump()
     decision = await _get_supervisor_decision(
         config, _build_context_summary(state), state
     )

@@ -371,7 +371,7 @@ async def test_verdict_guard_node_overrides_contradicted_close_with_audit():
     assert state["verdict_overridden_by_guard"] is True
     assert state["verdict"]["recommendation"].startswith("[GUARD OVERRIDE")
     (audit,) = state["playbook_audit"]
-    assert audit["playbook"] == PRIVILEGED_EXEC_PLAYBOOK.id
+    assert audit["triage_policy"] == PRIVILEGED_EXEC_PLAYBOOK.id
     assert audit["llm_draft_decision"] == "close"
     assert audit["final_decision"] == "escalate"
     assert audit["authz_class"] == "contradicted"
@@ -727,7 +727,7 @@ async def test_operational_close_node_writes_close_and_audit():
     assert state["supervisor_decision"]["next_action"] == "CLOSE"
     assert state["operational_close"] is True
     (audit,) = state["playbook_audit"]
-    assert audit["playbook"] == AGENT_HEALTH_PLAYBOOK.id
+    assert audit["triage_policy"] == AGENT_HEALTH_PLAYBOOK.id
     assert audit["disposition"] == CLOSE_OPERATIONAL
 
 
@@ -1200,7 +1200,7 @@ def test_declarative_override_fires_and_is_raise_only():
         }],
     )
     assert result.final_decision == "needs_more_info"
-    assert result.overrides[0].guardrail == "playbook_guardrail_0"
+    assert result.overrides[0].guardrail == "triage_policy_guardrail_0"
 
     # raise-only: an "override" that would lower an escalate never fires
     lowered = evaluate_guard(
@@ -1295,7 +1295,7 @@ guardrails:
         shadow_entries = [
             a for a in state.get("playbook_audit") or [] if a.get("shadow")
         ]
-        assert shadow_entries and shadow_entries[0]["playbook"] == "shadow-sudo-strict"
+        assert shadow_entries and shadow_entries[0]["triage_policy"] == "shadow-sudo-strict"
         assert shadow_entries[0]["would_effect"] == "override"
     finally:
         reset_registry_cache()
@@ -1413,5 +1413,5 @@ def test_shadow_audit_mirrors_active_semantics():
     }
     audits = shadow_guardrail_audits([shadow_pb], ctx)
     assert len(audits) == 1
-    assert audits[0]["guardrail"] == "playbook_guardrail_1"
+    assert audits[0]["guardrail"] == "triage_policy_guardrail_1"
     assert audits[0]["would_effect"] == "interrupt"
