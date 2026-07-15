@@ -559,11 +559,26 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
 
     # Failed runs MUST NOT carry a disposition or verdict summary —
     # those fields drive HIL row creation downstream.
+    floor_vetoes: list[str] = []
     if status == "failed":
         disposition = None
         verdict_summary = None
     else:
         disposition = _disposition_from_final(final, status)
+        # Terminal safety veto (issue #43): the floor sits on the auto-close
+        # path itself, not on a single graph edge — even if every in-graph
+        # guard is bypassed (supervisor CLOSE short-circuit, future graph
+        # changes), a close over malicious signal cannot reach complete().
+        if disposition == "close_fp":
+            from soctalk.playbook.floor import apply_worker_floor
+
+            disposition, floor_vetoes = apply_worker_floor(final, disposition)
+            if floor_vetoes:
+                logger.warning(
+                    "safety_floor_veto run=%s vetoes=%s close_fp->escalate",
+                    run_id,
+                    floor_vetoes,
+                )
         verdict_summary = _verdict_summary(final)
     logger.info(
         "disposition_decided run=%s status=%s disposition=%s "
@@ -576,6 +591,19 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         (final.get("supervisor_decision") or {}).get("tp_confidence"),
     )
 
+    # Guard/floor audit trail rides the enrichments blob into pending_reviews so
+    # the analyst sees the LLM draft, the guardrail that fired, and the final
+    # disposition (issue #43: an audit event per override).
+    enrichments_payload = _verdict_enrichments(final)
+    if final.get("playbook_audit"):
+        enrichments_payload["playbook_audit"] = list(final["playbook_audit"])[:10]
+    if floor_vetoes:
+        enrichments_payload["safety_floor"] = {
+            "vetoes": floor_vetoes,
+            "overridden_from": "close_fp",
+            "to": "escalate",
+        }
+
     complete_payload = {
         "lease_id": lease_id,
         "status": status,
@@ -586,7 +614,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         "verdict_summary": verdict_summary,
         "verdict_confidence": _verdict_confidence(final),
         "findings": _verdict_findings(final),
-        "enrichments": _verdict_enrichments(final),
+        "enrichments": enrichments_payload,
     }
     # ``findings``/``enrichments`` are built from the graph's final state,
     # which carries datetime objects (Pydantic ``model_dump(mode="python")``

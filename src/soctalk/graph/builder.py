@@ -8,23 +8,55 @@ import structlog
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
-from soctalk.models.enums import HumanDecision, Phase, VerdictDecision
+from soctalk.graph.close import close_investigation_node
+from soctalk.graph.hil import human_review_node
+from soctalk.models.enums import HumanDecision, VerdictDecision
+from soctalk.playbook.models import GATHER_AUTHORIZATION_CONTEXT, KNOWN_STEP_NODES
+from soctalk.playbook.nodes import (
+    gather_authorization_context_node,
+    resolve_playbook_node,
+    verdict_guard_node,
+)
 from soctalk.supervisor.node import supervisor_node
 from soctalk.supervisor.verdict import verdict_node
-from soctalk.workers.wazuh import wazuh_worker_node
 from soctalk.workers.cortex import cortex_worker_node
 from soctalk.workers.misp import misp_worker_node
 from soctalk.workers.thehive import thehive_worker_node
-from soctalk.graph.hil import human_review_node
-from soctalk.graph.close import close_investigation_node
+from soctalk.workers.wazuh import wazuh_worker_node
 
 logger = structlog.get_logger()
+
+
+def missing_required_steps(state: dict[str, Any]) -> list[str]:
+    """Playbook-required deterministic steps that have not run yet (pure).
+
+    Only step names the graph actually has nodes for count — an unknown name in a
+    playbook is logged and skipped rather than deadlocking the run (there is nowhere
+    to route to, and the post-verdict guard still enforces the floor edges).
+    """
+    playbook = state.get("playbook") or {}
+    required = playbook.get("required_steps") or []
+    done = set(state.get("playbook_steps_run") or [])
+    missing = []
+    for step in required:
+        if step in done:
+            continue
+        if step not in KNOWN_STEP_NODES:
+            logger.warning(
+                "playbook_unknown_required_step",
+                playbook=playbook.get("id"),
+                step=step,
+            )
+            continue
+        missing.append(step)
+    return missing
 
 
 def route_from_supervisor(state: dict[str, Any]) -> Literal[
     "wazuh_worker",
     "cortex_worker",
     "misp_worker",
+    "gather_authorization_context",
     "verdict",
     "close_investigation",
 ]:
@@ -58,10 +90,27 @@ def route_from_supervisor(state: dict[str, Any]) -> Literal[
         return "cortex_worker"
     elif action == "CONTEXTUALIZE":
         return "misp_worker"
-    elif action == "VERDICT":
-        return "verdict"
-    elif action == "CLOSE":
-        return "close_investigation"
+    elif action in ("VERDICT", "CLOSE"):
+        # Pre-decision gate (issue #43): a terminal proposal (VERDICT, or the
+        # supervisor's auto-FP CLOSE — both can end in a close disposition) is
+        # illegal until the active playbook's required deterministic steps have
+        # run. The supervisor's action enum is fixed, so the gate reroutes to
+        # the required node rather than expecting the LLM to select it; the
+        # node marks itself as run, so this fires at most once per step. A
+        # budget-terminated CLOSE is exempt — the run is out of money and the
+        # extra supervisor pass after the step would burn more (the worker
+        # reports it halted_budget/leave_open, never close_fp).
+        if not state.get("budget_terminated"):
+            missing = missing_required_steps(state)
+            if missing:
+                logger.info(
+                    "pre_decision_gate_reroute",
+                    playbook=(state.get("playbook") or {}).get("id"),
+                    action=action,
+                    step=missing[0],
+                )
+                return GATHER_AUTHORIZATION_CONTEXT
+        return "verdict" if action == "VERDICT" else "close_investigation"
     else:
         # Default to enrichment
         return "cortex_worker"
@@ -165,15 +214,24 @@ def build_secops_graph(
         Compiled StateGraph ready for execution.
 
     Graph structure:
-        START -> supervisor
-        supervisor -> [wazuh_worker | cortex_worker | misp_worker | verdict | close_investigation]
+        START -> resolve_playbook -> supervisor
+        supervisor -> [wazuh_worker | cortex_worker | misp_worker |
+                       gather_authorization_context | verdict | close_investigation]
         wazuh_worker -> supervisor
         cortex_worker -> supervisor
         misp_worker -> supervisor
-        verdict -> [human_review | close_investigation | supervisor]
+        gather_authorization_context -> supervisor
+        verdict -> verdict_guard
+        verdict_guard -> [human_review | close_investigation | supervisor]
         human_review -> [thehive_worker | close_investigation | supervisor]
         thehive_worker -> close_investigation
         close_investigation -> END
+
+    Playbook layer (issue #43): ``resolve_playbook`` writes the active playbook into
+    state; the supervisor's conditional edge reroutes a VERDICT proposal to
+    ``gather_authorization_context`` until the playbook's required steps have run; and
+    every verdict passes through the deterministic ``verdict_guard`` before routing —
+    the LLM proposes, the guard disposes.
 
     Example with checkpointing:
         async with get_checkpointer() as checkpointer:
@@ -187,17 +245,21 @@ def build_secops_graph(
     graph = StateGraph(dict)
 
     # Add nodes
+    graph.add_node("resolve_playbook", resolve_playbook_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("wazuh_worker", wazuh_worker_node)
     graph.add_node("cortex_worker", cortex_worker_node)
     graph.add_node("misp_worker", misp_worker_node)
+    graph.add_node(GATHER_AUTHORIZATION_CONTEXT, gather_authorization_context_node)
     graph.add_node("verdict", verdict_node)
+    graph.add_node("verdict_guard", verdict_guard_node)
     graph.add_node("human_review", human_review_node)
     graph.add_node("thehive_worker", thehive_worker_node)
     graph.add_node("close_investigation", close_investigation_node)
 
-    # Set entry point
-    graph.set_entry_point("supervisor")
+    # Set entry point: deterministic playbook resolution before the first LLM look.
+    graph.set_entry_point("resolve_playbook")
+    graph.add_edge("resolve_playbook", "supervisor")
 
     # Add conditional edges from supervisor
     graph.add_conditional_edges(
@@ -207,6 +269,7 @@ def build_secops_graph(
             "wazuh_worker": "wazuh_worker",
             "cortex_worker": "cortex_worker",
             "misp_worker": "misp_worker",
+            GATHER_AUTHORIZATION_CONTEXT: GATHER_AUTHORIZATION_CONTEXT,
             "verdict": "verdict",
             "close_investigation": "close_investigation",
         },
@@ -217,9 +280,16 @@ def build_secops_graph(
     graph.add_edge("cortex_worker", "supervisor")
     graph.add_edge("misp_worker", "supervisor")
 
-    # Verdict routes to HIL, close, or back to supervisor
+    # The required playbook step returns to the supervisor, which re-proposes with
+    # the gathered authorization evidence now in its context.
+    graph.add_edge(GATHER_AUTHORIZATION_CONTEXT, "supervisor")
+
+    # Every verdict passes through the deterministic guard before routing.
+    graph.add_edge("verdict", "verdict_guard")
+
+    # The (possibly overridden) verdict routes to HIL, close, or back to supervisor
     graph.add_conditional_edges(
-        "verdict",
+        "verdict_guard",
         route_from_verdict,
         {
             "human_review": "human_review",

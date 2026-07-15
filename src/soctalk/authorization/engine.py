@@ -492,6 +492,18 @@ def _fim_components(
 # --- public surface ----------------------------------------------------------------------------
 
 
+def select_facts(
+    facts: Sequence[AuthorizationFact],
+    track: AuthorizationTrack,
+    tenant: str | None = None,
+) -> list[AuthorizationFact]:
+    """The facts the engine would actually reason over for this track/tenant — the
+    track + tenant + lifecycle gate, public so callers (the playbook guard's
+    ``records present`` classifier) apply the same selection the evaluation does. A
+    wrong-track, foreign-tenant, or superseded record is not "a record on file"."""
+    return _select(facts, track, tenant)
+
+
 def evaluate_authorization(
     activity: AuthorizationActivity,
     facts: Sequence[AuthorizationFact],

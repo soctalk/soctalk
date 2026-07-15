@@ -81,7 +81,10 @@ def _verdict_value(enrichment: Any) -> str:
     return str(getattr(value, "value", value)).lower()
 
 
-def _has_malicious_signal(investigation: dict[str, Any]) -> bool:
+def has_malicious_signal(investigation: dict[str, Any]) -> bool:
+    """Malicious enrichment verdict or MISP IOC match on the investigation. Shared by
+    the prompt renderer (warning line) and the playbook guard/floor (issue #43), so the
+    warning the model reads and the gate that enforces it can never disagree."""
     enrichments = investigation.get("enrichments", []) or []
     if any(_verdict_value(e) == "malicious" for e in enrichments):
         return True
@@ -216,7 +219,7 @@ def _section_body(ctx: AuthorizationContext, investigation: dict[str, Any]) -> l
         lines.append(AUTHORIZATION_RULES_LINE)
     if ctx.note:
         lines.append(f"Note: {ctx.note}")
-    if _has_malicious_signal(investigation):
+    if has_malicious_signal(investigation):
         lines.append(MALICIOUS_SIGNAL_WARNING)
     return lines
 

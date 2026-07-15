@@ -56,8 +56,63 @@ from soctalk.core.ir.policies import effective_policy
 from soctalk.core.ir.runtime import active_run_for_case, start_run
 from soctalk.core.ir.scorer import suggest_for_alert as suggest_correlation
 from soctalk.core.observability.audit import log_audit
+from soctalk.playbook.floor import (
+    FLOOR_AUDIT_ACTION,
+    VETO_ACTIVE_INCIDENT,
+    VETO_IOC,
+)
 
 logger = structlog.get_logger()
+
+
+async def _close_floor_veto(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    initial_iocs: list[dict[str, Any]],
+    keys: list[tuple[str, str, str]],
+    correlation_already_checked: bool,
+) -> str | None:
+    """Non-overridable safety floor on the ingest auto-close plane (issue #43).
+
+    An alert carrying IOCs, or sharing an attach-eligible entity with an ACTIVE
+    investigation, must never be auto-closed — by memoization or by the rules
+    band — regardless of policy flags. Returns the veto reason, or None.
+
+    ``correlation_already_checked``: when entity correlation is enabled, the attach
+    check already ran this ingest with the same keys and found nothing (a match
+    returns before any close path), so the lookup is skipped rather than repeated.
+    """
+    if initial_iocs:
+        return VETO_IOC
+    if correlation_already_checked:
+        return None
+    if await find_correlated_investigation(db, tenant_id=tenant_id, keys=keys) is not None:
+        return VETO_ACTIVE_INCIDENT
+    return None
+
+
+async def _audit_floor_veto(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    alert_id: UUID,
+    veto: str,
+    blocked: str,
+) -> None:
+    await log_audit(
+        db,
+        action=FLOOR_AUDIT_ACTION,
+        actor_principal="system",
+        actor_id="triage",
+        tenant_id=tenant_id,
+        resource_type="alert",
+        resource_id=str(alert_id),
+        notes=canonical_json({"veto": veto, "blocked": blocked}),
+    )
+    logger.warning(
+        "close_floor_veto", alert_id=str(alert_id), veto=veto, blocked=blocked
+    )
 
 
 def _evidence_retention_days() -> int:
@@ -872,6 +927,11 @@ async def triage_event(
     except Exception as e:  # noqa: BLE001 — shadow scoring must never block ingest
         logger.warning("authz_routine_shadow_failed", error=str(e))
 
+    # Safety floor over BOTH ingest auto-close paths below (issue #43): IOC or
+    # active-incident overlap vetoes the close and the alert falls through to
+    # promotion — a real triage run looks at it instead of a silent close.
+    _correlation_checked = bool(policy.get("entity_correlation_enabled", False))
+
     # 3a. Verdict memoization (issue #29): a recurring high-confidence-FP
     #     shape closes by reference — AFTER the entity-correlation check so it
     #     can never suppress an alert that belongs to a live incident.
@@ -885,40 +945,60 @@ async def triage_event(
         if mkey is not None:
             memo = await lookup_memoized_close(db, tenant_id=tenant_id, key=mkey)
             if memo is not None:
-                investigation_id = await auto_close_alert(
-                    db,
-                    tenant_id=tenant_id,
-                    alert_id=alert_id,
-                    reason=(
-                        f"memoized-fp: prior verdict close "
-                        f"confidence={memo['confidence']:.2f}"
-                    ),
-                    reopen_window_days=policy.get("reopen_window_days", 30),
+                veto = await _close_floor_veto(
+                    db, tenant_id=tenant_id, initial_iocs=initial_iocs,
+                    keys=keys, correlation_already_checked=_correlation_checked,
                 )
-                await bump_memo_hit(db, tenant_id=tenant_id, key=mkey)
-                return {
-                    "alert_id": str(alert_id),
-                    "investigation_id": str(investigation_id),
-                    "action": "memoized_close",
-                }
+                if veto is not None:
+                    await _audit_floor_veto(
+                        db, tenant_id=tenant_id, alert_id=alert_id,
+                        veto=veto, blocked="memoized_close",
+                    )
+                else:
+                    investigation_id = await auto_close_alert(
+                        db,
+                        tenant_id=tenant_id,
+                        alert_id=alert_id,
+                        reason=(
+                            f"memoized-fp: prior verdict close "
+                            f"confidence={memo['confidence']:.2f}"
+                        ),
+                        reopen_window_days=policy.get("reopen_window_days", 30),
+                    )
+                    await bump_memo_hit(db, tenant_id=tenant_id, key=mkey)
+                    return {
+                        "alert_id": str(alert_id),
+                        "investigation_id": str(investigation_id),
+                        "action": "memoized_close",
+                    }
 
     if (
         assessment == "high_conf_fp"
         and policy.get("auto_close_enabled", True)
         and confidence >= policy.get("auto_close_threshold", 0.90)
     ):
-        investigation_id = await auto_close_alert(
-            db,
-            tenant_id=tenant_id,
-            alert_id=alert_id,
-            reason=f"auto-close: {assessment} confidence={confidence:.2f}",
-            reopen_window_days=policy.get("reopen_window_days", 30),
+        veto = await _close_floor_veto(
+            db, tenant_id=tenant_id, initial_iocs=initial_iocs,
+            keys=keys, correlation_already_checked=_correlation_checked,
         )
-        return {
-            "alert_id": str(alert_id),
-            "investigation_id": str(investigation_id),
-            "action": "auto_closed",
-        }
+        if veto is not None:
+            await _audit_floor_veto(
+                db, tenant_id=tenant_id, alert_id=alert_id,
+                veto=veto, blocked="rules_auto_close",
+            )
+        else:
+            investigation_id = await auto_close_alert(
+                db,
+                tenant_id=tenant_id,
+                alert_id=alert_id,
+                reason=f"auto-close: {assessment} confidence={confidence:.2f}",
+                reopen_window_days=policy.get("reopen_window_days", 30),
+            )
+            return {
+                "alert_id": str(alert_id),
+                "investigation_id": str(investigation_id),
+                "action": "auto_closed",
+            }
 
     # 4a. Learned scorer (issue #30) — REVIEW-ONLY. The deterministic
     #     entity-attach above didn't fire; if the scorer is enabled, record a
