@@ -323,7 +323,12 @@
 	<div class="flex items-center justify-between mb-2">
 		<h2 class="h3">Authored playbooks</h2>
 		{#if tenantId}
-			<button class="btn btn-sm variant-filled-primary" on:click={openCreate}>+ New playbook</button>
+			<div class="flex gap-2">
+				<a class="btn btn-sm variant-filled-primary" href="/playbooks/editor">+ New playbook</a>
+				<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">
+					JSON
+				</button>
+			</div>
 		{/if}
 	</div>
 
@@ -353,7 +358,15 @@
 							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
 						</div>
 						<div class="flex items-center gap-2 flex-shrink-0">
-							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)}>Edit</button>
+							<a
+								class="btn btn-sm variant-filled-primary"
+								href="/playbooks/editor?id={encodeURIComponent(pb.playbook_id)}"
+							>
+								Edit
+							</a>
+							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)} title="Raw JSON editor">
+								JSON
+							</button>
 							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.playbook_id)}>
 								Export
 							</button>
