@@ -106,9 +106,16 @@ def exclusion_reasons(
     mitre: dict[str, Any] | None,
     initial_iocs: list[dict[str, Any]] | None,
     settings: ShadowSettings,
+    history_ioc: bool = False,
 ) -> list[str]:
     """Code-level §8.3 exclusions. Any reason forces would_close=False regardless of
-    history — authorization/routine evidence never overrides malicious signal."""
+    history — authorization/routine evidence never overrides malicious signal.
+
+    ``history_ioc`` is the taint signal that the ROUTINE HISTORY itself (not just the current
+    alert) carries a threat-intel hit: a tuple whose prior sightings were IOC-flagged is not
+    benign routine, even when the current alert looks clean. Missing this is a false-negative
+    the goldens red-team set (dimension ``ioc_sighting``) surfaces — the sighting is flagged
+    but the alert has no data-level IOC, so the alert-only ``ioc_present`` check misses it."""
     reasons = []
     if severity > settings.max_severity:
         reasons.append("severity_too_high")
@@ -116,6 +123,8 @@ def exclusion_reasons(
         reasons.append("mitre_mapped")
     if initial_iocs:
         reasons.append("ioc_present")
+    if history_ioc:
+        reasons.append("routine_ioc_tainted")
     return reasons
 
 
@@ -140,11 +149,14 @@ def evaluate_shadow(
     action: str,
     ts: datetime,
     settings: ShadowSettings,
+    history_ioc: bool = False,
 ) -> dict[str, Any]:
     """Pure would-close decision: exclusions first, then the production engine over a
-    telemetry_routine fact built from the sighting history."""
+    telemetry_routine fact built from the sighting history. ``history_ioc`` marks the tuple's
+    prior sightings as IOC-flagged (a threat-intel hit on the routine itself)."""
     excluded = exclusion_reasons(
-        severity=severity, mitre=mitre, initial_iocs=initial_iocs, settings=settings
+        severity=severity, mitre=mitre, initial_iocs=initial_iocs, settings=settings,
+        history_ioc=history_ioc,
     )
 
     fact = GrantFact(
@@ -155,7 +167,7 @@ def evaluate_shadow(
         source_type=AuthorizationSourceType.TELEMETRY_ROUTINE,
         trust=TRUST_TIER[AuthorizationSourceType.TELEMETRY_ROUTINE],
         seen_count=seen_days,
-        ioc=bool(initial_iocs),
+        ioc=bool(initial_iocs) or history_ioc,  # tainted routine is not routine
         created_by="authz-routine-shadow",
     )
     activity = AuthorizationActivity(
@@ -268,6 +280,30 @@ async def score_alert_shadow(
         )
     ).scalar_one()
 
+    # History IOC taint (§8.2): if any prior alert on this host carried a threat-intel IOC
+    # within the window, the tuple's routine history is not benign — a clean-looking current
+    # alert must not close on it. Host-scoped is deliberately conservative for shadow mode
+    # (over-excludes rather than misses); the goldens red-team `ioc_sighting` dimension is the
+    # false-negative this prevents.
+    history_ioc = bool(
+        (
+            await db.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM alerts "
+                    "WHERE tenant_id = :t AND initial_iocs <> '[]'::jsonb "
+                    "AND asset_ids @> CAST(:host_asset AS JSONB) "
+                    "AND first_event_at >= :since AND first_event_at < :now)"
+                ),
+                {
+                    "t": str(tenant_id),
+                    "since": params["since"],
+                    "now": ts,
+                    "host_asset": json.dumps([host]),
+                },
+            )
+        ).scalar_one()
+    )
+
     result = evaluate_shadow(
         seen_days=int(seen_days or 0),
         severity=severity,
@@ -278,6 +314,7 @@ async def score_alert_shadow(
         action=decoder or (rule_id or "unknown"),
         ts=ts,
         settings=settings,
+        history_ioc=history_ioc,
     )
     result["tuple"] = {
         "source": source,

@@ -47,6 +47,15 @@ def test_mitre_mapped_never_would_close_singular_and_plural():
     assert _shadow(mitre={"techniques": ["Brute Force"]})["would_close"] is False
 
 
+def test_ioc_tainted_routine_never_would_close():
+    # the sighting itself is IOC-flagged (threat-intel hit on the routine), even though the
+    # current alert is clean — the goldens `ioc_sighting` red-team dimension
+    r = _shadow(history_ioc=True)
+    assert r["would_close"] is False and "routine_ioc_tainted" in r["excluded"]
+    # without the taint it would have closed on the same mature history
+    assert _shadow(history_ioc=False)["would_close"] is True
+
+
 def test_high_severity_excluded():
     r = _shadow(severity=12)
     assert r["would_close"] is False and "severity_too_high" in r["excluded"]
@@ -146,14 +155,19 @@ class _FakeResult:
 
 
 class _CapturingDB:
-    """Captures the one history SELECT so we can assert on the built SQL + bound params."""
+    """Captures the history COUNT SELECT (for SQL/param assertions) and answers the second
+    EXISTS (IOC-taint) query with `history_ioc`."""
 
-    def __init__(self, seen_days=25):
+    def __init__(self, seen_days=25, history_ioc=False):
         self.seen_days = seen_days
+        self.history_ioc = history_ioc
         self.captured = None
 
     async def execute(self, stmt, params):
-        self.captured = (str(stmt), params)
+        sql = str(stmt)
+        if "EXISTS" in sql:
+            return _FakeResult(self.history_ioc)
+        self.captured = (sql, params)  # the routine-history COUNT query
         return _FakeResult(self.seen_days)
 
 
