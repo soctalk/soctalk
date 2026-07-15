@@ -67,6 +67,12 @@ INSTALL_POLICY_DEFAULTS: dict[str, Any] = {
     # LLM run. Off by default until validated (a stale memo suppresses a
     # real alert). Reopen (#15) still applies to memoized closes.
     "verdict_memoization_enabled": False,
+    # Engagement deconfliction (#31): match ingest alerts against declared
+    # pentest/red-team windows (source ip + host + technique + time). In-scope
+    # => recorded in an auditable declared-test lane and skips the LLM run, but
+    # is NEVER closed/FP; out-of-scope tester activity is forced to a real look.
+    # Off by default; a declared window changes triage behaviour, so it's opt-in.
+    "engagement_deconfliction_enabled": False,
     # Canonical entity graph (issue #24): land each alert's typed entities +
     # observation relationships into the memory graph. Off by default (new
     # per-alert write volume); enable per-tenant.
