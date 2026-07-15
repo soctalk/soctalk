@@ -27,15 +27,21 @@ import structlog
 
 from soctalk.authorization.engine import evaluate_authorization
 from soctalk.authorization.render import has_malicious_signal, parse_authorization_context
-from soctalk.playbook.guard import decision_value, evaluate_guard
+from soctalk.playbook.guard import (
+    decision_value,
+    evaluate_guard,
+    shadow_guardrail_audits,
+)
 from soctalk.playbook.models import CLOSE_OPERATIONAL, GATHER_AUTHORIZATION_CONTEXT
-from soctalk.playbook.registry import match_playbook
+from soctalk.playbook.registry import match_playbook, match_shadow_playbooks
 
 logger = structlog.get_logger()
 
 
 async def resolve_playbook_node(state: dict[str, Any]) -> dict[str, Any]:
-    """Match the alert against the playbook registry; write the winner into state."""
+    """Match the alert against the playbook registry; write the winner into state.
+    Matching SHADOW playbooks are recorded alongside (#44) — their guardrails get
+    would-fire audit records at the guard, but they never govern anything."""
     investigation = state.get("investigation", {}) or {}
     playbook = match_playbook(investigation)
     if playbook is not None:
@@ -48,6 +54,12 @@ async def resolve_playbook_node(state: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         logger.debug("playbook_none_matched")
+    shadow = match_shadow_playbooks(investigation)
+    if shadow:
+        state["playbook_shadow"] = [p.model_dump() for p in shadow]
+        logger.info(
+            "playbook_shadow_matched", playbooks=[p.id for p in shadow]
+        )
     return state
 
 
@@ -145,13 +157,34 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
     state.pop("verdict_interrupted", None)
     state.pop("verdict_overridden_by_guard", None)
     draft_decision = decision_value(verdict.get("decision"))
+    try:
+        verdict_confidence = float(verdict.get("confidence"))
+    except (TypeError, ValueError):
+        verdict_confidence = None
+    correlation = state.get("correlation") or {}
     result = evaluate_guard(
         verdict_decision=draft_decision,
         context=parse_authorization_context(investigation),
         malicious_signal=has_malicious_signal(investigation),
         close_signoff_data_classes=playbook.get("close_signoff_data_classes") or (),
+        guardrails=playbook.get("guardrails") or (),
+        verdict_confidence=verdict_confidence,
+        active_incident=bool(
+            isinstance(correlation, dict) and correlation.get("active_incident")
+        ),
     )
     state["authz_class"] = result.authz_class
+
+    # Shadow playbooks (#44): would-fire records against the exact same context,
+    # audit-only — this is the evidence that graduates a shadow playbook to active.
+    shadow_audits = shadow_guardrail_audits(
+        state.get("playbook_shadow") or (), result.condition_ctx
+    )
+    for entry in shadow_audits:
+        state.setdefault("playbook_audit", []).append(
+            {"at": datetime.now(UTC).isoformat(), **entry}
+        )
+        logger.info("playbook_shadow_would_fire", **entry)
 
     if not result.overrides:
         logger.debug(
@@ -187,6 +220,13 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         ).strip()[:2048]
         state["verdict"] = verdict
         state["verdict_overridden_by_guard"] = True
+        if result.final_decision == "needs_more_info":
+            # A guard-manufactured needs_more_info must count as a retry, same
+            # contract as the verdict node's own NMI (Codex #44 High): the LLM
+            # never incremented the counter for its close draft, and without
+            # this the supervisor→verdict→override loop repeats to the
+            # recursion limit instead of forcing human review on the retry.
+            state["verdict_retry_count"] = state.get("verdict_retry_count", 0) + 1
 
     for o in result.overrides:
         logger.warning(

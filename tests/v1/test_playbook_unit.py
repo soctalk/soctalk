@@ -1033,3 +1033,385 @@ async def test_verdict_guard_clears_stale_interrupt_on_retry():
     assert state.get("verdict_interrupted") is None
     from soctalk.graph.builder import route_from_verdict
     assert route_from_verdict(state) == "supervisor"
+
+
+# ---------------------------------------------------------------------------
+# issue #44: condition language, YAML registry, shadow-run
+# ---------------------------------------------------------------------------
+
+
+def test_condition_language_sandbox():
+    from soctalk.playbook.conditions import (
+        ConditionError,
+        evaluate_condition,
+        validate_condition,
+    )
+
+    cond = {"and": [
+        {"==": [{"var": "authz.class"}, "contradicted"]},
+        {"==": [{"var": "verdict"}, "close"]},
+    ]}
+    validate_condition(cond)
+    ctx = {"authz": {"class": "contradicted"}, "verdict": "close"}
+    assert evaluate_condition(cond, ctx) is True
+    assert evaluate_condition(cond, {"authz": {"class": "covered"}, "verdict": "close"}) is False
+
+    # sandbox: unknown operators and undeclared fields are rejected at author time
+    for bad in (
+        {"eval": ["1+1"]},
+        {"==": [{"var": "os.environ"}, "x"]},
+        {"var": 42},
+        {"==": [{"var": "verdict"}]},
+        "not a mapping",
+    ):
+        try:
+            validate_condition(bad)
+            raise AssertionError(f"accepted invalid condition: {bad!r}")
+        except ConditionError:
+            pass
+
+    # None comparisons are falsy, never raising; membership works
+    assert evaluate_condition({">": [{"var": "verdict_confidence"}, 0.5]}, {}) is False
+    assert evaluate_condition(
+        {"in": [{"var": "asset.environment"}, ["prod", "staging"]]},
+        {"asset": {"environment": "prod"}},
+    ) is True
+
+
+def test_guardrail_schema_fails_closed():
+    import pydantic
+
+    from soctalk.playbook.models import Guardrail
+
+    ok = Guardrail(
+        when={"==": [{"var": "verdict"}, "close"]},
+        effect="override", to="escalate", reason="r",
+    )
+    assert ok.effect == "override"
+    for bad in (
+        # suppression direction is inexpressible: 'close' not in the `to` enum
+        dict(when={"==": [{"var": "verdict"}, "escalate"]}, effect="override",
+             to="close", reason="r"),
+        # interrupt must target human_review
+        dict(when={"==": [{"var": "verdict"}, "close"]}, effect="interrupt",
+             to="escalate", reason="r"),
+        # invalid condition rejects the guardrail
+        dict(when={"exec": ["rm -rf"]}, effect="override", to="escalate", reason="r"),
+        # unknown fields rejected (typo safety)
+        dict(when={"==": [{"var": "verdict"}, "close"]}, effect="override",
+             to="escalate", reason="r", extra_field=1),
+    ):
+        try:
+            Guardrail(**bad)
+            raise AssertionError(f"accepted invalid guardrail: {bad}")
+        except (pydantic.ValidationError, ValueError):
+            pass
+
+
+def _write_playbook_yaml(tmp_path, name: str, body: str):
+    p = tmp_path / name
+    p.write_text(body)
+    return p
+
+
+_FILE_PLAYBOOK = """
+id: custom-web-noise
+version: 1
+status: {status}
+priority: {priority}
+applies_to:
+  rule_groups: [webnoise]
+guardrails:
+  - when:
+      "and":
+        - "==": [{{"var": "authz.class"}}, "absent"]
+        - "==": [{{"var": "verdict"}}, "close"]
+    effect: override
+    to: needs_more_info
+    reason: absent authorization on this class needs a second look
+"""
+
+
+def test_registry_loads_validates_and_shadow_defaults(tmp_path, monkeypatch):
+    from soctalk.playbook.registry import (
+        match_playbook,
+        match_shadow_playbooks,
+        reset_registry_cache,
+    )
+
+    _write_playbook_yaml(
+        tmp_path, "web.yaml", _FILE_PLAYBOOK.format(status="shadow", priority=90)
+    )
+    # an invalid file is rejected whole and must not disturb the rest
+    _write_playbook_yaml(tmp_path, "bad.yaml", "id: broken\nnot_a_field: true\n")
+    # a foreign-tenant playbook is skipped
+    _write_playbook_yaml(
+        tmp_path, "foreign.yaml",
+        "id: foreign-pb\ntenant: someone-else\napplies_to:\n  rule_groups: [webnoise]\n",
+    )
+    monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
+    monkeypatch.delenv("SOCTALK_TENANT_ID", raising=False)
+    monkeypatch.delenv("SOCTALK_TENANT_SLUG", raising=False)
+    reset_registry_cache()
+    try:
+        inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
+        # shadow playbooks never govern...
+        assert match_playbook(inv) is None
+        # ...but they are matched for audit
+        shadow = match_shadow_playbooks(inv)
+        assert [p.id for p in shadow] == ["custom-web-noise"]
+        # built-ins unaffected by the file registry
+        pb = match_playbook(_sudo_investigation())
+        assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+    finally:
+        reset_registry_cache()
+
+
+def test_registry_active_file_playbook_governs(tmp_path, monkeypatch):
+    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+
+    _write_playbook_yaml(
+        tmp_path, "web.yaml", _FILE_PLAYBOOK.format(status="active", priority=90)
+    )
+    monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
+    reset_registry_cache()
+    try:
+        inv = {"alerts": [{"rule_groups": ["webnoise"], "rule_id": "9001"}]}
+        pb = match_playbook(inv)
+        assert pb is not None and pb.id == "custom-web-noise"
+        # priority: built-in security playbook still outranks it on double match
+        both = {"alerts": [{"rule_groups": ["webnoise", "sudo"]}]}
+        assert match_playbook(both).id == PRIVILEGED_EXEC_PLAYBOOK.id
+    finally:
+        reset_registry_cache()
+
+
+def test_declarative_override_fires_and_is_raise_only():
+    result = evaluate_guard(
+        verdict_decision="close",
+        context=None,  # authz.class == absent
+        malicious_signal=False,
+        guardrails=[{
+            "when": {"and": [
+                {"==": [{"var": "authz.class"}, "absent"]},
+                {"==": [{"var": "verdict"}, "close"]},
+            ]},
+            "effect": "override", "to": "needs_more_info", "reason": "second look",
+        }],
+    )
+    assert result.final_decision == "needs_more_info"
+    assert result.overrides[0].guardrail == "playbook_guardrail_0"
+
+    # raise-only: an "override" that would lower an escalate never fires
+    lowered = evaluate_guard(
+        verdict_decision="escalate",
+        context=None,
+        malicious_signal=False,
+        guardrails=[{
+            "when": {"==": [{"var": "verdict"}, "escalate"]},
+            "effect": "override", "to": "needs_more_info", "reason": "nope",
+        }],
+    )
+    assert lowered.final_decision == "escalate" and not lowered.overrides
+
+    # code edges outrank declarative rules: IOC close still escalates
+    ioc = evaluate_guard(
+        verdict_decision="close",
+        context=None,
+        malicious_signal=True,
+        guardrails=[{
+            "when": {"==": [{"var": "verdict"}, "close"]},
+            "effect": "interrupt", "to": "human_review", "reason": "shadowed",
+        }],
+    )
+    assert ioc.final_decision == "escalate"
+    assert ioc.overrides[0].guardrail == GUARDRAIL_IOC_OVER_CLOSE
+
+
+def test_declarative_interrupt_and_confidence_condition():
+    result = evaluate_guard(
+        verdict_decision="close",
+        context=_context([_ticket()]),
+        malicious_signal=False,
+        verdict_confidence=0.55,
+        guardrails=[{
+            "when": {"and": [
+                {"==": [{"var": "verdict"}, "close"]},
+                {"<": [{"var": "verdict_confidence"}, 0.7]},
+            ]},
+            "effect": "interrupt", "to": "human_review",
+            "reason": "low-confidence close needs eyes",
+        }],
+    )
+    assert result.interrupted is True and result.final_decision == "close"
+    # same rule at high confidence does not fire
+    confident = evaluate_guard(
+        verdict_decision="close",
+        context=_context([_ticket()]),
+        malicious_signal=False,
+        verdict_confidence=0.95,
+        guardrails=[{
+            "when": {"<": [{"var": "verdict_confidence"}, 0.7]},
+            "effect": "interrupt", "to": "human_review", "reason": "low conf",
+        }],
+    )
+    assert not confident.overrides and confident.final_decision == "close"
+
+
+async def test_shadow_playbook_guardrails_audit_only(tmp_path, monkeypatch):
+    """End-to-end shadow: a shadow playbook matches, its guardrail WOULD fire on
+    the contradicted close, the audit records it — and the enforced outcome is
+    exactly what the active built-in playbook dictates, untouched by shadow."""
+    from soctalk.playbook.registry import reset_registry_cache
+
+    _write_playbook_yaml(tmp_path, "shadow-sudo.yaml", """
+id: shadow-sudo-strict
+version: 1
+priority: 70
+applies_to:
+  rule_groups: [sudo]
+guardrails:
+  - when:
+      "==": [{"var": "verdict"}, "close"]
+    effect: override
+    to: escalate
+    reason: shadow says every sudo close escalates
+""")
+    monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
+    reset_registry_cache()
+    try:
+        state = {"investigation": _sudo_investigation(_context([_ticket()]))}
+        state = await resolve_playbook_node(state)
+        # shadow status: despite outranking priority it does NOT govern
+        assert state["playbook"]["id"] == PRIVILEGED_EXEC_PLAYBOOK.id
+        assert state["playbook_shadow"][0]["id"] == "shadow-sudo-strict"
+
+        state["verdict"] = _verdict("close")
+        state = await verdict_guard_node(state)
+        # enforced result: covered close commits (active playbook has no such rule)
+        assert state["verdict"]["decision"] == "close"
+        assert state.get("verdict_overridden_by_guard") is None
+        # shadow result: recorded, attributable, non-binding
+        shadow_entries = [
+            a for a in state.get("playbook_audit") or [] if a.get("shadow")
+        ]
+        assert shadow_entries and shadow_entries[0]["playbook"] == "shadow-sudo-strict"
+        assert shadow_entries[0]["would_effect"] == "override"
+    finally:
+        reset_registry_cache()
+
+
+def test_validate_cli(tmp_path, capsys):
+    from soctalk.playbook.validate import main as validate_main
+
+    good = _write_playbook_yaml(
+        tmp_path, "good.yaml", _FILE_PLAYBOOK.format(status="shadow", priority=90)
+    )
+    bad = _write_playbook_yaml(tmp_path, "bad.yaml", "id: x\nbogus: 1\n")
+    assert validate_main([str(good)]) == 0
+    assert validate_main([str(good), str(bad)]) == 1
+    assert validate_main([]) == 2
+
+
+def test_file_playbook_priority_floor_rejected(tmp_path, monkeypatch):
+    """A file playbook may never outrank the built-ins: priority below the floor
+    rejects the file, so an authored sudo playbook cannot strip the dual-use
+    protections by winning the match."""
+    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+
+    _write_playbook_yaml(tmp_path, "hijack.yaml", """
+id: sudo-hijack
+version: 1
+status: active
+priority: 1
+applies_to:
+  rule_groups: [sudo]
+""")
+    monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
+    reset_registry_cache()
+    try:
+        pb = match_playbook(_sudo_investigation())
+        assert pb is not None and pb.id == PRIVILEGED_EXEC_PLAYBOOK.id
+    finally:
+        reset_registry_cache()
+
+
+def test_file_playbook_cannot_mint_deterministic_disposition(tmp_path, monkeypatch):
+    """Codex #44 High: an authored file naming its own rule_groups could attest
+    any class — so deterministic dispositions are a built-in-only capability and
+    a file carrying one is rejected whole."""
+    from soctalk.playbook.registry import match_playbook, reset_registry_cache
+
+    _write_playbook_yaml(tmp_path, "sshd-close.yaml", """
+id: sshd-noise-close
+version: 1
+status: active
+priority: 90
+applies_to:
+  rule_groups: [sshd]
+deterministic_disposition: close_operational
+""")
+    monkeypatch.setenv("SOCTALK_PLAYBOOK_DIR", str(tmp_path))
+    reset_registry_cache()
+    try:
+        inv = {"alerts": [{"rule_groups": ["sshd"], "rule_id": "5710"}]}
+        assert match_playbook(inv) is None  # file rejected, nothing governs sshd
+    finally:
+        reset_registry_cache()
+
+
+async def test_guard_manufactured_nmi_counts_as_retry():
+    """Codex #44 High: an override to needs_more_info increments the verdict
+    retry counter, so a repeat pass forces human review instead of looping the
+    supervisor→verdict cycle to the recursion limit."""
+    from soctalk.graph.builder import route_from_verdict
+
+    rules = [{
+        "when": {"==": [{"var": "verdict"}, "close"]},
+        "effect": "override", "to": "needs_more_info", "reason": "second look",
+    }]
+    state = {
+        "playbook": {**PRIVILEGED_EXEC_PLAYBOOK.model_dump(), "guardrails": rules},
+        "investigation": _sudo_investigation(_context([_ticket()])),
+        "verdict": _verdict("close"),
+    }
+    state = await verdict_guard_node(state)
+    assert state["verdict"]["decision"] == "needs_more_info"
+    assert state["verdict_retry_count"] == 1
+    assert route_from_verdict(state) == "human_review"  # retry budget spent → HIL
+
+
+def test_condition_list_literal_cap():
+    from soctalk.playbook.conditions import ConditionError, validate_condition
+
+    ok = {"in": [{"var": "verdict"}, ["a"] * 32]}
+    validate_condition(ok)
+    try:
+        validate_condition({"in": [{"var": "verdict"}, ["a"] * 33]})
+        raise AssertionError("accepted oversized list literal")
+    except ConditionError:
+        pass
+
+
+def test_shadow_audit_mirrors_active_semantics():
+    """Codex #44 finding: shadow evidence must match what the rule would do when
+    active — non-raising overrides are skipped, first match wins per playbook."""
+    from soctalk.playbook.guard import shadow_guardrail_audits
+
+    ctx = {"verdict": "escalate", "authz": {"class": "covered"}}
+    shadow_pb = {
+        "id": "sh", "guardrails": [
+            # would be ignored when active (lowers escalate) — must not log
+            {"when": {"==": [{"var": "verdict"}, "escalate"]},
+             "effect": "override", "to": "needs_more_info", "reason": "lower"},
+            # fires; and the one after it must NOT (first match wins)
+            {"when": {"==": [{"var": "authz.class"}, "covered"]},
+             "effect": "interrupt", "to": "human_review", "reason": "eyes"},
+            {"when": {"==": [{"var": "authz.class"}, "covered"]},
+             "effect": "interrupt", "to": "human_review", "reason": "dup"},
+        ],
+    }
+    audits = shadow_guardrail_audits([shadow_pb], ctx)
+    assert len(audits) == 1
+    assert audits[0]["guardrail"] == "playbook_guardrail_1"
+    assert audits[0]["would_effect"] == "interrupt"
