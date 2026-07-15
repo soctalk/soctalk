@@ -796,8 +796,39 @@ export const api = {
 			request<{ playbook_id: string; yaml: string }>(
 				`/mssp/tenants/${tenantId}/playbooks/${playbookId}/export`
 			)
+	},
+
+	authorizationFacts: {
+		list: (tenantId: string) =>
+			request<{ facts: AuthorizationFact[] }>(
+				`/mssp/tenants/${tenantId}/authorization/facts`
+			),
+		create: (tenantId: string, fact: Record<string, unknown>) =>
+			request<{ stored: string }>(`/mssp/tenants/${tenantId}/authorization/facts`, {
+				method: 'POST',
+				body: JSON.stringify({ fact })
+			}),
+		revoke: (tenantId: string, factId: string, reason: string | null) =>
+			request<{ revoked: string }>(
+				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/revoke`,
+				{ method: 'POST', body: JSON.stringify({ reason }) }
+			)
 	}
 	};
+
+export interface AuthorizationFact {
+	id: string;
+	kind: 'grant' | 'prohibition' | 'change_freeze' | 'entity_context';
+	track: 'account' | 'fim';
+	source_type: string;
+	trust: number;
+	scope?: { subject?: string; target?: string; action?: string };
+	valid_from?: string | null;
+	valid_until?: string | null;
+	created_by?: string;
+	provenance?: { api_caller?: string | null; review_id?: string | null };
+	[key: string]: unknown;
+}
 
 export interface MsspPendingReviewRow {
 	tenant_id: string;
