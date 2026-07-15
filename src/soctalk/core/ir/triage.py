@@ -916,16 +916,18 @@ async def triage_event(
     #     never be counted routine) and behind kill switch + family allowlist +
     #     per-tenant policy flag. Everything (incl. settings construction) is
     #     inside the guard so a scoring failure can never block ingest.
-    try:
-        _shadow_settings = ShadowSettings.from_env()
-        if should_score(_shadow_settings, policy, evidence.get("decoder")):
-            await score_alert_shadow(
+    _shadow_settings = ShadowSettings.from_env()  # fail-closed; never raises
+    _routine_eligible = should_score(_shadow_settings, policy, evidence.get("decoder"))
+    _routine_result: dict[str, Any] | None = None
+    if _routine_eligible:
+        try:
+            _routine_result = await score_alert_shadow(
                 db, tenant_id=tenant_id, source=source, rule_id=rule_id,
                 severity=severity, initial_iocs=initial_iocs, evidence=evidence,
                 ts=ts, alert_id=alert_id, settings=_shadow_settings,
             )
-    except Exception as e:  # noqa: BLE001 — shadow scoring must never block ingest
-        logger.warning("authz_routine_shadow_failed", error=str(e))
+        except Exception as e:  # noqa: BLE001 — shadow scoring must never block ingest
+            logger.warning("authz_routine_shadow_failed", error=str(e))
 
     # Safety floor over BOTH ingest auto-close paths below (issue #43): IOC or
     # active-incident overlap vetoes the close and the alert falls through to
@@ -935,6 +937,7 @@ async def triage_event(
     # 3a. Verdict memoization (issue #29): a recurring high-confidence-FP
     #     shape closes by reference — AFTER the entity-correlation check so it
     #     can never suppress an alert that belongs to a live incident.
+    memo_replay_denied = False
     if policy.get("verdict_memoization_enabled", False):
         mkey = memo_shape_key(
             source=source,
@@ -945,6 +948,20 @@ async def triage_event(
         if mkey is not None:
             memo = await lookup_memoized_close(db, tenant_id=tenant_id, key=mkey)
             if memo is not None:
+                # Two guards compose over the memo replay, strongest first:
+                # (1) the non-overridable safety FLOOR (issue #43): IOC or active-incident
+                #     overlap vetoes any close regardless of policy — falls through to a run.
+                # (2) the opt-in AUTHORIZATION-AWARE gate: the memo key is source-blind
+                #     (source|decoder|template_hash|version), so a cached benign-close for a
+                #     template must not replay onto a different source sharing it (a scanner's
+                #     routine close vs an attacker's identical shape from a new IP). When
+                #     enabled, the replay is applied ONLY if the CURRENT alert independently
+                #     passes source-aware routine authorization (deterministic would_close on
+                #     its specific entity tuple). Reuses 3b's routine result, present exactly
+                #     when routine scoring was eligible (should_score) — a killed / ineligible /
+                #     non-candidate / non-would_close alert is DENIED, never replayed. A denial
+                #     also suppresses the cruder high-conf-FP fallback below, so authz still
+                #     protects the low-severity attacker-shares-template case.
                 veto = await _close_floor_veto(
                     db, tenant_id=tenant_id, initial_iocs=initial_iocs,
                     keys=keys, correlation_already_checked=_correlation_checked,
@@ -954,26 +971,61 @@ async def triage_event(
                         db, tenant_id=tenant_id, alert_id=alert_id,
                         veto=veto, blocked="memoized_close",
                     )
+                    # floored → fall through (high-conf-FP path re-checks the same floor)
                 else:
-                    investigation_id = await auto_close_alert(
-                        db,
-                        tenant_id=tenant_id,
-                        alert_id=alert_id,
-                        reason=(
-                            f"memoized-fp: prior verdict close "
-                            f"confidence={memo['confidence']:.2f}"
-                        ),
-                        reopen_window_days=policy.get("reopen_window_days", 30),
-                    )
-                    await bump_memo_hit(db, tenant_id=tenant_id, key=mkey)
-                    return {
-                        "alert_id": str(alert_id),
-                        "investigation_id": str(investigation_id),
-                        "action": "memoized_close",
-                    }
+                    authz_basis = ""
+                    replay_ok = True
+                    if policy.get("authz_aware_memoization", False):
+                        routine = _routine_result if _routine_eligible else None
+                        if not (routine and routine.get("would_close")):
+                            await log_audit(
+                                db,
+                                action="ir.verdict_memoization.replay_denied",
+                                actor_principal="system",
+                                actor_id="triage",
+                                tenant_id=tenant_id,
+                                resource_type="alert",
+                                resource_id=str(alert_id),
+                                notes=canonical_json(
+                                    {
+                                        "shape_key": mkey,
+                                        "memo_confidence": memo["confidence"],
+                                        "reason": "routine_authorization_denied",
+                                        "routine_eligible": _routine_eligible,
+                                        "seen_days": (routine or {}).get("seen_days"),
+                                        "excluded": (routine or {}).get("excluded"),
+                                        "tuple": (routine or {}).get("tuple"),
+                                    }
+                                ),
+                            )
+                            memo_replay_denied = True  # also blocks the high-conf-FP fallback
+                            replay_ok = False
+                        else:
+                            authz_basis = (
+                                f"; routine seen_days={routine['seen_days']} "
+                                f"scope={routine['tuple']['scope']}"
+                            )
+                    if replay_ok:
+                        investigation_id = await auto_close_alert(
+                            db,
+                            tenant_id=tenant_id,
+                            alert_id=alert_id,
+                            reason=(
+                                f"memoized-fp: prior verdict close "
+                                f"confidence={memo['confidence']:.2f}{authz_basis}"
+                            ),
+                            reopen_window_days=policy.get("reopen_window_days", 30),
+                        )
+                        await bump_memo_hit(db, tenant_id=tenant_id, key=mkey)
+                        return {
+                            "alert_id": str(alert_id),
+                            "investigation_id": str(investigation_id),
+                            "action": "memoized_close",
+                        }
 
     if (
         assessment == "high_conf_fp"
+        and not memo_replay_denied  # authz-denied replay must route to the LLM, not this fallback
         and policy.get("auto_close_enabled", True)
         and confidence >= policy.get("auto_close_threshold", 0.90)
     ):

@@ -221,7 +221,7 @@ def _first_value(entities: list[dict[str, str]], entity_type: str) -> str | None
     return None
 
 
-async def score_alert_shadow(
+async def evaluate_alert_routine_authorization(
     db: AsyncSession,
     *,
     tenant_id: UUID,
@@ -231,20 +231,21 @@ async def score_alert_shadow(
     initial_iocs: list[dict[str, Any]],
     evidence: dict[str, Any],
     ts: datetime,
-    alert_id: UUID,
     settings: ShadowSettings | None = None,
 ) -> dict[str, Any] | None:
-    """Score one alert in shadow mode and write the audit row. Returns the shadow result
-    (for tests/telemetry), or None when the alert isn't a candidate. Never mutates the
-    alert or its disposition."""
+    """Compute the source-aware routine `would_close` decision for one alert — the DB tuple
+    query + `evaluate_shadow`, with NO audit and no disposition change. Returns the result
+    dict (would_close/seen_days/mature_history/excluded/components/tuple), or None when the
+    alert isn't even a candidate (no template hash / no host entity — too coarse per §8.3).
+
+    Shared by shadow scoring (which audits it) AND the authorization-aware memoization replay
+    gate (which requires would_close before applying a cached close). Read-only."""
     settings = settings or ShadowSettings.from_env()
     decoder = evidence.get("decoder")
     template_hash = evidence.get("template_hash")
     scope = _discriminating_entities(evidence.get("entities"))
     host = _first_value(scope, "host")
 
-    # A specific tuple or nothing: no template hash or no host entity means the shape is
-    # too coarse to ever count as "the same routine activity" (§8.3).
     if not template_hash or not host:
         return None
 
@@ -323,6 +324,31 @@ async def score_alert_shadow(
         "scope": scope,
         "rule_id": rule_id,
     }
+    return result
+
+
+async def score_alert_shadow(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    source: str,
+    rule_id: str | None,
+    severity: int,
+    initial_iocs: list[dict[str, Any]],
+    evidence: dict[str, Any],
+    ts: datetime,
+    alert_id: UUID,
+    settings: ShadowSettings | None = None,
+) -> dict[str, Any] | None:
+    """Score one alert in shadow mode and write the audit row. Returns the shadow result
+    (for tests/telemetry), or None when the alert isn't a candidate. Never mutates the
+    alert or its disposition."""
+    result = await evaluate_alert_routine_authorization(
+        db, tenant_id=tenant_id, source=source, rule_id=rule_id, severity=severity,
+        initial_iocs=initial_iocs, evidence=evidence, ts=ts, settings=settings,
+    )
+    if result is None:
+        return None
 
     await log_audit(
         db,
