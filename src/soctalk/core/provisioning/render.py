@@ -119,11 +119,11 @@ def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
 
 # Filenames must satisfy the chart schema's propertyNames pattern (and the k8s
 # ConfigMap key ceiling) or the whole helm install would fail on one odd file.
-_PLAYBOOK_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
+_TRIAGE_POLICY_FILENAME_RE = re.compile(r"[A-Za-z0-9._-]{1,247}\.ya?ml")
 
 # Total payload budget across all files for one tenant — a ConfigMap tops out
 # around 1MiB including metadata, so the sum must stay well under it.
-_PLAYBOOKS_TOTAL_BUDGET = 800 * 1024
+_TRIAGE_POLICIES_TOTAL_BUDGET = 800 * 1024
 
 
 def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[str, str]:
@@ -145,22 +145,24 @@ def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[s
     from soctalk.triage_policy.registry import parse_triage_policy_text
 
     log = structlog.get_logger()
-    directory = os.getenv("SOCTALK_TENANT_PLAYBOOKS_DIR", "")
+    directory = os.getenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR") or os.getenv(
+        "SOCTALK_TENANT_PLAYBOOKS_DIR", ""
+    )
     if not directory:
         return {}
     from pathlib import Path
 
     root = Path(directory)
     if not root.is_dir():
-        log.warning("tenant_playbooks_dir_missing", dir=directory)
+        log.warning("tenant_triage_policies_dir_missing", dir=directory)
         return {}
     identifiers = {v for v in (tenant_slug, tenant_id) if v}
     out: dict[str, str] = {}
     total = 0
     for path in sorted(root.glob("*.y*ml")):
-        if not _PLAYBOOK_FILENAME_RE.fullmatch(path.name):
+        if not _TRIAGE_POLICY_FILENAME_RE.fullmatch(path.name):
             log.error(
-                "tenant_playbook_rejected", file=str(path),
+                "tenant_triage_policy_rejected", file=str(path),
                 error="filename not accepted by the chart schema",
             )
             continue
@@ -169,16 +171,16 @@ def render_triage_policy_values(tenant_slug: str, tenant_id: str = "") -> dict[s
             pb = parse_triage_policy_text(text)
         except Exception as exc:  # noqa: BLE001 — invalid files never reach the chart
             log.error(
-                "tenant_playbook_rejected", file=str(path), error=str(exc)[:300]
+                "tenant_triage_policy_rejected", file=str(path), error=str(exc)[:300]
             )
             continue
         if pb.tenant != "*" and pb.tenant not in identifiers:
             continue
         size = len(text.encode())
-        if total + size > _PLAYBOOKS_TOTAL_BUDGET:
+        if total + size > _TRIAGE_POLICIES_TOTAL_BUDGET:
             log.error(
-                "tenant_playbook_rejected", file=str(path),
-                error=f"per-tenant playbook budget ({_PLAYBOOKS_TOTAL_BUDGET}B) exceeded",
+                "tenant_triage_policy_rejected", file=str(path),
+                error=f"per-tenant playbook budget ({_TRIAGE_POLICIES_TOTAL_BUDGET}B) exceeded",
             )
             continue
         total += size
@@ -266,7 +268,7 @@ def render_tenant_values(
     profile: Profile = "poc",
     network_policies_enabled: bool = True,
     include_llm_api_key: bool = True,
-    authored_playbooks: dict[str, str] | None = None,
+    authored_triage_policies: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Produce a values dict for the tenant chart.
 
@@ -535,7 +537,7 @@ def render_tenant_values(
             ),
             # Declarative playbooks (#44): validated install-level files scoped
             # to this tenant; {} when SOCTALK_TENANT_PLAYBOOKS_DIR is unset.
-            "playbooks": render_triage_policy_values(tenant.slug, str(tenant.id)),
+            "triagePolicies": render_triage_policy_values(tenant.slug, str(tenant.id)),
         },
         "namespaceLabels": {
             "tenant": "true",
@@ -627,9 +629,9 @@ def render_tenant_values(
     # into the same runsWorker.playbooks ConfigMap. Fail closed on a filename collision
     # so an authored playbook can never silently overwrite an operator file (or vice
     # versa) — the reconcile fails and the UI shows activation failed.
-    if authored_playbooks:
-        file_pb = values["runsWorker"].setdefault("playbooks", {})
-        for filename, text in authored_playbooks.items():
+    if authored_triage_policies:
+        file_pb = values["runsWorker"].setdefault("triagePolicies", {})
+        for filename, text in authored_triage_policies.items():
             if filename in file_pb:
                 raise ValueError(
                     f"authored playbook '{filename}' collides with a file playbook"
@@ -638,10 +640,10 @@ def render_tenant_values(
         # Enforce the per-tenant budget across BOTH file and authored playbooks — the
         # file-only check in render_triage_policy_values can't see the authored additions.
         total = sum(len(t.encode()) for t in file_pb.values())
-        if total > _PLAYBOOKS_TOTAL_BUDGET:
+        if total > _TRIAGE_POLICIES_TOTAL_BUDGET:
             raise ValueError(
                 f"combined playbook payload ({total}B) exceeds the per-tenant budget "
-                f"({_PLAYBOOKS_TOTAL_BUDGET}B)"
+                f"({_TRIAGE_POLICIES_TOTAL_BUDGET}B)"
             )
     return values
 

@@ -1014,7 +1014,7 @@ class TenantController:
             tenant=ctx.tenant,
             integration=ctx.integration,
             branding=ctx.branding,
-            authored_playbooks=authored_pb,
+            authored_triage_policies=authored_pb,
             mssp_id=str(ctx.organization.mssp_id),
             install_id=str(ctx.organization.install_id),
             llm_secret_name=ctx.llm_secret_name,

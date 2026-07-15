@@ -650,7 +650,7 @@ def test_wazuh_values_no_storage_override_for_poc():
 # TriagePolicy provisioning (issue #44 level 2: chart + render wiring)
 # ---------------------------------------------------------------------------
 
-_VALID_PLAYBOOK_YAML = """\
+_VALID_TRIAGE_POLICY_YAML = """\
 id: custom-ops-noise
 version: 1
 priority: 90
@@ -665,7 +665,7 @@ guardrails:
 """
 
 
-def _values_with_playbooks() -> dict:
+def _values_with_triage_policies() -> dict:
     t = _make_tenant()
     v = render_tenant_values(
         tenant=t,
@@ -678,38 +678,38 @@ def _values_with_playbooks() -> dict:
     return v
 
 
-def test_render_playbook_values_env_gated_and_validated(tmp_path, monkeypatch):
+def test_render_triage_policy_values_env_gated_and_validated(tmp_path, monkeypatch):
     from soctalk.core.provisioning.render import render_triage_policy_values
 
     # unset env -> {}
-    monkeypatch.delenv("SOCTALK_TENANT_PLAYBOOKS_DIR", raising=False)
+    monkeypatch.delenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", raising=False)
     assert render_triage_policy_values("acme") == {}
 
-    (tmp_path / "good.yaml").write_text(_VALID_PLAYBOOK_YAML)
+    (tmp_path / "good.yaml").write_text(_VALID_TRIAGE_POLICY_YAML)
     (tmp_path / "bad.yaml").write_text("id: broken\nbogus_field: 1\n")
     (tmp_path / "foreign.yaml").write_text(
         "id: other-tenant-pb\ntenant: not-acme\n"
         "applies_to:\n  rule_groups: [x]\n"
     )
-    monkeypatch.setenv("SOCTALK_TENANT_PLAYBOOKS_DIR", str(tmp_path))
+    monkeypatch.setenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", str(tmp_path))
     out = render_triage_policy_values("acme")
     assert list(out) == ["good.yaml"], "invalid + foreign files must not ship"
     assert "custom-ops-noise" in out["good.yaml"]
 
     # and render_tenant_values threads it into runsWorker.playbooks
-    v = _values_with_playbooks()
-    assert list(v["runsWorker"]["playbooks"]) == ["good.yaml"]
+    v = _values_with_triage_policies()
+    assert list(v["runsWorker"]["triagePolicies"]) == ["good.yaml"]
 
 
-def test_chart_renders_playbooks_configmap_mount_env_checksum(monkeypatch):
-    monkeypatch.delenv("SOCTALK_TENANT_PLAYBOOKS_DIR", raising=False)
-    v = _values_with_playbooks()
-    v["runsWorker"]["playbooks"] = {"good.yaml": _VALID_PLAYBOOK_YAML}
+def test_chart_renders_triage_policies_configmap_mount_env_checksum(monkeypatch):
+    monkeypatch.delenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", raising=False)
+    v = _values_with_triage_policies()
+    v["runsWorker"]["triagePolicies"] = {"good.yaml": _VALID_TRIAGE_POLICY_YAML}
     manifests = _helm_template(v)
 
     cm = next(
         m for m in manifests
-        if m["kind"] == "ConfigMap" and m["metadata"]["name"] == "soctalk-playbooks"
+        if m["kind"] == "ConfigMap" and m["metadata"]["name"] == "soctalk-triage-policies"
     )
     assert "custom-ops-noise" in cm["data"]["good.yaml"]
     # the ConfigMap content must round-trip as valid YAML for the loader
@@ -724,23 +724,23 @@ def test_chart_renders_playbooks_configmap_mount_env_checksum(monkeypatch):
         and m["metadata"]["name"] == "soctalk-runs-worker"
     )
     pod = deploy["spec"]["template"]
-    assert pod["metadata"]["annotations"]["checksum/playbooks"]
+    assert pod["metadata"]["annotations"]["checksum/triage-policies"]
     container = pod["spec"]["containers"][0]
     env = {e["name"]: e.get("value") for e in container["env"]}
-    assert env["SOCTALK_PLAYBOOK_DIR"] == "/etc/soctalk/playbooks"
+    assert env["SOCTALK_TRIAGE_POLICY_DIR"] == "/etc/soctalk/triage-policies"
     mounts = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
-    assert mounts["playbooks"] == "/etc/soctalk/playbooks"
+    assert mounts["triage-policies"] == "/etc/soctalk/triage-policies"
     volumes = {vol["name"] for vol in pod["spec"]["volumes"]}
-    assert "playbooks" in volumes
+    assert "triage-policies" in volumes
 
 
-def test_chart_without_playbooks_renders_nothing_new(monkeypatch):
-    monkeypatch.delenv("SOCTALK_TENANT_PLAYBOOKS_DIR", raising=False)
-    v = _values_with_playbooks()
-    assert v["runsWorker"]["playbooks"] == {}
+def test_chart_without_triage_policies_renders_nothing_new(monkeypatch):
+    monkeypatch.delenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", raising=False)
+    v = _values_with_triage_policies()
+    assert v["runsWorker"]["triagePolicies"] == {}
     manifests = _helm_template(v)
     assert not any(
-        m["kind"] == "ConfigMap" and m["metadata"]["name"] == "soctalk-playbooks"
+        m["kind"] == "ConfigMap" and m["metadata"]["name"] == "soctalk-triage-policies"
         for m in manifests
     )
     deploy = next(
@@ -750,10 +750,10 @@ def test_chart_without_playbooks_renders_nothing_new(monkeypatch):
     )
     container = deploy["spec"]["template"]["spec"]["containers"][0]
     env_names = {e["name"] for e in container["env"]}
-    assert "SOCTALK_PLAYBOOK_DIR" not in env_names
+    assert "SOCTALK_TRIAGE_POLICY_DIR" not in env_names
 
 
-def test_render_playbook_values_codex_fixes(tmp_path, monkeypatch):
+def test_render_triage_policy_values_codex_fixes(tmp_path, monkeypatch):
     """Codex provisioning-review fixes: UUID tenant scoping works; a filename
     the chart schema would reject is skipped (not shipped to fail helm); the
     per-tenant total budget drops overflow files; content is validated from the
@@ -764,13 +764,13 @@ def test_render_playbook_values_codex_fixes(tmp_path, monkeypatch):
     (tmp_path / "byid.yaml").write_text(
         f"id: id-scoped\ntenant: {tenant_id}\napplies_to:\n  rule_groups: [x]\n"
     )
-    (tmp_path / "odd.yamml").write_text(_VALID_PLAYBOOK_YAML)  # glob-matches, schema-invalid name
-    big = _VALID_PLAYBOOK_YAML + "# pad\n" * 10000  # ~60KB, valid but budget fodder
+    (tmp_path / "odd.yamml").write_text(_VALID_TRIAGE_POLICY_YAML)  # glob-matches, schema-invalid name
+    big = _VALID_TRIAGE_POLICY_YAML + "# pad\n" * 10000  # ~60KB, valid but budget fodder
     for n in range(14):
         (tmp_path / f"pad{n:02d}.yaml").write_text(
             big.replace("custom-ops-noise", f"pad-{n:02d}")
         )
-    monkeypatch.setenv("SOCTALK_TENANT_PLAYBOOKS_DIR", str(tmp_path))
+    monkeypatch.setenv("SOCTALK_TENANT_TRIAGE_POLICIES_DIR", str(tmp_path))
 
     out = render_triage_policy_values("acme", tenant_id)
     assert "byid.yaml" in out, "UUID-scoped playbook must ship to its tenant"
