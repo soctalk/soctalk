@@ -94,6 +94,7 @@ async def test_tenant_admin_creates_and_lists_a_tenant_analyst(app_session, mssp
     from soctalk.core.api.users import (
         TenantUserCreate,
         create_tenant_user,
+        deactivate_tenant_user,
         list_tenant_users,
     )
 
@@ -122,6 +123,20 @@ async def test_tenant_admin_creates_and_lists_a_tenant_analyst(app_session, mssp
 
         listed = await list_tenant_users(req)
         assert any(u.email == email and u.role == Role.TENANT_ANALYST.value for u in listed)
+
+        # deactivate it (audits + revokes sessions; no-op revoke for a fresh user) → active=false
+        from uuid import UUID as _UUID
+
+        await deactivate_tenant_user(_UUID(created.id), req)
+        await app_session.commit()
+        after = await list_tenant_users(req)
+        row = next(u for u in after if u.id == created.id)
+        assert row.active is False
+
+        # cannot deactivate self (parsed-UUID compare)
+        with pytest.raises(HTTPException) as exc:
+            await deactivate_tenant_user(a.admin_user_id, req)
+        assert exc.value.status_code == 400
     finally:
         from sqlalchemy import text
 

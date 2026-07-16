@@ -21,10 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.auth.models import PasswordCredential
 from soctalk.core.auth.passwords import hash_password
+from soctalk.core.auth.sessions import revoke_all_user_sessions
+from soctalk.core.observability.audit import log_audit
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import require_permission
-from soctalk.core.tenancy.models import Role, User, UserType
+from soctalk.core.tenancy.models import AuditAction, Role, User, UserType
 from soctalk.core.tenancy.permissions import Permission
 
 tenant_users_router = APIRouter(prefix="/api/tenant", tags=["tenant-users"])
@@ -66,10 +68,13 @@ class TenantUserCreate(BaseModel):
     def _valid_email(cls, v: str) -> str:
         v = v.strip().lower()
         # Minimal shape check (no email-validator dependency): one '@', non-empty local+domain,
-        # a dot in the domain. Deliverability isn't verified — this is a login identifier.
+        # a dot in the domain, and no whitespace/control chars (so the value is safe to later use
+        # as a login identifier / mail header). Deliverability isn't verified.
+        if any(c.isspace() or ord(c) < 0x20 for c in v):
+            raise ValueError("invalid email address")
         local, sep, domain = v.partition("@")
         dotted = "." in domain and not domain.startswith(".") and not domain.endswith(".")
-        if not sep or not local or not dotted:
+        if not sep or not local or not dotted or "@" in domain:
             raise ValueError("invalid email address")
         return v
 
@@ -120,6 +125,7 @@ async def create_tenant_user(payload: TenantUserCreate, request: Request) -> Ten
             f"role must be one of {sorted(_ASSIGNABLE_TENANT_ROLES)} "
             "(MSSP roles cannot be assigned to a tenant user)",
         )
+    identity = current_identity(request)
     db = _db(request)
     tid = _caller_tenant(request)
     temp_password = secrets.token_urlsafe(12)
@@ -149,6 +155,17 @@ async def create_tenant_user(payload: TenantUserCreate, request: Request) -> Ten
             )
         )
         await db.flush()
+        await log_audit(
+            db,
+            action=AuditAction.USER_CREATE,
+            actor_principal="tenant_admin",
+            actor_id=str(identity.user_id),
+            tenant_id=tid,
+            resource_type="user",
+            resource_id=str(user.id),
+            after={"email": user.email, "role": user.role},
+            notes="tenant self-service user creation",
+        )
 
     return TenantUserCreated(
         id=str(user.id),
@@ -169,9 +186,10 @@ class DeactivateResult(BaseModel):
     response_model=DeactivateResult,
     dependencies=[Depends(_MANAGE_USERS)],
 )
-async def deactivate_tenant_user(user_id: str, request: Request) -> DeactivateResult:
+async def deactivate_tenant_user(user_id: UUID, request: Request) -> DeactivateResult:
     identity = current_identity(request)
-    if str(identity.user_id) == user_id:
+    # Compare parsed UUIDs — a str compare could be bypassed by non-canonical spelling.
+    if identity.user_id == user_id:
         raise HTTPException(400, "you cannot deactivate your own account")
     db = _db(request)
     tid = _caller_tenant(request)
@@ -182,11 +200,24 @@ async def deactivate_tenant_user(user_id: str, request: Request) -> DeactivateRe
                 "UPDATE users SET active = false "
                 "WHERE id = :id AND user_type = 'tenant' RETURNING id"
             ),
-            {"id": user_id},
+            {"id": str(user_id)},
         )
         if res.first() is None:
             raise HTTPException(404, "user not found")
-    return DeactivateResult(deactivated=user_id)
+        await log_audit(
+            db,
+            action=AuditAction.USER_DELETE,
+            actor_principal="tenant_admin",
+            actor_id=str(identity.user_id),
+            tenant_id=tid,
+            resource_type="user",
+            resource_id=str(user_id),
+            notes="tenant self-service deactivation",
+        )
+    # active=false alone doesn't stop an already-issued session — the session-resolution path
+    # doesn't re-check user.active — so revoke every live session for the user immediately.
+    await revoke_all_user_sessions(db, user_id=user_id)
+    return DeactivateResult(deactivated=str(user_id))
 
 
 __all__ = ["tenant_users_router"]
