@@ -446,6 +446,13 @@ export interface AuthoredTriagePolicy {
 	definition: Record<string, unknown>;
 }
 
+export interface AuthoredResponsePlaybook {
+	response_playbook_id: string;
+	revision: number;
+	status: string;
+	definition: Record<string, unknown>;
+}
+
 // API methods
 export const api = {
 	auth: {
@@ -807,6 +814,45 @@ export const api = {
 		deactivateAuthored: (tenantId: string, triagePolicyId: string) =>
 			request<AuthoredTriagePolicy>(
 				`/mssp/tenants/${tenantId}/triage-policies/${triagePolicyId}/deactivate`,
+				{ method: 'POST' }
+			)
+	},
+
+	responsePlaybooks: {
+		listAuthored: (tenantId: string) =>
+			request<AuthoredResponsePlaybook[]>(`/mssp/tenants/${tenantId}/response-playbooks`),
+		createAuthored: (tenantId: string, definition: Record<string, unknown>, status = 'shadow') =>
+			request<AuthoredResponsePlaybook>(`/mssp/tenants/${tenantId}/response-playbooks`, {
+				method: 'POST',
+				body: JSON.stringify({ definition, status })
+			}),
+		updateAuthored: (
+			tenantId: string,
+			responsePlaybookId: string,
+			definition: Record<string, unknown>,
+			status = 'shadow'
+		) =>
+			request<AuthoredResponsePlaybook>(
+				`/mssp/tenants/${tenantId}/response-playbooks/${responsePlaybookId}`,
+				{ method: 'PUT', body: JSON.stringify({ definition, status }) }
+			),
+		retireAuthored: (tenantId: string, responsePlaybookId: string) =>
+			request<{ ok: string }>(
+				`/mssp/tenants/${tenantId}/response-playbooks/${responsePlaybookId}`,
+				{ method: 'DELETE' }
+			),
+		exportAuthored: (tenantId: string, responsePlaybookId: string) =>
+			request<{ response_playbook_id: string; yaml: string }>(
+				`/mssp/tenants/${tenantId}/response-playbooks/${responsePlaybookId}/export`
+			),
+		activateAuthored: (tenantId: string, responsePlaybookId: string) =>
+			request<AuthoredResponsePlaybook>(
+				`/mssp/tenants/${tenantId}/response-playbooks/${responsePlaybookId}/activate`,
+				{ method: 'POST' }
+			),
+		deactivateAuthored: (tenantId: string, responsePlaybookId: string) =>
+			request<AuthoredResponsePlaybook>(
+				`/mssp/tenants/${tenantId}/response-playbooks/${responsePlaybookId}/deactivate`,
 				{ method: 'POST' }
 			)
 	},
