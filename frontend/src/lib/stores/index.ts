@@ -98,6 +98,13 @@ export const canViewTenantEngagements: Readable<boolean> = hasPermission('tenant
 export const canDeclareTenantEngagement: Readable<boolean> = hasPermission(
 	'tenant_authorize_engagement'
 );
+// tenant self-service: view / assert own authorization facts
+export const canViewTenantAuthorization: Readable<boolean> = hasPermission(
+	'tenant_view_authorization_facts'
+);
+export const canAssertTenantAuthorization: Readable<boolean> = hasPermission(
+	'tenant_assert_authorization_facts'
+);
 
 // Whether the *user* is an MSSP-type identity (mssp_admin, mssp_analyst).
 // Stable across "Open SOC" / "Clear" — pinning a tenant doesn't change

@@ -850,6 +850,16 @@ export const api = {
 				`/tenant/engagements/${encodeURIComponent(engagementId)}/revoke`,
 				{ method: 'POST', body: JSON.stringify({ reason }) }
 			)
+	},
+	// Tenant self-service authorization facts — assert facts about your OWN org. They land
+	// 'pending' (invisible to triage) until an MSSP analyst approves them.
+	tenantAuthzFacts: {
+		list: () => request<{ facts: AuthorizationFact[] }>('/tenant/authorization/facts'),
+		assert: (fact: Record<string, unknown>) =>
+			request<{ stored: string; review_status: string }>('/tenant/authorization/facts', {
+				method: 'POST',
+				body: JSON.stringify({ fact })
+			})
 	}
 	};
 
