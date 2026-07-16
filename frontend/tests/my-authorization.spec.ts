@@ -63,7 +63,7 @@ test.describe('Tenant authorization facts (self-service)', () => {
 		});
 
 		await page.goto('/my-authorization');
-		await expect(page.getByRole('heading', { name: 'Authorization facts' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Authorization' })).toBeVisible();
 		await page.getByRole('button', { name: '+ Assert fact' }).click();
 		await page.getByRole('button', { name: 'Submit for review' }).click();
 		await expect(page.getByText('awaiting review')).toBeVisible();

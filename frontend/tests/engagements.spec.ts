@@ -55,8 +55,8 @@ test.describe('Tenant engagements (self-service)', () => {
 			}
 		});
 
-		await page.goto('/engagements');
-		await expect(page.getByRole('heading', { name: 'Authorized engagements' })).toBeVisible();
+		await page.goto('/my-authorization?tab=engagements');
+		await expect(page.getByRole('heading', { name: 'Authorization' })).toBeVisible();
 		await expect(page.getByText('Q3 external pentest')).toBeVisible();
 
 		await page.getByRole('button', { name: '+ Declare engagement' }).click();
@@ -80,7 +80,7 @@ test.describe('Tenant engagements (self-service)', () => {
 			r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([ENGAGEMENT]) })
 		);
 
-		await page.goto('/engagements');
+		await page.goto('/my-authorization?tab=engagements');
 		await expect(page.getByText('Q3 external pentest')).toBeVisible(); // read works
 		await expect(page.getByRole('button', { name: '+ Declare engagement' })).toHaveCount(0);
 		await expect(page.getByRole('button', { name: 'Revoke' })).toHaveCount(0);
