@@ -933,6 +933,89 @@ async def revoke_engagement_route(
 
 
 # ---------------------------------------------------------------------------
+# Tenant self-service engagements — a tenant declares its OWN authorized activity
+# (e.g. a pentest window + scope) so the SOC deconflicts it. The tenant_id comes from
+# the caller's token, never a path param, so a tenant can only ever touch its own org.
+# ---------------------------------------------------------------------------
+
+tenant_engagements_router = APIRouter(prefix="/api/tenant", tags=["tenant-engagements"])
+
+
+def _caller_tenant(request: Request) -> UUID:
+    identity = current_identity(request)
+    tid = identity.tenant_id
+    if not tid:
+        raise HTTPException(400, "tenant_id missing from token")
+    return tid if isinstance(tid, UUID) else UUID(str(tid))
+
+
+@tenant_engagements_router.get(
+    "/engagements",
+    response_model=list[EngagementDTO],
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_VIEW_ENGAGEMENTS, audience="tenant"))
+    ],
+)
+async def tenant_list_engagements_route(
+    request: Request, include_revoked: bool = False
+) -> list[EngagementDTO]:
+    tid = _caller_tenant(request)
+    db = _db(request)
+    async with tenant_context(db, tid):
+        rows = await list_engagements(db, tenant_id=tid, include_revoked=include_revoked)
+    return [_engagement_dto(r) for r in rows]
+
+
+@tenant_engagements_router.post(
+    "/engagements",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_AUTHORIZE_ENGAGEMENT, audience="tenant"))
+    ],
+)
+async def tenant_declare_engagement_route(
+    payload: DeclareEngagementRequest, request: Request
+) -> dict[str, str]:
+    tid = _caller_tenant(request)
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tid):
+        try:
+            eid = await declare_engagement(
+                db, tenant_id=tid, name=payload.name, kind=payload.kind,
+                starts_at=payload.starts_at, ends_at=payload.ends_at,
+                scope_source_ips=payload.scope_source_ips,
+                scope_hosts=payload.scope_hosts,
+                scope_techniques=payload.scope_techniques,
+                created_by=identity.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    return {"id": eid}
+
+
+@tenant_engagements_router.post(
+    "/engagements/{engagement_id}/revoke",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_AUTHORIZE_ENGAGEMENT, audience="tenant"))
+    ],
+)
+async def tenant_revoke_engagement_route(
+    engagement_id: UUID, payload: RevokeEngagementRequest, request: Request
+) -> dict[str, str]:
+    tid = _caller_tenant(request)
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tid):
+        ok = await revoke_engagement(
+            db, tenant_id=tid, engagement_id=engagement_id,
+            revoked_by=identity.user_id, reason=payload.reason,
+        )
+    if not ok:
+        raise HTTPException(404, "engagement not found or already revoked")
+    return {"ok": "revoked"}
+
+
+# ---------------------------------------------------------------------------
 # Triage policies (read-only governance view) — #43/#44
 # ---------------------------------------------------------------------------
 
@@ -1306,5 +1389,6 @@ __all__ = [
     "playbooks_router",
     "triage_policies_router",
     "proposals_router",
+    "tenant_engagements_router",
     "tenant_investigations_router",
 ]

@@ -176,3 +176,68 @@ def test_declare_route_role_gate():
     # mssp_manager — holds AUTHORIZE_ENGAGEMENT; gate opens (handler 500s on the noop DB)
     cm = TestClient(_app_as(manager), raise_server_exceptions=False)
     assert cm.post(url, json=body).status_code != 403
+
+
+def test_tenant_can_declare_its_own_engagement_by_role():
+    """Tenant self-service: a tenant declares its OWN engagement (e.g. an authorized pentest).
+    Viewer can read but not declare; tenant_manager declares; an MSSP user is wrong-audience."""
+    from fastapi.testclient import TestClient
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    from soctalk.core.api.app_v1 import create_app
+    from soctalk.core.tenancy.models import Role, UserType
+
+    class _NoopDB:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                scope.setdefault("state", {})
+                scope["state"]["db"] = None
+            await self.app(scope, receive, send)
+
+    def _app_as(identity):
+        app = create_app(db_session_middleware=_NoopDB)
+
+        class _Inject(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                request.state.user_identity = identity
+                return await call_next(request)
+
+        app.add_middleware(_Inject)
+        return app
+
+    tid = str(uuid4())
+    body = {
+        "name": "acme pentest", "kind": "pentest",
+        "starts_at": _NOW.isoformat(), "ends_at": (_NOW + timedelta(hours=1)).isoformat(),
+        "scope_source_ips": ["203.0.113.0/24"], "scope_hosts": ["h"], "scope_techniques": [],
+    }
+
+    def _tenant(role):
+        return {
+            "user_id": str(uuid4()), "email": f"{role}@acme.example",
+            "user_type": UserType.TENANT.value, "role": role,
+            "tenant_id": tid, "current_tenant": None,
+        }
+
+    url = "/api/tenant/engagements"
+
+    # tenant viewer — may list, may NOT declare
+    cv = TestClient(_app_as(_tenant(Role.CUSTOMER_VIEWER.value)), raise_server_exceptions=False)
+    assert cv.get(url).status_code != 403          # view engagements is a viewer capability
+    assert cv.post(url, json=body).status_code == 403
+
+    # tenant manager — declares its own engagement (gate opens; handler 500s on noop DB)
+    cm = TestClient(_app_as(_tenant(Role.TENANT_MANAGER.value)), raise_server_exceptions=False)
+    assert cm.post(url, json=body).status_code != 403
+
+    # an MSSP user is the wrong audience for the tenant endpoint
+    mssp = {
+        "user_id": str(uuid4()), "email": "a@mssp.example",
+        "user_type": UserType.MSSP.value, "role": Role.MSSP_MANAGER.value,
+        "tenant_id": None, "current_tenant": None,
+    }
+    cx = TestClient(_app_as(mssp), raise_server_exceptions=False)
+    assert cx.post(url, json=body).status_code == 403

@@ -177,7 +177,9 @@ def require_tenant_role(*allowed: str | Role) -> Callable[..., Callable[..., Any
     allowed_values = (
         frozenset(r.value if isinstance(r, Role) else str(r) for r in allowed)
         if allowed
-        else frozenset({Role.TENANT_ADMIN.value, Role.CUSTOMER_VIEWER.value})
+        else frozenset(
+            {Role.TENANT_ADMIN.value, Role.TENANT_MANAGER.value, Role.CUSTOMER_VIEWER.value}
+        )
     )
 
     async def _checker(request: Request) -> None:

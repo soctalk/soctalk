@@ -826,8 +826,48 @@ export const api = {
 				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/revoke`,
 				{ method: 'POST', body: JSON.stringify({ reason }) }
 			)
+	},
+	// Tenant self-service engagements — the caller's own tenant (from the token). Declaring a
+	// pentest/red-team window+scope lets the SOC deconflict it.
+	tenantEngagements: {
+		list: (includeRevoked = false) =>
+			request<TenantEngagement[]>(
+				`/tenant/engagements${includeRevoked ? '?include_revoked=true' : ''}`
+			),
+		declare: (body: TenantEngagementDeclare) =>
+			request<{ id: string }>('/tenant/engagements', {
+				method: 'POST',
+				body: JSON.stringify(body)
+			}),
+		revoke: (engagementId: string, reason: string | null) =>
+			request<{ ok: string }>(
+				`/tenant/engagements/${encodeURIComponent(engagementId)}/revoke`,
+				{ method: 'POST', body: JSON.stringify({ reason }) }
+			)
 	}
 	};
+
+export interface TenantEngagement {
+	id: string;
+	name: string;
+	kind: string;
+	status: string;
+	starts_at: string;
+	ends_at: string;
+	scope_source_ips?: string[];
+	scope_hosts?: string[];
+	scope_techniques?: string[];
+}
+
+export interface TenantEngagementDeclare {
+	name: string;
+	kind: string;
+	starts_at: string;
+	ends_at: string;
+	scope_source_ips?: string[];
+	scope_hosts?: string[];
+	scope_techniques?: string[];
+}
 
 export interface AuthorizationFact {
 	id: string;

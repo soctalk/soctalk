@@ -273,6 +273,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     # Native IR (AI-led) — enabled by default, always mounted.
     app.include_router(ir_routes.mssp_investigations_router)
     app.include_router(ir_routes.tenant_investigations_router)
+    app.include_router(ir_routes.tenant_engagements_router)
     app.include_router(ir_routes.alerts_router)
     app.include_router(ir_routes.proposals_router)
     app.include_router(ir_routes.integrations_router)

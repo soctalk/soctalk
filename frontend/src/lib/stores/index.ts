@@ -93,6 +93,11 @@ export const canManageTriagePolicies: Readable<boolean> = hasPermission('manage_
 export const canManageAuthorization: Readable<boolean> = hasPermission('manage_authorization_facts');
 // declare/revoke engagements (SOC-manager tier)
 export const canAuthorizeEngagements: Readable<boolean> = hasPermission('authorize_engagement');
+// tenant self-service: view / declare own engagements (tenant viewer / tenant_manager)
+export const canViewTenantEngagements: Readable<boolean> = hasPermission('tenant_view_engagements');
+export const canDeclareTenantEngagement: Readable<boolean> = hasPermission(
+	'tenant_authorize_engagement'
+);
 
 // Whether the *user* is an MSSP-type identity (mssp_admin, mssp_analyst).
 // Stable across "Open SOC" / "Clear" — pinning a tenant doesn't change

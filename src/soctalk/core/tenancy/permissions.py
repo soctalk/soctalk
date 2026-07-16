@@ -56,6 +56,8 @@ class Permission(str, Enum):
     TENANT_VIEW_INVESTIGATIONS = "tenant_view_investigations"
     TENANT_VIEW_BRANDING = "tenant_view_branding"
     TENANT_MANAGE_LLM = "tenant_manage_llm"
+    TENANT_VIEW_ENGAGEMENTS = "tenant_view_engagements"
+    TENANT_AUTHORIZE_ENGAGEMENT = "tenant_authorize_engagement"  # declare/revoke own engagements
 
 
 # ---------------------------------------------------------------------------
@@ -98,11 +100,18 @@ _ADMIN: frozenset[Permission] = _MANAGER | {
     Permission.MANAGE_TENANT_LIFECYCLE,
 }
 
-# --- tenant audience bundles ---
+# --- tenant audience bundles (viewer ⊆ manager ⊆ admin) ---
 _TENANT_VIEWER: frozenset[Permission] = frozenset(
-    {Permission.TENANT_VIEW_INVESTIGATIONS, Permission.TENANT_VIEW_BRANDING}
+    {
+        Permission.TENANT_VIEW_INVESTIGATIONS,
+        Permission.TENANT_VIEW_BRANDING,
+        Permission.TENANT_VIEW_ENGAGEMENTS,
+    }
 )
-_TENANT_ADMIN: frozenset[Permission] = _TENANT_VIEWER | {Permission.TENANT_MANAGE_LLM}
+# tenant SOC manager authorizes their own risk (e.g. declares an authorized pentest engagement)
+_TENANT_MANAGER: frozenset[Permission] = _TENANT_VIEWER | {Permission.TENANT_AUTHORIZE_ENGAGEMENT}
+# tenant admin adds self-service config
+_TENANT_ADMIN: frozenset[Permission] = _TENANT_MANAGER | {Permission.TENANT_MANAGE_LLM}
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
@@ -111,6 +120,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     Role.MSSP_MANAGER.value: _MANAGER,
     Role.ANALYST.value: _ANALYST,
     Role.TENANT_ADMIN.value: _TENANT_ADMIN,
+    Role.TENANT_MANAGER.value: _TENANT_MANAGER,
     Role.CUSTOMER_VIEWER.value: _TENANT_VIEWER,
 }
 

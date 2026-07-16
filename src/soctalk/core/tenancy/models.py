@@ -39,7 +39,8 @@ class Role(str, Enum):
 
       MSSP:   platform_admin (super) · mssp_admin (configure) ·
               mssp_manager (authorize risk) · analyst (operate)
-      tenant: tenant_admin (configure) · customer_viewer (view)
+      tenant: tenant_admin (configure) · tenant_manager (authorize risk,
+              e.g. declare their own pentest engagements) · customer_viewer (view)
 
     ``mssp_manager`` holds the "authorize risk" capabilities (engagements,
     authorization facts, privileged proposal sign-off) that used to sit
@@ -52,6 +53,7 @@ class Role(str, Enum):
     MSSP_MANAGER = "mssp_manager"
     ANALYST = "analyst"
     TENANT_ADMIN = "tenant_admin"
+    TENANT_MANAGER = "tenant_manager"
     CUSTOMER_VIEWER = "customer_viewer"
 
 
