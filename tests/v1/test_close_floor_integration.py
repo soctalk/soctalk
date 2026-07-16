@@ -2,7 +2,7 @@
 
 The floor must veto BOTH ingest close paths (memoized close and the rules band) when
 the alert carries IOCs or overlaps an active incident, regardless of policy flags,
-and each veto leaves an ``ir.playbook.close_floor_veto`` audit row. The worker-plane
+and each veto leaves an ``ir.triage_policy.close_floor_veto`` audit row. The worker-plane
 half of the floor is covered DB-free in test_playbook_unit.py.
 """
 

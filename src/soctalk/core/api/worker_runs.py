@@ -82,7 +82,11 @@ async def _record_verdict_memo(
 # chat handler can enforce the same ceiling. Re-export for back-compat.
 from soctalk.core.cost import (  # noqa: E402
     assert_tenant_daily_cap_ok,
+)
+from soctalk.core.cost import (
     tenant_daily_dollar_cap as _tenant_daily_dollar_cap,
+)
+from soctalk.core.cost import (
     tenant_daily_token_cap as _tenant_daily_token_cap,
 )
 
@@ -557,26 +561,27 @@ async def complete_run(
             )
             case_changed = (r.rowcount or 0) > 0
 
-            # Persist the graph-plane playbook audit trail for closes (issue #43):
+            # Persist the graph-plane triage policy audit trail for closes (issue #43):
             # escalates carry it into pending_reviews via enrichments, but a close
             # has no review row — without this, a deterministic operational close
             # would leave only free-text close_reason behind.
-            playbook_audit = (payload.enrichments or {}).get("playbook_audit")
-            if case_changed and playbook_audit:
+            _enr = payload.enrichments or {}
+            triage_policy_audit = _enr.get("triage_policy_audit") or _enr.get("playbook_audit")
+            if case_changed and triage_policy_audit:
                 import json as _json
 
                 from soctalk.core.observability.audit import log_audit
-                from soctalk.triage_policy.floor import PLAYBOOK_AUDIT_ACTION
+                from soctalk.triage_policy.floor import TRIAGE_POLICY_AUDIT_ACTION
 
                 await log_audit(
                     db,
-                    action=PLAYBOOK_AUDIT_ACTION,
+                    action=TRIAGE_POLICY_AUDIT_ACTION,
                     actor_principal="system",
                     actor_id="worker_runs",
                     tenant_id=tenant_id,
                     resource_type="investigation",
                     resource_id=str(investigation_id),
-                    notes=_json.dumps(playbook_audit[:5], default=str)[:4096],
+                    notes=_json.dumps(triage_policy_audit[:5], default=str)[:4096],
                 )
         elif payload.status == "completed" and effective_disposition == "escalate":
             # Event-sourced HIL request: appends the canonical event

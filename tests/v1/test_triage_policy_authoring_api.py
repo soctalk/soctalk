@@ -1,4 +1,4 @@
-"""Authored playbooks: DB-backed shadow/draft CRUD + export (#44 follow-on).
+"""Authored triage policies: DB-backed shadow/draft CRUD + export (#44 follow-on).
 
 Round-trip against Postgres via the route handlers, fail-closed validation, and the role
 gate (read = ANALYST+, write = admin-only).
@@ -176,7 +176,7 @@ async def test_activate_deactivate_governs_and_reconciles(
 async def test_edit_active_playbook_stays_active(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """Editing an active playbook must keep it governing (not silently drop to shadow) and
+    """Editing an active triage policy must keep it governing (not silently drop to shadow) and
     re-roll — the Codex-flagged footgun."""
     t, _ = seed_two_tenants
     req = _req(mssp_session)
@@ -217,7 +217,7 @@ async def test_edit_id_mismatch_and_unknown(mssp_session: AsyncSession, seed_two
     with pytest.raises(HTTPException) as ei:  # id in body != path
         await update_authored_triage_policy_route(t.tenant_id, "path-id", _valid(id="body-id"), req)
     assert ei.value.status_code == 400
-    with pytest.raises(HTTPException) as ei2:  # editing a non-existent playbook
+    with pytest.raises(HTTPException) as ei2:  # editing a non-existent triage policy
         await update_authored_triage_policy_route(t.tenant_id, "ghost", _valid(id="ghost"), req)
     assert ei2.value.status_code == 404
 
@@ -227,6 +227,73 @@ async def test_tenant_isolation(mssp_session: AsyncSession, seed_two_tenants):
     await create_authored_triage_policy_route(ta.tenant_id, _valid(id="a-only"), _req(mssp_session))
     await mssp_session.commit()
     assert await list_authored_triage_policies_route(tb.tenant_id, _req(mssp_session)) == []
+
+
+async def test_legacy_view_serves_old_table_and_column_names(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """Rolling-deploy compat (v1_0035): an OLD API pod still issues SQL against
+    ``authored_playbook_revisions`` / ``playbook_id``. The migration exposes the renamed
+    table under those names as an auto-updatable, RLS-preserving view, so old pods keep
+    working through the transition. Reading a row the new code wrote, and writing one the
+    new code then reads, both go through the view."""
+    from soctalk.core.tenancy.context import tenant_context
+
+    t, other = seed_two_tenants
+
+    # new authoring path writes the base table (triage_policy_id)
+    await create_authored_triage_policy_route(t.tenant_id, _valid(id="view-pb"), _req(mssp_session))
+    await mssp_session.commit()
+
+    async with tenant_context(mssp_session, t.tenant_id):
+        # old-name read through the view returns what the new code wrote
+        row = (
+            await mssp_session.execute(
+                text(
+                    "SELECT playbook_id, status FROM authored_playbook_revisions "
+                    "WHERE playbook_id = :p"
+                ),
+                {"p": "view-pb"},
+            )
+        ).mappings().first()
+        assert row is not None and row["playbook_id"] == "view-pb"
+
+        # old-name write through the view lands in the renamed base table
+        await mssp_session.execute(
+            text(
+                "INSERT INTO authored_playbook_revisions "
+                "(id, tenant_id, playbook_id, revision, status, definition, created_by) "
+                "VALUES (gen_random_uuid(), :t, 'legacy-write', 1, 'shadow', '{}'::jsonb, NULL)"
+            ),
+            {"t": str(t.tenant_id)},
+        )
+        await mssp_session.commit()
+        base = (
+            await mssp_session.execute(
+                text(
+                    "SELECT triage_policy_id FROM authored_triage_policy_revisions "
+                    "WHERE triage_policy_id = 'legacy-write'"
+                )
+            )
+        ).scalar_one_or_none()
+        assert base == "legacy-write"
+
+    # security_invoker=true means the view applies the base table's RLS as the querying
+    # role, never elevating: for any role/context the view returns exactly what a direct
+    # query of the renamed base table returns (behavioral equivalence, not the view's own
+    # relaxed rules).
+    async with tenant_context(mssp_session, other.tenant_id):
+        via_view = (
+            await mssp_session.execute(
+                text("SELECT count(*) FROM authored_playbook_revisions")
+            )
+        ).scalar_one()
+        via_base = (
+            await mssp_session.execute(
+                text("SELECT count(*) FROM authored_triage_policy_revisions")
+            )
+        ).scalar_one()
+        assert via_view == via_base
 
 
 def test_authoring_role_gate():

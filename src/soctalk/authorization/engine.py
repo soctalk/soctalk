@@ -498,7 +498,7 @@ def select_facts(
     tenant: str | None = None,
 ) -> list[AuthorizationFact]:
     """The facts the engine would actually reason over for this track/tenant — the
-    track + tenant + lifecycle gate, public so callers (the playbook guard's
+    track + tenant + lifecycle gate, public so callers (the triage policy guard's
     ``records present`` classifier) apply the same selection the evaluation does. A
     wrong-track, foreign-tenant, or superseded record is not "a record on file"."""
     return _select(facts, track, tenant)
@@ -511,7 +511,7 @@ def resolved_entity(
 ) -> EntityContextFact | None:
     """The trust-resolved entity record for a name — the exact resolution the
     evaluation uses (highest trust, deterministic tiebreak), public so callers
-    (the playbook guard's sign-off rule reads asset data_classification) can never
+    (the triage policy guard's sign-off rule reads asset data_classification) can never
     disagree with the engine about which record speaks for an entity."""
     return _resolved_entity(facts, entity_type, name)
 

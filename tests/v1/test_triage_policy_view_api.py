@@ -1,7 +1,7 @@
-"""Read-only playbook governance view (#43/#44) — the GET /api/mssp/playbooks surface.
+"""Read-only triage policy governance view (#43/#44) — the GET /api/mssp/triage-policies surface.
 
 No DB: the handler serializes the in-process registry. Covers the built-ins, a file-loaded
-shadow playbook, and the role gate.
+shadow triage policy, and the role gate.
 """
 
 from __future__ import annotations

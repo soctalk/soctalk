@@ -1,4 +1,7 @@
 {{- if .Values.runsWorker.enabled }}
+{{- /* Canonical values key is runsWorker.triagePolicies; fall back to the deprecated
+       runsWorker.playbooks for one release so a stale rendered values blob still rolls. */}}
+{{- $tp := or .Values.runsWorker.triagePolicies .Values.runsWorker.playbooks }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +21,7 @@ spec:
       labels:
         {{- include "soctalk-tenant.labels" . | nindent 8 }}
         app.kubernetes.io/name: soctalk-runs-worker
-      {{- if or .Values.llm.secretChecksum .Values.runsWorker.playbooks }}
+      {{- if or .Values.llm.secretChecksum $tp }}
       annotations:
         {{- if .Values.llm.secretChecksum }}
         # Forces a rollout when the LLM key material (primary or per-tier own
@@ -26,10 +29,10 @@ spec:
         # change otherwise leaves chart values byte-identical (issue #12).
         checksum/llm-secret: {{ .Values.llm.secretChecksum | quote }}
         {{- end }}
-        {{- if .Values.runsWorker.playbooks }}
-        # Forces a rollout when playbook content changes — the registry loads
+        {{- if $tp }}
+        # Forces a rollout when triage-policy content changes — the registry loads
         # once per process, so the rollout IS the activation gate (issue #44).
-        checksum/playbooks: {{ .Values.runsWorker.playbooks | toJson | sha256sum | quote }}
+        checksum/triage-policies: {{ $tp | toJson | sha256sum | quote }}
         {{- end }}
       {{- end }}
     spec:
@@ -66,9 +69,13 @@ spec:
               {{- end }}
             - name: WORKER_TOKEN_PATH
               value: /run/secrets/runs-worker/token
-            {{- if .Values.runsWorker.playbooks }}
+            {{- if $tp }}
+            - name: SOCTALK_TRIAGE_POLICY_DIR
+              value: /etc/soctalk/triage-policies
+            # Deprecated alias, set for one release so an old worker image rolled
+            # with this chart (reads only SOCTALK_PLAYBOOK_DIR) still finds its dir.
             - name: SOCTALK_PLAYBOOK_DIR
-              value: /etc/soctalk/playbooks
+              value: /etc/soctalk/triage-policies
             {{- end }}
             {{- /*
                 ``llm.provider`` accepts ``openai-compatible`` (the
@@ -236,9 +243,9 @@ spec:
             - name: worker-token
               mountPath: /run/secrets/runs-worker
               readOnly: true
-            {{- if .Values.runsWorker.playbooks }}
-            - name: playbooks
-              mountPath: /etc/soctalk/playbooks
+            {{- if $tp }}
+            - name: triage-policies
+              mountPath: /etc/soctalk/triage-policies
               readOnly: true
             {{- end }}
       volumes:
@@ -249,9 +256,9 @@ spec:
               - key: {{ .Values.runsWorker.tokenSecretRef.key | quote }}
                 path: token
             defaultMode: 0440
-        {{- if .Values.runsWorker.playbooks }}
-        - name: playbooks
+        {{- if $tp }}
+        - name: triage-policies
           configMap:
-            name: soctalk-playbooks
+            name: soctalk-triage-policies
         {{- end }}
 {{- end }}
