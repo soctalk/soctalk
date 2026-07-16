@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type PendingReview, ApiError } from '$lib/api/client';
-	import { addToast, pendingReviewsCount } from '$lib/stores';
+	import { addToast, pendingReviewsCount, canReview } from '$lib/stores';
 	import { formatSeverity, formatStatus, formatDecision } from '$lib/utils/formatters';
 
 	let reviews: PendingReview[] = [];
@@ -383,7 +383,10 @@
 							</details>
 						{/if}
 
-						<!-- Action Area -->
+						<!-- Action Area — the entire decide surface (Take Action → controls) is
+						     shown only to users with review-decide authority. A read-only
+						     stakeholder (customer_viewer) sees the queue but no way to act. -->
+						{#if $canReview}
 						{#if selectedReview?.id === review.id}
 							<div class="border-t border-surface-500/20 pt-4 mt-4">
 								<label class="label mb-3">
@@ -448,6 +451,7 @@
 									Take Action
 								</button>
 							</div>
+						{/if}
 						{/if}
 					</div>
 				{/if}

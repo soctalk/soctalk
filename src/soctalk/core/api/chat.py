@@ -43,8 +43,9 @@ from soctalk.core.cost import (
     assert_mssp_user_daily_cap_ok,
     assert_tenant_daily_cap_ok,
 )
-from soctalk.core.tenancy.auth import current_identity, UserIdentity
-
+from soctalk.core.tenancy.auth import UserIdentity, current_identity
+from soctalk.core.tenancy.decorators import require_permission_any
+from soctalk.core.tenancy.permissions import Permission
 
 logger = structlog.get_logger()
 
@@ -57,6 +58,23 @@ router = APIRouter(
 )
 
 MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "mssp_manager", "analyst"})
+
+# Chat is an *operate* surface, capability-gated end to end so customer_viewer cannot drive OR read
+# it. Reads are gated too: chat history can persist operational data (e.g. list_pending_reviews tool
+# output as role="tool" messages), so leaving list/get auth-only would leak the review queue to a
+# read-only stakeholder indirectly.
+#   * list/get/create/message/delete/stop → chat access (MSSP USE_CHAT or tenant TENANT_USE_CHAT)
+#   * confirm → REVIEW-DECIDE authority, NOT mere chat access — confirming a chat-proposed action
+#     approves/rejects/expires a pending review (see chat.actions._ACTION_DISPATCH), so it must
+#     carry the same authority as the /api/review decide endpoints. customer_viewer is denied.
+_CHAT_GUARD = require_permission_any(
+    (Permission.USE_CHAT, "mssp"),
+    (Permission.TENANT_USE_CHAT, "tenant"),
+)
+_CHAT_CONFIRM_GUARD = require_permission_any(
+    (Permission.REVIEW_DECIDE, "mssp"),
+    (Permission.TENANT_REVIEW_DECIDE, "tenant"),
+)
 
 
 def _db(request: Request) -> AsyncSession:
@@ -302,7 +320,11 @@ def _title_from_text(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/conversations", response_model=_ConversationOut)
+@router.post(
+    "/conversations",
+    response_model=_ConversationOut,
+    dependencies=[Depends(_CHAT_GUARD)],
+)
 async def create_conversation(
     body: _CreateConversationBody, request: Request
 ) -> _ConversationOut:
@@ -362,7 +384,11 @@ async def create_conversation(
     return _ConversationOut(**dict(row))
 
 
-@router.get("/conversations", response_model=_ConversationListOut)
+@router.get(
+    "/conversations",
+    response_model=_ConversationListOut,
+    dependencies=[Depends(_CHAT_GUARD)],
+)
 async def list_conversations(
     request: Request,
     investigation_id: str | None = None,
@@ -407,7 +433,11 @@ async def list_conversations(
     return _ConversationListOut(items=[_ConversationOut(**dict(r)) for r in rows])
 
 
-@router.get("/conversations/{conv_id}", response_model=_ConversationDetailOut)
+@router.get(
+    "/conversations/{conv_id}",
+    response_model=_ConversationDetailOut,
+    dependencies=[Depends(_CHAT_GUARD)],
+)
 async def get_conversation(conv_id: str, request: Request) -> _ConversationDetailOut:
     identity = current_identity(request)
     async with _chat_db(request, identity) as db:
@@ -453,7 +483,7 @@ async def get_conversation(conv_id: str, request: Request) -> _ConversationDetai
     )
 
 
-@router.delete("/conversations/{conv_id}")
+@router.delete("/conversations/{conv_id}", dependencies=[Depends(_CHAT_GUARD)])
 async def delete_conversation(conv_id: str, request: Request) -> dict[str, bool]:
     identity = current_identity(request)
     async with _chat_db(request, identity) as db:
@@ -469,7 +499,10 @@ async def delete_conversation(conv_id: str, request: Request) -> dict[str, bool]
 # ---------------------------------------------------------------------------
 
 
-@router.post("/conversations/{conv_id}/messages")
+@router.post(
+    "/conversations/{conv_id}/messages",
+    dependencies=[Depends(_CHAT_GUARD)],
+)
 async def post_message(
     conv_id: str, body: _PostMessageBody, request: Request
 ) -> StreamingResponse:
@@ -707,7 +740,7 @@ async def _poll_disconnect(request: Request, ctx: TurnContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/conversations/{conv_id}/stop")
+@router.post("/conversations/{conv_id}/stop", dependencies=[Depends(_CHAT_GUARD)])
 async def stop_conversation(conv_id: str, request: Request) -> dict[str, bool]:
     # Phase 1: we don't keep a side-channel registry of in-flight
     # turns. The /messages stream cancels naturally when the user
@@ -721,7 +754,10 @@ async def stop_conversation(conv_id: str, request: Request) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/conversations/{conv_id}/messages/{msg_id}/confirm")
+@router.post(
+    "/conversations/{conv_id}/messages/{msg_id}/confirm",
+    dependencies=[Depends(_CHAT_CONFIRM_GUARD)],
+)
 async def confirm_action(
     conv_id: str, msg_id: str, request: Request
 ) -> dict[str, Any]:

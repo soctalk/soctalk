@@ -40,12 +40,16 @@ class Role(str, Enum):
       MSSP:   platform_admin (super) · mssp_admin (configure) ·
               mssp_manager (authorize risk) · analyst (operate)
       tenant: tenant_admin (configure) · tenant_manager (authorize risk,
-              e.g. declare their own pentest engagements) · customer_viewer (view)
+              e.g. declare their own pentest engagements) ·
+              tenant_analyst (operate their own SOC: triage/review/decide/chat) ·
+              customer_viewer (read-only stakeholder)
 
     ``mssp_manager`` holds the "authorize risk" capabilities (engagements,
     authorization facts, privileged proposal sign-off) that used to sit
-    with every MSSP role. Capability checks go through ``require_permission``;
-    do not add new inline role-set checks.
+    with every MSSP role. ``tenant_analyst`` is the tenant-audience mirror of
+    ``analyst`` — full read+write authority over its OWN tenant's SOC (co-managed
+    SOC), RLS-scoped like every other tenant role. Capability checks go through
+    ``require_permission``; do not add new inline role-set checks.
     """
 
     PLATFORM_ADMIN = "platform_admin"
@@ -54,6 +58,7 @@ class Role(str, Enum):
     ANALYST = "analyst"
     TENANT_ADMIN = "tenant_admin"
     TENANT_MANAGER = "tenant_manager"
+    TENANT_ANALYST = "tenant_analyst"
     CUSTOMER_VIEWER = "customer_viewer"
 
 

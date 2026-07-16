@@ -19,15 +19,32 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from soctalk.core.tenancy.auth import current_identity
-from soctalk.core.tenancy.decorators import require_permission
+from soctalk.core.tenancy.decorators import require_permission_any
 from soctalk.core.tenancy.permissions import Permission
+
+if TYPE_CHECKING:
+    from soctalk.core.tenancy.auth import UserIdentity
+
+# Review decisions are shared between the MSSP analyst and a co-managed-SOC tenant operator.
+# The handlers already RLS-scope every non-fleet caller to its own tenant (see
+# ``_resolve_pending_review``), so one OR-guard admits both audiences under their own capability.
+_REVIEW_DECIDE_GUARD = require_permission_any(
+    (Permission.REVIEW_DECIDE, "mssp"),
+    (Permission.TENANT_REVIEW_DECIDE, "tenant"),
+)
+# The pending-review queue is operational data (AI verdicts awaiting a human decision) on a
+# tenant-isolated table with NO audience/visibility column — so a read-only ``customer_viewer``
+# who reached the read endpoints would enumerate its tenant's whole operate queue. Gate the reads
+# on the same authority as the decide actions: in this model whoever may decide is exactly whoever
+# may view, so only operators (MSSP analyst+ or a co-managed tenant_analyst+) can list/fetch reviews.
+_REVIEW_ACCESS_GUARD = _REVIEW_DECIDE_GUARD
 
 # All stubs sit behind the same session middleware as the rest of the
 # canonical-frontend bridges. The middleware *attaches* identity but
@@ -125,7 +142,11 @@ class _PendingReviewList(BaseModel):
     has_more: bool = False
 
 
-@router.get("/api/review/pending", response_model=_PendingReviewList)
+@router.get(
+    "/api/review/pending",
+    response_model=_PendingReviewList,
+    dependencies=[Depends(_REVIEW_ACCESS_GUARD)],
+)
 async def review_pending(
     request: Request,
     page: int = Query(1, ge=1),
@@ -245,7 +266,11 @@ _REVIEW_COLUMNS = """
 """
 
 
-@router.get("/api/review/{review_id}", response_model=_PendingReviewItem)
+@router.get(
+    "/api/review/{review_id}",
+    response_model=_PendingReviewItem,
+    dependencies=[Depends(_REVIEW_ACCESS_GUARD)],
+)
 async def review_detail(review_id: str, request: Request) -> _PendingReviewItem:
     """Fetch a single HIL review by id, role-aware tenant-scoped.
 
@@ -297,16 +322,12 @@ async def _resolve_pending_review(
 ) -> dict[str, Any]:
     """Resolve a review with role-aware tenant scoping.
 
-    MSSP-level roles (``platform_admin``, ``mssp_admin``) see all
-    tenants' rows via the BYPASSRLS MSSP session. Tenant-level roles
-    (``analyst``, ``tenant_admin``, ``customer_viewer``) are scoped to
-    their own ``tenant_id`` via the RLS-subject app session with
-    ``tenant_context`` set.
+    Fleet MSSP roles (``platform_admin``, ``mssp_admin``, ``mssp_manager``) see all tenants' rows
+    via the BYPASSRLS MSSP session. Tenant-scoped callers (``tenant_analyst`` etc.) are scoped to
+    their own ``tenant_id`` via the RLS-subject app session with ``tenant_context`` set.
 
-    Raises HTTP 404 if the review is not found within the caller's
-    tenant scope (i.e. cross-tenant lookups by tenant users fail with
-    the same code path as truly missing rows — never disclose
-    existence across tenants).
+    Raises HTTP 404 if the review is not found within the caller's tenant scope (cross-tenant
+    lookups fail with the same code path as truly missing rows — never disclose existence).
     """
     from fastapi import HTTPException
     from sqlalchemy import text
@@ -411,7 +432,7 @@ class _ApproveBody(BaseModel):
 @router.post(
     "/api/review/{review_id}/approve",
     response_model=_ReviewActionResponse,
-    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+    dependencies=[Depends(_REVIEW_DECIDE_GUARD)],
 )
 async def review_approve(
     review_id: str, body: _ApproveBody, request: Request
@@ -432,7 +453,7 @@ async def review_approve(
 @router.post(
     "/api/review/{review_id}/reject",
     response_model=_ReviewActionResponse,
-    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+    dependencies=[Depends(_REVIEW_DECIDE_GUARD)],
 )
 async def review_reject(
     review_id: str, body: _ApproveBody, request: Request
@@ -457,7 +478,7 @@ class _RequestInfoBody(BaseModel):
 @router.post(
     "/api/review/{review_id}/request-info",
     response_model=_ReviewActionResponse,
-    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+    dependencies=[Depends(_REVIEW_DECIDE_GUARD)],
 )
 async def review_request_info(
     review_id: str, body: _RequestInfoBody, request: Request
@@ -483,7 +504,7 @@ class _ExpireBody(BaseModel):
 @router.post(
     "/api/review/{review_id}/expire",
     response_model=_ReviewActionResponse,
-    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+    dependencies=[Depends(_REVIEW_DECIDE_GUARD)],
 )
 async def review_expire(
     review_id: str, body: _ExpireBody, request: Request

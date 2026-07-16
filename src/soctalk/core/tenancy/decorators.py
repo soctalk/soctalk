@@ -18,10 +18,13 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastapi import HTTPException, Request
+
+if TYPE_CHECKING:
+    from soctalk.core.tenancy.permissions import Permission
 
 from soctalk.core.tenancy.context import (
     MissingTenantContext,
@@ -172,13 +175,18 @@ def require_tenant_role(*allowed: str | Role) -> Callable[..., Callable[..., Any
     Defaults to ``customer_viewer`` if no roles passed.
     """
 
-    # Default allows any tenant-scoped principal (tenant_admin or
-    # customer_viewer). Callers can pin a tighter set when needed.
+    # Default allows any tenant-scoped principal (tenant_admin, tenant_manager,
+    # tenant_analyst or customer_viewer). Callers can pin a tighter set when needed.
     allowed_values = (
         frozenset(r.value if isinstance(r, Role) else str(r) for r in allowed)
         if allowed
         else frozenset(
-            {Role.TENANT_ADMIN.value, Role.TENANT_MANAGER.value, Role.CUSTOMER_VIEWER.value}
+            {
+                Role.TENANT_ADMIN.value,
+                Role.TENANT_MANAGER.value,
+                Role.TENANT_ANALYST.value,
+                Role.CUSTOMER_VIEWER.value,
+            }
         )
     )
 
@@ -253,6 +261,67 @@ def require_permission(
     return _checker
 
 
+def require_permission_any(
+    *pairs: "tuple[Permission, str]",
+) -> Callable[..., Callable[..., Any]]:
+    """Guard for a **dual-audience** handler: pass if the caller satisfies ANY
+    ``(permission, audience)`` alternative.
+
+    Use this for the operate endpoints a co-managed-SOC tenant shares with the MSSP
+    (review-decide, triage, chat-confirm): one physical handler that already RLS-scopes
+    every non-fleet caller to its own tenant, reachable by either audience under its own
+    capability. FastAPI ANDs stacked dependencies, so a single OR-guard is the only way to
+    admit two audiences without duplicating the route.
+
+    Each alternative is checked as: ``user_type == audience AND has_permission(role, perm)``.
+    A matching *tenant* alternative additionally requires a ``tenant_id`` claim (so no
+    null-tenant tenant principal slips through). Example::
+
+        @router.post(..., dependencies=[Depends(require_permission_any(
+            (Permission.REVIEW_DECIDE, "mssp"),
+            (Permission.TENANT_REVIEW_DECIDE, "tenant"),
+        ))])
+    """
+    from soctalk.core.tenancy.permissions import has_permission
+
+    if not pairs:
+        raise ValueError("require_permission_any needs at least one (permission, audience) pair")
+    norm: list[tuple[Permission, str]] = []
+    for perm, audience in pairs:
+        if audience not in ("mssp", "tenant"):
+            raise ValueError(f"audience must be 'mssp' or 'tenant', got {audience!r}")
+        norm.append((perm, audience))
+
+    async def _checker(request: Request) -> None:
+        identity = _resolve_user_from_request(request)
+        if identity is None:
+            raise HTTPException(status_code=401, detail="authentication required")
+        ut = identity.get("user_type")
+        role = identity.get("role")
+        for perm, audience in norm:
+            expected_ut = (
+                UserType.MSSP.value if audience == "mssp" else UserType.TENANT.value
+            )
+            if ut != expected_ut:
+                continue
+            if audience == "tenant" and not identity.get("tenant_id"):
+                # Right audience, right (potential) capability, but no tenant pin —
+                # a tenant principal must never act without a tenant_id. Fail this
+                # alternative rather than silently widening scope.
+                continue
+            if has_permission(role, perm):
+                return
+        wanted = " OR ".join(f"{p.value}@{a}" for p, a in norm)
+        raise HTTPException(
+            status_code=403,
+            detail=f"role '{role}' ({ut}) lacks any required capability: {wanted}",
+        )
+
+    _checker._soctalk_permissions = tuple(p.value for p, _ in norm)  # type: ignore[attr-defined]
+    _checker._soctalk_scope = "+".join(sorted({a for _, a in norm}))  # type: ignore[attr-defined]
+    return _checker
+
+
 def allowed_mssp_roles() -> Iterable[str]:
     """Convenience for tests / introspection."""
     return MSSP_ROLES
@@ -261,6 +330,8 @@ def allowed_mssp_roles() -> Iterable[str]:
 __all__ = [
     "MSSP_ROLES",
     "allowed_mssp_roles",
+    "require_permission",
+    "require_permission_any",
     "require_role",
     "require_tenant_role",
     "tenant_scoped_worker",

@@ -75,8 +75,26 @@ export function hasPermission(perm: string): Readable<boolean> {
 	});
 }
 
-// review a pending AI verdict (approve/reject/request-info)
-export const canReview: Readable<boolean> = hasPermission('review_decide');
+// Any-audience capability gate: true if the user holds the MSSP capability OR its tenant
+// mirror. The co-managed-SOC operate surface (reviews, chat, triage) is reachable by an MSSP
+// analyst AND a tenant_analyst, each under their own capability, so the UI gates on either.
+export function hasAnyPermission(...perms: string[]): Readable<boolean> {
+	return derived(authSession, ($session) => {
+		if (!$session.enabled) return true;
+		const held = $session.user?.permissions ?? [];
+		return perms.some((p) => held.includes(p));
+	});
+}
+
+// review a pending AI verdict (approve/reject/request-info) — MSSP analyst or tenant_analyst
+export const canReview: Readable<boolean> = hasAnyPermission('review_decide', 'tenant_review_decide');
+// use the AI chat/assistant — operators only (customer_viewer is read-only)
+export const canChat: Readable<boolean> = hasAnyPermission('use_chat', 'tenant_use_chat');
+// triage an investigation (comment / correct facts) — MSSP analyst or tenant_analyst
+export const canTriageInvestigation: Readable<boolean> = hasAnyPermission(
+	'triage_investigation',
+	'tenant_triage_investigation'
+);
 // configure the system (any admin-tier capability) — Settings / integrations screens
 export const canEditSettings: Readable<boolean> = derived(authSession, ($session) => {
 	if (!$session.enabled) return true;

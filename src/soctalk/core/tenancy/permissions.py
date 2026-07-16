@@ -61,6 +61,14 @@ class Permission(str, Enum):
     TENANT_VIEW_AUTHORIZATION_FACTS = "tenant_view_authorization_facts"
     TENANT_ASSERT_AUTHORIZATION_FACTS = "tenant_assert_authorization_facts"  # assert (→ pending review)
 
+    # --- tenant operate (co-managed SOC — tenant_analyst; mirror of the MSSP analyst) ---
+    TENANT_TRIAGE_INVESTIGATION = "tenant_triage_investigation"  # post/edit facts on own cases
+    TENANT_REVIEW_DECIDE = "tenant_review_decide"  # approve/reject/expire own-tenant reviews
+    TENANT_APPROVE_PROPOSAL = "tenant_approve_proposal"  # approve/reject standard-blast proposals
+    # high-blast (WRITE_EXTERNAL) sign-off — manager tier (mirrors APPROVE_PRIVILEGED_PROPOSAL)
+    TENANT_APPROVE_PRIVILEGED_PROPOSAL = "tenant_approve_privileged_proposal"
+    TENANT_USE_CHAT = "tenant_use_chat"
+
 
 # ---------------------------------------------------------------------------
 # Tier bundles (MSSP audience) — built additively so the hierarchy is explicit.
@@ -111,11 +119,23 @@ _TENANT_VIEWER: frozenset[Permission] = frozenset(
         Permission.TENANT_VIEW_AUTHORIZATION_FACTS,
     }
 )
-# tenant SOC manager authorizes their own risk: declares pentest engagements and asserts
-# authorization facts (which land 'pending' for MSSP review before they can influence triage).
-_TENANT_MANAGER: frozenset[Permission] = _TENANT_VIEWER | {
+# tenant SOC analyst operates its OWN tenant's SOC (co-managed): triages investigations,
+# reviews AI verdicts, approves standard-blast proposals, uses chat. The mirror of the MSSP
+# ``analyst`` tier — every write is RLS-scoped to the caller's own tenant. Approving a
+# WRITE_EXTERNAL (high-blast) proposal stays a manager decision on both audiences.
+_TENANT_ANALYST: frozenset[Permission] = _TENANT_VIEWER | {
+    Permission.TENANT_TRIAGE_INVESTIGATION,
+    Permission.TENANT_REVIEW_DECIDE,
+    Permission.TENANT_APPROVE_PROPOSAL,
+    Permission.TENANT_USE_CHAT,
+}
+# tenant SOC manager adds "authorize risk": declares pentest engagements, asserts authorization
+# facts (which land 'pending' for MSSP review before they can influence triage), and signs off
+# high-blast (WRITE_EXTERNAL) proposals.
+_TENANT_MANAGER: frozenset[Permission] = _TENANT_ANALYST | {
     Permission.TENANT_AUTHORIZE_ENGAGEMENT,
     Permission.TENANT_ASSERT_AUTHORIZATION_FACTS,
+    Permission.TENANT_APPROVE_PRIVILEGED_PROPOSAL,
 }
 # tenant admin adds self-service config
 _TENANT_ADMIN: frozenset[Permission] = _TENANT_MANAGER | {Permission.TENANT_MANAGE_LLM}
@@ -128,6 +148,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     Role.ANALYST.value: _ANALYST,
     Role.TENANT_ADMIN.value: _TENANT_ADMIN,
     Role.TENANT_MANAGER.value: _TENANT_MANAGER,
+    Role.TENANT_ANALYST.value: _TENANT_ANALYST,
     Role.CUSTOMER_VIEWER.value: _TENANT_VIEWER,
 }
 

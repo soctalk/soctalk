@@ -30,10 +30,11 @@ from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
 from soctalk.core.tenancy.decorators import (
     require_permission,
+    require_permission_any,
     require_role,
     require_tenant_role,
 )
-from soctalk.core.tenancy.models import Role
+from soctalk.core.tenancy.models import Role, UserType
 from soctalk.core.tenancy.permissions import (
     PRIVILEGED_CAPABILITY_CLASSES,
     Permission,
@@ -562,6 +563,89 @@ async def get_case_tenant(investigation_id: UUID, request: Request) -> CustomerC
 
 
 # ---------------------------------------------------------------------------
+# Tenant operate routes (co-managed SOC — tenant_analyst triages its OWN cases).
+# Tenant is pinned from the TOKEN (never a request param); the investigation is
+# verified to belong to that tenant inside ``tenant_context`` (RLS hides foreign
+# rows → 404), so a tenant operator can only ever act on its own tenant's cases.
+# ---------------------------------------------------------------------------
+
+
+async def _assert_own_investigation(db: AsyncSession, investigation_id: UUID) -> None:
+    """Fail closed (404) unless ``investigation_id`` is visible in the CURRENT
+    ``tenant_context`` — i.e. belongs to the caller's tenant. Must be called
+    INSIDE ``tenant_context(db, caller_tid)``."""
+    seen = (
+        await db.execute(
+            text("SELECT 1 FROM investigations WHERE id = :id"),
+            {"id": str(investigation_id)},
+        )
+    ).scalar_one_or_none()
+    if seen is None:
+        raise HTTPException(404, "investigation not found")
+
+
+@tenant_investigations_router.post(
+    "/{investigation_id}/messages",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_TRIAGE_INVESTIGATION, audience="tenant"))
+    ],
+)
+async def tenant_post_analyst_message(
+    investigation_id: UUID, payload: AnalystMessageRequest, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    tid = _caller_tenant(request)
+    async with tenant_context(db, tid):
+        await _assert_own_investigation(db, investigation_id)
+        event_id = await append_event(
+            db,
+            tenant_id=tid,
+            investigation_id=investigation_id,
+            run_id=None,
+            kind=EventKind.ANALYST_MESSAGE,
+            payload={
+                "body": payload.body,
+                "author_user_id": str(identity.user_id),
+                "author_email": identity.email,
+            },
+            producer=f"user:{identity.user_id}",
+        )
+    return {"event_id": str(event_id)}
+
+
+@tenant_investigations_router.patch(
+    "/{investigation_id}/facts",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_TRIAGE_INVESTIGATION, audience="tenant"))
+    ],
+)
+async def tenant_patch_case_facts(
+    investigation_id: UUID, payload: FactsCorrectionRequest, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    tid = _caller_tenant(request)
+    async with tenant_context(db, tid):
+        await _assert_own_investigation(db, investigation_id)
+        event_id = await append_event(
+            db,
+            tenant_id=tid,
+            investigation_id=investigation_id,
+            run_id=None,
+            kind=EventKind.ANALYST_CORRECTION,
+            payload={
+                "path": payload.path,
+                "value": payload.value,
+                "author_user_id": str(identity.user_id),
+            },
+            producer=f"user:{identity.user_id}",
+        )
+        await consume_new_events(db, tid, investigation_id)
+    return {"event_id": str(event_id)}
+
+
+# ---------------------------------------------------------------------------
 # Proposals
 # ---------------------------------------------------------------------------
 
@@ -599,9 +683,24 @@ async def list_pending_proposals(request: Request) -> list[ProposalDTO]:
     ]
 
 
+# Proposal decisions are shared: the MSSP analyst OR a co-managed-SOC tenant operator.
+_APPROVE_PROPOSAL_GUARD = require_permission_any(
+    (Permission.APPROVE_PROPOSAL, "mssp"),
+    (Permission.TENANT_APPROVE_PROPOSAL, "tenant"),
+)
+
+
+def _may_approve_privileged(identity: Any) -> bool:
+    """Whether the caller may sign off a WRITE_EXTERNAL (high-blast) proposal — a
+    SOC-manager-tier decision on BOTH audiences (separation of duties)."""
+    if identity.user_type == UserType.TENANT.value:
+        return has_permission(identity.role, Permission.TENANT_APPROVE_PRIVILEGED_PROPOSAL)
+    return has_permission(identity.role, Permission.APPROVE_PRIVILEGED_PROPOSAL)
+
+
 @proposals_router.post(
     "/{proposal_id}/approve",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
+    dependencies=[Depends(_APPROVE_PROPOSAL_GUARD)],
 )
 async def approve_proposal_route(
     proposal_id: UUID,
@@ -610,28 +709,28 @@ async def approve_proposal_route(
 ) -> dict[str, str]:
     db = _db(request)
     identity = current_identity(request)
-    # Resolve the tenant from the proposal so RLS WITH CHECK passes on
-    # the writes inside approve_proposal.
-    row = (
-        await db.execute(
-            text("SELECT tenant_id, capability_class FROM proposals WHERE id = :id"),
-            {"id": str(proposal_id)},
-        )
-    ).mappings().first()
-    if row is None:
-        raise HTTPException(404, "proposal not found")
-    tid = UUID(str(row["tenant_id"]))
-    # Approving a proposal enqueues+dispatches its action. Standard/read/sandbox actions are
-    # analyst-approvable; anything that writes to an external system (isolate/block/ticket) is a
-    # privileged sign-off — SOC-manager tier only (separation of duties).
-    if str(row["capability_class"]) in PRIVILEGED_CAPABILITY_CLASSES and not has_permission(
-        identity.role, Permission.APPROVE_PRIVILEGED_PROPOSAL
-    ):
-        raise HTTPException(
-            403, "approving an external-write action requires the SOC-manager role"
-        )
+    is_tenant = identity.user_type == UserType.TENANT.value
 
-    async with tenant_context(db, tid):
+    async def _do(tid: UUID) -> None:
+        # Approving a proposal enqueues+dispatches its action. Standard/read/sandbox actions
+        # are analyst-approvable; anything that writes to an external system (isolate/block/
+        # ticket) is a privileged sign-off — SOC-manager tier only (separation of duties),
+        # enforced identically for MSSP and tenant operators. capability_class is read from
+        # the DB row (never the request), so it can't be forged.
+        row = (
+            await db.execute(
+                text("SELECT capability_class FROM proposals WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(404, "proposal not found")
+        if str(row["capability_class"]) in PRIVILEGED_CAPABILITY_CLASSES and not _may_approve_privileged(
+            identity
+        ):
+            raise HTTPException(
+                403, "approving an external-write action requires the SOC-manager role"
+            )
         try:
             await approve_proposal(
                 db,
@@ -641,12 +740,33 @@ async def approve_proposal_route(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+
+    if is_tenant:
+        # Tenant operator: tenant pinned from the TOKEN; the proposal lookup + privileged
+        # check + write all run inside the caller's own tenant_context (RLS hides foreign
+        # proposals → 404, and grants own-tenant mssp_only visibility so the operator can act).
+        tid = _caller_tenant(request)
+        async with tenant_context(db, tid):
+            await _do(tid)
+    else:
+        # MSSP fleet caller: resolve the tenant from the proposal (cross-tenant read), then
+        # wrap the write in that tenant's context so RLS WITH CHECK passes.
+        tid_row = (
+            await db.execute(
+                text("SELECT tenant_id FROM proposals WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+        ).scalar_one_or_none()
+        if tid_row is None:
+            raise HTTPException(404, "proposal not found")
+        async with tenant_context(db, UUID(str(tid_row))):
+            await _do(UUID(str(tid_row)))
     return {"ok": "approved"}
 
 
 @proposals_router.post(
     "/{proposal_id}/reject",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
+    dependencies=[Depends(_APPROVE_PROPOSAL_GUARD)],
 )
 async def reject_proposal_route(
     proposal_id: UUID,
@@ -655,17 +775,17 @@ async def reject_proposal_route(
 ) -> dict[str, str]:
     db = _db(request)
     identity = current_identity(request)
-    tid_row = (
-        await db.execute(
-            text("SELECT tenant_id FROM proposals WHERE id = :id"),
-            {"id": str(proposal_id)},
-        )
-    ).scalar_one_or_none()
-    if tid_row is None:
-        raise HTTPException(404, "proposal not found")
-    tid = UUID(str(tid_row))
+    is_tenant = identity.user_type == UserType.TENANT.value
 
-    async with tenant_context(db, tid):
+    async def _do() -> None:
+        seen = (
+            await db.execute(
+                text("SELECT 1 FROM proposals WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+        ).scalar_one_or_none()
+        if seen is None:
+            raise HTTPException(404, "proposal not found")
         try:
             await reject_proposal(
                 db,
@@ -675,6 +795,21 @@ async def reject_proposal_route(
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+
+    if is_tenant:
+        async with tenant_context(db, _caller_tenant(request)):
+            await _do()
+    else:
+        tid_row = (
+            await db.execute(
+                text("SELECT tenant_id FROM proposals WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+        ).scalar_one_or_none()
+        if tid_row is None:
+            raise HTTPException(404, "proposal not found")
+        async with tenant_context(db, UUID(str(tid_row))):
+            await _do()
     return {"ok": "rejected"}
 
 
