@@ -860,8 +860,31 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ fact })
 			})
+	},
+	// Tenant self-service user management (tenant_admin provisions its own org's logins).
+	tenantUsers: {
+		list: () => request<TenantUser[]>('/tenant/users'),
+		create: (email: string, role: string, display_name?: string) =>
+			request<TenantUserCreated>('/tenant/users', {
+				method: 'POST',
+				body: JSON.stringify({ email, role, display_name })
+			}),
+		deactivate: (userId: string) =>
+			request<{ deactivated: string }>(`/tenant/users/${userId}/deactivate`, { method: 'POST' })
 	}
 	};
+
+export interface TenantUser {
+	id: string;
+	email: string;
+	display_name: string | null;
+	role: string;
+	active: boolean;
+}
+
+export interface TenantUserCreated extends TenantUser {
+	temporary_password: string;
+}
 
 export interface TenantEngagement {
 	id: string;

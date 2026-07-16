@@ -33,6 +33,7 @@ from soctalk.core.api import mssp_analytics as mssp_analytics_routes
 from soctalk.core.api import mssp_dashboard as mssp_dashboard_routes
 from soctalk.core.api import public_tenant as public_tenant_routes
 from soctalk.core.api import tenants as tenant_routes
+from soctalk.core.api import users as users_routes
 from soctalk.core.api import worker_runs as worker_runs_routes
 from soctalk.core.auth.config import AuthMode, get_auth_mode
 from soctalk.core.auth.middleware import internal_session_middleware
@@ -262,6 +263,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(authorization_routes.router)
     app.include_router(authorization_routes.mssp_router)
     app.include_router(authorization_routes.tenant_authz_router)
+    app.include_router(users_routes.tenant_users_router)
     app.include_router(worker_runs_routes.router)
     # Slug-driven tenant landing: /api/public/tenant-by-slug/{slug} —
     # no auth, returns identity + branding so the canonical UI can

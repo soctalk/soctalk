@@ -92,7 +92,7 @@ _TENANT_MANAGER_CAPS = {
     Permission.TENANT_ASSERT_AUTHORIZATION_FACTS,
     Permission.TENANT_APPROVE_PRIVILEGED_PROPOSAL,
 }
-_TENANT_ADMIN_CAPS = {Permission.TENANT_MANAGE_LLM}
+_TENANT_ADMIN_CAPS = {Permission.TENANT_MANAGE_LLM, Permission.TENANT_MANAGE_USERS}
 
 
 def test_tenant_tiers_are_strictly_hierarchical():

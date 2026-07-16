@@ -60,6 +60,7 @@ class Permission(str, Enum):
     TENANT_AUTHORIZE_ENGAGEMENT = "tenant_authorize_engagement"  # declare/revoke own engagements
     TENANT_VIEW_AUTHORIZATION_FACTS = "tenant_view_authorization_facts"
     TENANT_ASSERT_AUTHORIZATION_FACTS = "tenant_assert_authorization_facts"  # assert (→ pending review)
+    TENANT_MANAGE_USERS = "tenant_manage_users"  # create/list/deactivate own-tenant users + roles
 
     # --- tenant operate (co-managed SOC — tenant_analyst; mirror of the MSSP analyst) ---
     TENANT_TRIAGE_INVESTIGATION = "tenant_triage_investigation"  # post/edit facts on own cases
@@ -137,8 +138,12 @@ _TENANT_MANAGER: frozenset[Permission] = _TENANT_ANALYST | {
     Permission.TENANT_ASSERT_AUTHORIZATION_FACTS,
     Permission.TENANT_APPROVE_PRIVILEGED_PROPOSAL,
 }
-# tenant admin adds self-service config
-_TENANT_ADMIN: frozenset[Permission] = _TENANT_MANAGER | {Permission.TENANT_MANAGE_LLM}
+# tenant admin adds self-service config + managing its own org's users/roles (so a tenant can
+# provision its own tenant_analyst / tenant_manager / customer_viewer logins — co-managed SOC).
+_TENANT_ADMIN: frozenset[Permission] = _TENANT_MANAGER | {
+    Permission.TENANT_MANAGE_LLM,
+    Permission.TENANT_MANAGE_USERS,
+}
 
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
