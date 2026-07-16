@@ -37,9 +37,10 @@ RESPONSE_STATE_CONTRACT: frozenset[str] = frozenset(
         "severity",
         "rule.groups",
         "rule.ids",
-        # ATT&CK, matchable ids only (core/ir/triage.py convention): techniques
-        # are the canonical Txxxx ids, tactics the tactic refs. The
-        # human-readable names are display-only and deliberately NOT here.
+        # ATT&CK. techniques = canonical Txxxx ids (core/ir/triage.py convention;
+        # the human-readable technique names are display-only and NOT here).
+        # tactics = the tactic strings the source emits verbatim (Wazuh sends
+        # NAMES like "Lateral Movement", not TA refs) — match on those.
         "mitre.techniques",
         "mitre.tactics",
     }
@@ -73,9 +74,9 @@ class ResponseMatch(BaseModel):
     Empty (the default) matches everything: the disposition phase lists
     (on_escalate/on_close) already scope when the playbook fires.
 
-    ATT&CK matchers use the canonical identifiers only: ``mitre_techniques`` are
-    Txxxx technique ids, ``mitre_tactics`` are tactic refs — never technique
-    names (the codebase convention, core/ir/triage.py)."""
+    ATT&CK matchers: ``mitre_techniques`` are Txxxx technique ids (never technique
+    names — the codebase convention, core/ir/triage.py); ``mitre_tactics`` are the
+    tactic strings the source emits (Wazuh sends names like "Lateral Movement")."""
 
     model_config = ConfigDict(extra="forbid")
 

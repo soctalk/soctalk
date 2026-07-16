@@ -282,7 +282,9 @@
 				>
 				<label class="label"
 					><span class="text-sm">ATT&CK tactics</span
-					><input class="input" bind:value={mitreTacticsText} placeholder="TA0008" /></label
+					><input class="input" bind:value={mitreTacticsText} placeholder="Lateral Movement" /><span
+						class="text-[10px] opacity-50">tactic names as your source emits them</span
+					></label
 				>
 			</div>
 		</div>

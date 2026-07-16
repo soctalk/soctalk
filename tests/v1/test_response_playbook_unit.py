@@ -175,7 +175,7 @@ def test_applies_to_mitre_technique_and_tactic(tmp_path, monkeypatch):
         {
             "att.yaml": (
                 "id: att-lateral\nstatus: active\n"
-                "applies_to: {mitre_techniques: [T1021], mitre_tactics: [TA0008]}\n"
+                "applies_to: {mitre_techniques: [T1021], mitre_tactics: ['Lateral Movement']}\n"
                 "response: {on_escalate: [{capability: annotate_investigation}]}"
             )
         },
@@ -190,7 +190,7 @@ def test_applies_to_mitre_technique_and_tactic(tmp_path, monkeypatch):
         # tactic hit
         assert match_response_playbooks(
             rule_groups=set(), rule_ids=set(), tenant_identifiers=ids,
-            status="active", mitre_tactics=frozenset({"TA0008"}),
+            status="active", mitre_tactics=frozenset({"Lateral Movement"}),
         )
         # a technique NAME must NOT match (names aren't the identifier)
         assert not match_response_playbooks(
@@ -261,7 +261,7 @@ def _envelope(**over):
         # envelope v2: techniques = Txxxx ids, tactics = tactic refs, names demoted.
         "mitre": {
             "techniques": ["T1078"],
-            "tactics": ["TA0004"],
+            "tactics": ["Privilege Escalation"],
             "technique_names": ["Valid Accounts"],
         },
         "entities": [],
@@ -287,7 +287,7 @@ def test_conditions_evaluate_over_context():
     assert evaluate_condition({"in": ["T1078", {"var": "mitre.techniques"}]}, ctx), (
         "mitre.techniques carries the canonical Txxxx ids (envelope v2)"
     )
-    assert evaluate_condition({"in": ["TA0004", {"var": "mitre.tactics"}]}, ctx)
+    assert evaluate_condition({"in": ["Privilege Escalation", {"var": "mitre.tactics"}]}, ctx)
     assert evaluate_condition({"!!": [{"var": "floor_vetoed"}]}, ctx)
     assert not evaluate_condition(
         {"==": [{"var": "worker_disposition"}, "escalate"]}, ctx

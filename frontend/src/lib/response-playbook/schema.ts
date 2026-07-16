@@ -50,8 +50,9 @@ export const SCALAR_FIELDS = [
 	'verdict_confidence',
 	'severity'
 ] as const;
-// ATT&CK fields carry the canonical ids only: mitre.techniques = Txxxx technique
-// ids, mitre.tactics = tactic refs (never technique names — display-only).
+// ATT&CK: mitre.techniques = canonical Txxxx technique ids (never names);
+// mitre.tactics = the tactic strings the source emits (Wazuh sends names like
+// "Lateral Movement", not TA refs).
 export const LIST_FIELDS = ['rule.groups', 'rule.ids', 'mitre.techniques', 'mitre.tactics'] as const;
 
 export const COMPARISONS = ['==', '!=', '>=', '<=', '>', '<'] as const;

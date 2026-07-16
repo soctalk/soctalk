@@ -88,7 +88,7 @@ async def _promoted_investigation_and_run(
             # Stored WireMitre: ids = Txxxx, tactics = tactic refs, techniques = names.
             "mitre": {
                 "ids": ["T1078"],
-                "tactics": ["TA0004"],
+                "tactics": ["Privilege Escalation"],
                 "techniques": ["Valid Accounts"],
             },
             "schema_version": 2,
@@ -155,7 +155,7 @@ async def test_dispatch_enqueues_idempotently_and_audits(
     # envelope v2: techniques = canonical Txxxx ids (from stored WireMitre.ids),
     # tactics = tactic refs, names demoted to the non-contract technique_names.
     assert envelope["mitre"]["techniques"] == ["T1078"]
-    assert envelope["mitre"]["tactics"] == ["TA0004"]
+    assert envelope["mitre"]["tactics"] == ["Privilege Escalation"]
     assert envelope["mitre"]["technique_names"] == ["Valid Accounts"]
 
     # Replayed completion → ON CONFLICT no-op, still one row.

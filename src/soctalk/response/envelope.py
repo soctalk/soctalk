@@ -35,6 +35,11 @@ async def build_envelope(
     store (same LATERAL pattern as ``claim_run`` — rule semantics live on the
     alert's source events, and a later empty v1 event must not hide them)."""
 
+    # Join EVERY source event (not one representative): the envelope UNIONs MITRE,
+    # rule groups, and entities across all of an alert's events (Codex ph2 MITRE
+    # finding 2). Picking one event could let a later entity-only event hide an
+    # earlier MITRE-bearing one, and a MITRE-only response playbook would then
+    # never fire. Per-facet dedup happens in the aggregation loop below.
     rows = (
         await db.execute(
             text(
@@ -43,14 +48,7 @@ async def build_envelope(
                        se.mitre AS mitre, se.rule_groups AS rule_groups,
                        se.entities AS entities
                 FROM alerts a
-                LEFT JOIN LATERAL (
-                    SELECT mitre, rule_groups, entities
-                    FROM alert_source_events
-                    WHERE alert_id = a.id
-                    ORDER BY (mitre <> '{}'::jsonb OR entities <> '[]'::jsonb) DESC,
-                             ingested_at DESC
-                    LIMIT 1
-                ) se ON true
+                LEFT JOIN alert_source_events se ON se.alert_id = a.id
                 WHERE a.investigation_id = :c
                 ORDER BY a.severity DESC, a.first_event_at DESC
                 """
@@ -82,20 +80,27 @@ async def build_envelope(
             if g not in rule_groups:
                 rule_groups.append(g)
         # Stored evidence is WireMitre: {ids=Txxxx, tactics, techniques=names}.
-        # Tolerate scalar forms.
+        # Read the plural keys AND the legacy singular ones (id/tactic/technique)
+        # some sources still emit (Codex ph2 MITRE finding 3), and tolerate scalar
+        # (non-list) values without crashing. Tactics are matched as the source
+        # provides them — Wazuh emits tactic NAMES (e.g. "Lateral Movement"), not
+        # TA refs — so envelope.mitre.tactics carries those strings verbatim.
         mitre = a["mitre"] or {}
         if isinstance(mitre, dict):
-            for target, key in (
-                (mitre_techniques, "ids"),
-                (mitre_tactics, "tactics"),
-                (mitre_names, "techniques"),
+            for target, keys in (
+                (mitre_techniques, ("ids", "id")),
+                (mitre_tactics, ("tactics", "tactic")),
+                (mitre_names, ("techniques", "technique")),
             ):
-                vals = mitre.get(key) or []
-                if isinstance(vals, str):
-                    vals = [vals]
-                for t in vals:
-                    if str(t) not in target:
-                        target.append(str(t))
+                for key in keys:
+                    raw = mitre.get(key)
+                    if raw is None:
+                        continue
+                    vals = raw if isinstance(raw, list) else [raw]
+                    for t in vals:
+                        s = str(t)
+                        if s and s not in target:
+                            target.append(s)
         for e in a["entities"] or []:
             if e not in entities:
                 entities.append(e)
