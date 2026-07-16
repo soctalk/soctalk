@@ -1,11 +1,11 @@
 """Triage-policy schema — declarative data, interpreted by the graph.
 
-A playbook is data, not code: it names required deterministic steps and (later)
+A triage policy is data, not code: it names required deterministic steps and (later)
 capabilities; it can never supply new code. Guardrail conditions stay OUT of the
 schema in this increment — the two enforced edges (contradicted→escalate,
-IOC→escalate) live in ``soctalk.triage_policy.guard`` as code until a second playbook
+IOC→escalate) live in ``soctalk.triage_policy.guard`` as code until a second triage policy
 justifies a sandboxed condition language. The safety floor (``soctalk.triage_policy.floor``)
-is enforced by the executor and is deliberately not expressible here: a playbook can
+is enforced by the executor and is deliberately not expressible here: a triage policy can
 only add stricter gates, never weaken the floor.
 """
 
@@ -23,7 +23,7 @@ GATHER_AUTHORIZATION_CONTEXT = "gather_authorization_context"
 KNOWN_STEP_NODES = frozenset({GATHER_AUTHORIZATION_CONTEXT})
 
 # Deterministic dispositions are vetted capability names, exactly like steps: a
-# playbook references one by name and can reference nothing else. Resolution of an
+# triage policy references one by name and can reference nothing else. Resolution of an
 # unknown name fails closed — to FULL triage, never to a close (the safe direction
 # for a close-shaped capability).
 CLOSE_OPERATIONAL = "close_operational"
@@ -62,7 +62,7 @@ class Guardrail(BaseModel):
 
 
 class TriagePolicyMatch(BaseModel):
-    """Alert-matching rules. Criteria are OR'd: the playbook applies when ANY listed
+    """Alert-matching rules. Criteria are OR'd: the triage policy applies when ANY listed
     criterion matches (each criterion is itself an any-of over its values)."""
 
     model_config = ConfigDict(extra="forbid")
@@ -75,7 +75,7 @@ class TriagePolicyMatch(BaseModel):
 
 
 class TriagePolicy(BaseModel):
-    """One procedural playbook: which alerts it owns and what must run before VERDICT.
+    """One procedural triage policy: which alerts it owns and what must run before VERDICT.
 
     ``extra="forbid"``: a typo'd field in an authored file rejects the whole file at
     load (fail closed) instead of silently doing nothing."""
@@ -89,12 +89,12 @@ class TriagePolicy(BaseModel):
     # filters the same way. Do NOT give a tenant a UUID-shaped slug: a slug that
     # collides with another tenant's UUID makes the scope ambiguous.
     tenant: str = "*"
-    # active playbooks govern; shadow playbooks are matched and evaluated for
+    # active triage policies govern; shadow triage policies are matched and evaluated for
     # audit only — decisions logged, nothing enforced (#44: shadow-run before
-    # activation). File-loaded playbooks default to shadow.
+    # activation). File-loaded triage policies default to shadow.
     status: Literal["active", "shadow"] = "active"
     # Registry priority: lower wins on a multi-match (built-ins use 10/50;
-    # file-loaded playbooks default below them).
+    # file-loaded triage policies default below them).
     priority: int = 100
     applies_to: TriagePolicyMatch = Field(default_factory=TriagePolicyMatch)
     # Deterministic node names that must have run before VERDICT is legal.
@@ -120,6 +120,6 @@ class TriagePolicy(BaseModel):
     close_signoff_data_classes: list[str] = Field(default_factory=list)
     # Declarative guardrails (#44), evaluated by the post-verdict guard AFTER the
     # non-overridable code edges (IOC, contradicted authorization) — additive
-    # only: the effective set is floor ∪ playbook, and nothing here can weaken
+    # only: the effective set is floor ∪ triage policy, and nothing here can weaken
     # the floor. First matching guardrail wins.
     guardrails: list[Guardrail] = Field(default_factory=list, max_length=16)

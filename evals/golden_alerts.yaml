@@ -253,12 +253,12 @@ cases:
       routing_actions: [CONTEXTUALIZE, INVESTIGATE, VERDICT]
 
   # ------------------------------------------- deterministic playbook layer
-  # kind: playbook cases score the resolver route with NO LLM call (issue #43).
-  # expect.playbook_route: operational_close = deterministic disposition fired,
+  # kind: triage_policy cases score the resolver route with NO LLM call (issue #43).
+  # expect.triage_policy_route: operational_close = deterministic disposition fired,
   # the case never reaches the model; supervisor = full triage.
 
   - id: agent-queue-flooded-operational
-    kind: playbook
+    kind: triage_policy
     description: >
       Wazuh rule 202 "Agent event queue is flooded" — agent-health/operational
       class with no security indicators. The agent-health-operational playbook
@@ -278,11 +278,11 @@ cases:
       enrichments: []
       misp_context: {}
     expect:
-      playbook_route: [operational_close]
-      playbook_id: agent-health-operational
+      triage_policy_route: [operational_close]
+      triage_policy_id: agent-health-operational
 
   - id: agent-queue-flooded-with-mitre-to-triage
-    kind: playbook
+    kind: triage_policy
     description: >
       The same agent-health class carrying a MITRE mapping (e.g. an endpoint-DoS
       technique) is more than its class — a security indicator vetoes the
@@ -301,11 +301,11 @@ cases:
       enrichments: []
       misp_context: {}
     expect:
-      playbook_route: [supervisor]
-      playbook_id: agent-health-operational
+      triage_policy_route: [supervisor]
+      triage_policy_id: agent-health-operational
 
   - id: agent-flooding-correlated-with-security-alert-to-triage
-    kind: playbook
+    kind: triage_policy
     description: >
       A flooding alert correlated with a non-operational alert on the same
       investigation fails class attestation — the whole investigation goes to
@@ -331,5 +331,5 @@ cases:
       enrichments: []
       misp_context: {}
     expect:
-      playbook_route: [supervisor]
-      playbook_id: agent-health-operational
+      triage_policy_route: [supervisor]
+      triage_policy_id: agent-health-operational

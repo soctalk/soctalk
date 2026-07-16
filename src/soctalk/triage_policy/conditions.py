@@ -1,4 +1,4 @@
-"""Sandboxed condition language for playbook guardrails (issue #44).
+"""Sandboxed condition language for triage policy guardrails (issue #44).
 
 A deliberately tiny JSONLogic subset, implemented natively (no dependency, no
 dynamic evaluation): a condition is a nested dict of ALLOWLISTED operators over
@@ -7,7 +7,7 @@ there is no attribute access, no call syntax, no string formatting, no way to na
 anything outside ``STATE_CONTRACT``.
 
 Author-time validation (``validate_condition``) fails closed: an unknown operator
-or an undeclared field rejects the whole condition (and its playbook file). At
+or an undeclared field rejects the whole condition (and its triage policy file). At
 eval time a missing value is ``None`` and comparisons with ``None`` are simply
 falsy — a guardrail can only fire on evidence that is actually present.
 

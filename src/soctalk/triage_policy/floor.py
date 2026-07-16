@@ -10,9 +10,9 @@ Auto-close happens in two planes, and the floor must veto in both:
   check lives in ``triage.py`` next to the close sites and shares this module's
   reason vocabulary.
 
-The floor is enforced by the executor, is not expressible in a playbook, and always
-applies — a playbook can only add stricter gates. Without this, a misconfigured or
-malicious playbook becomes a detection-suppression channel.
+The floor is enforced by the executor, is not expressible in a triage policy, and always
+applies — a triage policy can only add stricter gates. Without this, a misconfigured or
+malicious triage policy becomes a detection-suppression channel.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ VETO_KILL_SWITCH = "auto_close_killed"
 VETO_VOLUME_CAP = "close_volume_cap"
 
 # Audit actions on the API/IR planes (queried like other ir.* rows).
-FLOOR_AUDIT_ACTION = "ir.playbook.close_floor_veto"
-PLAYBOOK_AUDIT_ACTION = "ir.playbook.audit"
+FLOOR_AUDIT_ACTION = "ir.triage_policy.close_floor_veto"
+TRIAGE_POLICY_AUDIT_ACTION = "ir.triage_policy.audit"
 
 
 def auto_close_killed(policy: dict[str, Any] | None = None) -> bool:
@@ -39,7 +39,7 @@ def auto_close_killed(policy: dict[str, Any] | None = None) -> bool:
     ``SOCTALK_AUTO_CLOSE_KILL`` env on the API process, or per tenant via the
     ``auto_close_kill`` policy row (a runtime flip, no rollout). Either being on
     kills EVERY automatic close — rules band, memoized close, worker close_fp,
-    playbook operational disposition — flipping them to promote/escalate. The
+    triage policy operational disposition — flipping them to promote/escalate. The
     policy flag must be a real boolean True (a stringly "false" is not True)."""
     import os
 

@@ -69,7 +69,7 @@ class GuardResult(BaseModel):
     # takes effect — distinct from an override in both routing and audit.
     interrupted: bool = False
     # The state-contract context the conditions were evaluated against (#44) —
-    # exposed so shadow playbooks are judged against the exact same facts.
+    # exposed so shadow triage policies are judged against the exact same facts.
     condition_ctx: dict[str, Any] | None = None
 
     @property
@@ -184,7 +184,7 @@ def evaluate_guard(
     it by finding covering evidence). The IOC edge is checked first — the floor always
     outranks authorization reasoning. A close that would otherwise COMMIT is
     interrupted for human sign-off when the activity's asset carries one of the
-    playbook's ``close_signoff_data_classes`` (#45): the draft stays intact, a human
+    triage policy's ``close_signoff_data_classes`` (#45): the draft stays intact, a human
     disposes — even a fully covered close on such an asset is not automatic.
     """
     authz_class, components = derive_authz_class(context)
@@ -240,13 +240,13 @@ def evaluate_guard(
                 continue
             effect = rule.get("effect")
             to = str(rule.get("to") or "")
-            reason = str(rule.get("reason") or "playbook guardrail")[:512]
+            reason = str(rule.get("reason") or "triage policy guardrail")[:512]
             if effect == "override":
                 if DECISION_RANK.get(to, -1) <= DECISION_RANK.get(verdict_decision, 99):
                     continue  # raise-only: a non-raising override never fires
                 overrides.append(
                     GuardOverride(
-                        guardrail=f"playbook_guardrail_{i}",
+                        guardrail=f"triage_policy_guardrail_{i}",
                         from_decision=verdict_decision,
                         to_decision=to,
                         reason=reason,
@@ -258,7 +258,7 @@ def evaluate_guard(
                 interrupted = True
                 overrides.append(
                     GuardOverride(
-                        guardrail=f"playbook_guardrail_{i}",
+                        guardrail=f"triage_policy_guardrail_{i}",
                         effect="interrupt",
                         from_decision=verdict_decision,
                         to_decision="human_review",
@@ -297,14 +297,14 @@ def evaluate_guard(
 
 
 def shadow_guardrail_audits(
-    shadow_playbooks: Sequence[dict[str, Any]], ctx: dict[str, Any] | None
+    shadow_triage_policies: Sequence[dict[str, Any]], ctx: dict[str, Any] | None
 ) -> list[dict[str, Any]]:
-    """Would-fire records for SHADOW playbooks' guardrails against the same
+    """Would-fire records for SHADOW triage policies' guardrails against the same
     contract context the active guard used (#44). Pure; never mutates anything —
     the caller appends these to the audit trail only.
 
     Mirrors ACTIVE semantics exactly (Codex #44 finding: divergent shadow data
-    corrupts the activation evidence): first matching rule per playbook wins, and
+    corrupts the activation evidence): first matching rule per triage policy wins, and
     a non-raising override is skipped just as the live guard would skip it — a
     rule that would be ignored when active must not be logged as would-fire.
     """
@@ -315,7 +315,7 @@ def shadow_guardrail_audits(
         return []
     draft = str(ctx.get("verdict") or "")
     audits: list[dict[str, Any]] = []
-    for pb in shadow_playbooks:
+    for pb in shadow_triage_policies:
         if not isinstance(pb, dict):
             continue
         for i, rule in enumerate(pb.get("guardrails") or []):
@@ -331,8 +331,8 @@ def shadow_guardrail_audits(
             audits.append(
                 {
                     "shadow": True,
-                    "playbook": pb.get("id"),
-                    "guardrail": f"playbook_guardrail_{i}",
+                    "triage_policy": pb.get("id"),
+                    "guardrail": f"triage_policy_guardrail_{i}",
                     "would_effect": rule.get("effect"),
                     "would_to": to,
                     "reason": str(rule.get("reason") or "")[:512],

@@ -607,8 +607,13 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
     # the analyst sees the LLM draft, the guardrail that fired, and the final
     # disposition (issue #43: an audit event per override).
     enrichments_payload = _verdict_enrichments(final)
-    if final.get("playbook_audit"):
-        enrichments_payload["playbook_audit"] = list(final["playbook_audit"])[:10]
+    # Canonical enrichment key is triage_policy_audit; also emit the deprecated
+    # playbook_audit for one release so an older L1 reader still finds it.
+    _tp_audit = final.get("triage_policy_audit") or final.get("playbook_audit")
+    if _tp_audit:
+        _tp_audit = list(_tp_audit)[:10]
+        enrichments_payload["triage_policy_audit"] = _tp_audit
+        enrichments_payload["playbook_audit"] = _tp_audit
     if floor_vetoes:
         enrichments_payload["safety_floor"] = {
             "vetoes": floor_vetoes,

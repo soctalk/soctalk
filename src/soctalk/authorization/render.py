@@ -83,7 +83,7 @@ def _verdict_value(enrichment: Any) -> str:
 
 def has_malicious_signal(investigation: dict[str, Any]) -> bool:
     """Malicious enrichment verdict or MISP IOC match on the investigation. Shared by
-    the prompt renderer (warning line) and the playbook guard/floor (issue #43), so the
+    the prompt renderer (warning line) and the triage policy guard/floor (issue #43), so the
     warning the model reads and the gate that enforces it can never disagree."""
     enrichments = investigation.get("enrichments", []) or []
     if any(_verdict_value(e) == "malicious" for e in enrichments):

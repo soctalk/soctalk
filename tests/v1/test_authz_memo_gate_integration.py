@@ -170,7 +170,7 @@ async def test_malicious_signal_blocks_replay_even_with_routine(
     floor_vetoes = (
         await mssp_session.execute(
             text("SELECT count(*) FROM audit_log WHERE tenant_id = :t "
-                 "AND action = 'ir.playbook.close_floor_veto'"),
+                 "AND action = 'ir.triage_policy.close_floor_veto'"),
             {"t": str(t.tenant_id)},
         )
     ).scalar_one()
