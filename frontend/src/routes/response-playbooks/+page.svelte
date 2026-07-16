@@ -159,7 +159,10 @@
 <div class="flex items-center justify-between mb-2">
 	<h1 class="h2">Response Playbooks</h1>
 	{#if tenantId && canManage}
-		<button class="btn btn-sm variant-filled-primary" on:click={openCreate}>+ New response playbook</button>
+		<div class="flex gap-2">
+			<a class="btn btn-sm variant-filled-primary" href="/response-playbooks/editor">+ New response playbook</a>
+			<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">JSON</button>
+		</div>
 	{/if}
 </div>
 <p class="opacity-60 text-sm mb-6">
@@ -216,8 +219,14 @@
 									Activate
 								</button>
 							{/if}
-							<button class="btn btn-sm variant-filled-primary" on:click={() => openEdit(pb)}>
+							<a
+								class="btn btn-sm variant-filled-primary"
+								href="/response-playbooks/editor?id={encodeURIComponent(pb.response_playbook_id)}"
+							>
 								Edit
+							</a>
+							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)} title="Raw JSON editor">
+								JSON
 							</button>
 							<button
 								class="btn btn-sm variant-soft-error"
