@@ -61,8 +61,15 @@ async def build_envelope(
 
     rule_ids: list[str] = []
     rule_groups: list[str] = []
-    mitre_ids: list[str] = []
-    mitre_techniques: list[str] = []
+    # ATT&CK, normalized to the codebase convention (core/ir/triage.py): the
+    # MATCHABLE identifiers are the canonical Txxxx technique ids and the tactic
+    # refs — NEVER the human-readable technique names, which are display-only and
+    # unstable. So envelope.mitre.techniques carries the Txxxx ids (from
+    # WireMitre.ids), .tactics carries the tactic refs, and .technique_names is
+    # kept for the outbound payload but stays OUT of the condition/match contract.
+    mitre_techniques: list[str] = []  # Txxxx ids
+    mitre_tactics: list[str] = []
+    mitre_names: list[str] = []
     entities: list[Any] = []
     iocs: list[Any] = []
     severity = 0
@@ -74,11 +81,15 @@ async def build_envelope(
             g = str(g).lower()
             if g not in rule_groups:
                 rule_groups.append(g)
-        # Stored evidence contract is WireMitre: {ids, tactics, techniques}
-        # (ids = Txxxx, techniques = names). Tolerate scalar forms.
+        # Stored evidence is WireMitre: {ids=Txxxx, tactics, techniques=names}.
+        # Tolerate scalar forms.
         mitre = a["mitre"] or {}
         if isinstance(mitre, dict):
-            for target, key in ((mitre_ids, "ids"), (mitre_techniques, "techniques")):
+            for target, key in (
+                (mitre_techniques, "ids"),
+                (mitre_tactics, "tactics"),
+                (mitre_names, "techniques"),
+            ):
                 vals = mitre.get(key) or []
                 if isinstance(vals, str):
                     vals = [vals]
@@ -117,7 +128,11 @@ async def build_envelope(
         },
         "severity": severity,
         "rule": {"ids": rule_ids, "groups": rule_groups},
-        "mitre": {"ids": mitre_ids, "techniques": mitre_techniques},
+        "mitre": {
+            "techniques": mitre_techniques,  # Txxxx ids — matchable
+            "tactics": mitre_tactics,  # tactic refs — matchable
+            "technique_names": mitre_names,  # display only, NOT in the contract
+        },
         "entities": entities[:64],
         "iocs": iocs[:64],
     }
@@ -142,7 +157,7 @@ def condition_context(envelope: dict[str, Any]) -> dict[str, Any]:
             "ids": (envelope.get("rule") or {}).get("ids") or [],
         },
         "mitre": {
-            "ids": (envelope.get("mitre") or {}).get("ids") or [],
             "techniques": (envelope.get("mitre") or {}).get("techniques") or [],
+            "tactics": (envelope.get("mitre") or {}).get("tactics") or [],
         },
     }

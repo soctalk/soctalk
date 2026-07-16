@@ -50,7 +50,9 @@ export const SCALAR_FIELDS = [
 	'verdict_confidence',
 	'severity'
 ] as const;
-export const LIST_FIELDS = ['rule.groups', 'rule.ids', 'mitre.ids', 'mitre.techniques'] as const;
+// ATT&CK fields carry the canonical ids only: mitre.techniques = Txxxx technique
+// ids, mitre.tactics = tactic refs (never technique names — display-only).
+export const LIST_FIELDS = ['rule.groups', 'rule.ids', 'mitre.techniques', 'mitre.tactics'] as const;
 
 export const COMPARISONS = ['==', '!=', '>=', '<=', '>', '<'] as const;
 
@@ -120,7 +122,12 @@ export interface ResponsePlaybookDef {
 	id: string;
 	version?: number;
 	priority?: number;
-	applies_to?: { rule_groups?: string[]; rule_ids?: string[] };
+	applies_to?: {
+		rule_groups?: string[];
+		rule_ids?: string[];
+		mitre_techniques?: string[];
+		mitre_tactics?: string[];
+	};
 	response?: { on_escalate?: ResponseActionDef[]; on_close?: ResponseActionDef[] };
 }
 

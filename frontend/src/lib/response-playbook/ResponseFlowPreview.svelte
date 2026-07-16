@@ -58,6 +58,8 @@
 		const parts: string[] = [];
 		if (m.rule_groups?.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
 		if (m.rule_ids?.length) parts.push(`rules: ${m.rule_ids.join(', ')}`);
+		if (m.mitre_techniques?.length) parts.push(`ATT&CK: ${m.mitre_techniques.join(', ')}`);
+		if (m.mitre_tactics?.length) parts.push(`tactics: ${m.mitre_tactics.join(', ')}`);
 		return parts.join('\n') || 'matches every alert';
 	}
 

@@ -105,17 +105,30 @@ def _matches(
     rule_groups: set[str],
     rule_ids: set[str],
     tenant_identifiers: frozenset[str],
+    mitre_techniques: frozenset[str] = frozenset(),
+    mitre_tactics: frozenset[str] = frozenset(),
 ) -> bool:
     if pb.tenant != "*" and pb.tenant not in tenant_identifiers:
         return False
     match = pb.applies_to
-    if not match.rule_groups and not match.rule_ids:
+    # No criteria → matches everything (the phase lists scope when it fires).
+    if not (
+        match.rule_groups or match.rule_ids
+        or match.mitre_techniques or match.mitre_tactics
+    ):
         return True
+    # Criteria are OR'd: any one hit is a match.
     if match.rule_groups and rule_groups.intersection(
         g.lower() for g in match.rule_groups
     ):
         return True
-    return bool(match.rule_ids) and bool(rule_ids.intersection(match.rule_ids))
+    if match.rule_ids and rule_ids.intersection(match.rule_ids):
+        return True
+    if match.mitre_techniques and mitre_techniques.intersection(match.mitre_techniques):
+        return True
+    return bool(match.mitre_tactics) and bool(
+        mitre_tactics.intersection(match.mitre_tactics)
+    )
 
 
 def playbook_matches(
@@ -124,12 +137,15 @@ def playbook_matches(
     rule_groups: set[str],
     rule_ids: set[str],
     tenant_identifiers: frozenset[str],
+    mitre_techniques: frozenset[str] = frozenset(),
+    mitre_tactics: frozenset[str] = frozenset(),
 ) -> bool:
     """Public single-playbook match — same pure predicate the file registry uses,
     so DB-authored playbooks (#49 phase 2) are matched identically."""
     return _matches(
         pb, rule_groups=rule_groups, rule_ids=rule_ids,
         tenant_identifiers=tenant_identifiers,
+        mitre_techniques=mitre_techniques, mitre_tactics=mitre_tactics,
     )
 
 
@@ -139,6 +155,8 @@ def match_response_playbooks(
     rule_ids: set[str],
     tenant_identifiers: frozenset[str],
     status: str,
+    mitre_techniques: frozenset[str] = frozenset(),
+    mitre_tactics: frozenset[str] = frozenset(),
 ) -> list[ResponsePlaybook]:
     """Every matching playbook with the given status, priority-sorted. The
     caller enqueues for ``active`` and audits for ``shadow`` — matching itself
@@ -152,5 +170,7 @@ def match_response_playbooks(
             rule_groups=rule_groups,
             rule_ids=rule_ids,
             tenant_identifiers=tenant_identifiers,
+            mitre_techniques=mitre_techniques,
+            mitre_tactics=mitre_tactics,
         )
     ]

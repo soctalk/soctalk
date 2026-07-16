@@ -34,6 +34,8 @@
 	let priority = 100;
 	let ruleGroupsText = '';
 	let ruleIdsText = '';
+	let mitreTechniquesText = '';
+	let mitreTacticsText = '';
 	let existingStatus: string | null = null;
 
 	interface ActionState {
@@ -96,9 +98,11 @@
 		const def: ResponsePlaybookDef = { id: pid };
 		if (version !== 1) def.version = version;
 		if (priority !== 100) def.priority = priority;
-		const applies: ResponsePlaybookDef['applies_to'] = {};
+		const applies: NonNullable<ResponsePlaybookDef['applies_to']> = {};
 		if (csv(ruleGroupsText).length) applies.rule_groups = csv(ruleGroupsText);
 		if (csv(ruleIdsText).length) applies.rule_ids = csv(ruleIdsText);
+		if (csv(mitreTechniquesText).length) applies.mitre_techniques = csv(mitreTechniquesText);
+		if (csv(mitreTacticsText).length) applies.mitre_tactics = csv(mitreTacticsText);
 		if (Object.keys(applies).length) def.applies_to = applies;
 		const resp: NonNullable<ResponsePlaybookDef['response']> = {};
 		if (onEscalate.length) resp.on_escalate = toDef(onEscalate);
@@ -129,6 +133,8 @@
 		const applies = (def.applies_to ?? {}) as Record<string, string[]>;
 		ruleGroupsText = (applies.rule_groups ?? []).join(', ');
 		ruleIdsText = (applies.rule_ids ?? []).join(', ');
+		mitreTechniquesText = (applies.mitre_techniques ?? []).join(', ');
+		mitreTacticsText = (applies.mitre_tactics ?? []).join(', ');
 		const resp = (def.response ?? {}) as Record<string, unknown[]>;
 		const fromDef = (arr: unknown[] | undefined): ActionState[] =>
 			((arr ?? []) as Record<string, unknown>[]).map((a) => {
@@ -264,6 +270,21 @@
 				><span class="text-sm">Rule IDs (comma-separated)</span
 				><input class="input" bind:value={ruleIdsText} placeholder="5710" /></label
 			>
+			<div class="grid grid-cols-2 gap-3">
+				<label class="label"
+					><span class="text-sm">ATT&CK techniques</span
+					><input
+						class="input"
+						data-testid="rp-mitre-techniques"
+						bind:value={mitreTechniquesText}
+						placeholder="T1078, T1021"
+					/><span class="text-[10px] opacity-50">technique IDs (Txxxx), not names</span></label
+				>
+				<label class="label"
+					><span class="text-sm">ATT&CK tactics</span
+					><input class="input" bind:value={mitreTacticsText} placeholder="TA0008" /></label
+				>
+			</div>
 		</div>
 
 		<!-- Action lists -->

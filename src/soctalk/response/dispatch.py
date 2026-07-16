@@ -42,6 +42,8 @@ async def _matched(
     rule_ids: set[str],
     identifiers: frozenset[str],
     status: str,
+    mitre_techniques: frozenset[str] = frozenset(),
+    mitre_tactics: frozenset[str] = frozenset(),
 ) -> list[ResponsePlaybook]:
     """Matching playbooks of a governing status — file registry PLUS DB-authored
     rows (#49 phase 2), priority-sorted. DB-authored playbooks let a tenant govern
@@ -67,6 +69,7 @@ async def _matched(
         for pb in match_response_playbooks(
             rule_groups=rule_groups, rule_ids=rule_ids,
             tenant_identifiers=identifiers, status=status,
+            mitre_techniques=mitre_techniques, mitre_tactics=mitre_tactics,
         )
         if pb.id not in authored_ids
     }
@@ -86,6 +89,7 @@ async def _matched(
         if playbook_matches(
             pb, rule_groups=rule_groups, rule_ids=rule_ids,
             tenant_identifiers=identifiers,
+            mitre_techniques=mitre_techniques, mitre_tactics=mitre_tactics,
         ):
             by_id[pb.id] = pb
     return sorted(by_id.values(), key=lambda p: p.priority)
@@ -164,6 +168,9 @@ async def dispatch_for_completed_run(
     ctx = condition_context(envelope)
     rule_groups = set((envelope.get("rule") or {}).get("groups") or [])
     rule_ids = set((envelope.get("rule") or {}).get("ids") or [])
+    mitre = envelope.get("mitre") or {}
+    mitre_techniques = frozenset(str(t) for t in (mitre.get("techniques") or []))
+    mitre_tactics = frozenset(str(t) for t in (mitre.get("tactics") or []))
     identifiers = await _tenant_identifiers(db, tenant_id)
 
     # Shadow first, and regardless of the kill switch: the audit trail of what
@@ -171,6 +178,7 @@ async def dispatch_for_completed_run(
     for pb in await _matched(
         db, tenant_id, rule_groups=rule_groups, rule_ids=rule_ids,
         identifiers=identifiers, status="shadow",
+        mitre_techniques=mitre_techniques, mitre_tactics=mitre_tactics,
     ):
         selected = _selected_actions(pb, effective_disposition, ctx)
         if not selected:
@@ -196,6 +204,7 @@ async def dispatch_for_completed_run(
     active = await _matched(
         db, tenant_id, rule_groups=rule_groups, rule_ids=rule_ids,
         identifiers=identifiers, status="active",
+        mitre_techniques=mitre_techniques, mitre_tactics=mitre_tactics,
     )
     if not active:
         return 0

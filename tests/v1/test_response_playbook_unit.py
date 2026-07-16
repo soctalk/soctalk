@@ -166,6 +166,46 @@ def test_tenant_scoping_matches_uuid_or_slug_only(tmp_path, monkeypatch):
         reset_registry_cache()
 
 
+def test_applies_to_mitre_technique_and_tactic(tmp_path, monkeypatch):
+    """A playbook can MATCH on ATT&CK technique ids and tactics (envelope v2).
+    Criteria are OR'd with rule groups/ids."""
+    _write_dir(
+        tmp_path,
+        monkeypatch,
+        {
+            "att.yaml": (
+                "id: att-lateral\nstatus: active\n"
+                "applies_to: {mitre_techniques: [T1021], mitre_tactics: [TA0008]}\n"
+                "response: {on_escalate: [{capability: annotate_investigation}]}"
+            )
+        },
+    )
+    ids = frozenset({"t"})
+    try:
+        # technique id hit
+        assert match_response_playbooks(
+            rule_groups=set(), rule_ids=set(), tenant_identifiers=ids,
+            status="active", mitre_techniques=frozenset({"T1021"}),
+        )
+        # tactic hit
+        assert match_response_playbooks(
+            rule_groups=set(), rule_ids=set(), tenant_identifiers=ids,
+            status="active", mitre_tactics=frozenset({"TA0008"}),
+        )
+        # a technique NAME must NOT match (names aren't the identifier)
+        assert not match_response_playbooks(
+            rule_groups=set(), rule_ids=set(), tenant_identifiers=ids,
+            status="active", mitre_techniques=frozenset({"Remote Services"}),
+        )
+        # unrelated technique → no match, and NOT a match-everything
+        assert not match_response_playbooks(
+            rule_groups=set(), rule_ids=set(), tenant_identifiers=ids,
+            status="active", mitre_techniques=frozenset({"T1078"}),
+        )
+    finally:
+        reset_registry_cache()
+
+
 def test_empty_applies_to_matches_everything(tmp_path, monkeypatch):
     _write_dir(
         tmp_path,
@@ -218,7 +258,12 @@ def _envelope(**over):
         "verdict": {"summary": "s", "confidence": 0.4},
         "severity": 12,
         "rule": {"ids": ["5710"], "groups": ["sudo"]},
-        "mitre": {"ids": ["T1078"], "techniques": ["Valid Accounts"]},
+        # envelope v2: techniques = Txxxx ids, tactics = tactic refs, names demoted.
+        "mitre": {
+            "techniques": ["T1078"],
+            "tactics": ["TA0004"],
+            "technique_names": ["Valid Accounts"],
+        },
         "entities": [],
         "iocs": [],
     }
@@ -239,9 +284,10 @@ def test_conditions_evaluate_over_context():
     ctx = condition_context(_envelope())
     assert evaluate_condition({">=": [{"var": "severity"}, 10]}, ctx)
     assert evaluate_condition({"in": ["sudo", {"var": "rule.groups"}]}, ctx)
-    assert evaluate_condition({"in": ["T1078", {"var": "mitre.ids"}]}, ctx), (
-        "mitre.ids carries the Txxxx ids (WireMitre contract)"
+    assert evaluate_condition({"in": ["T1078", {"var": "mitre.techniques"}]}, ctx), (
+        "mitre.techniques carries the canonical Txxxx ids (envelope v2)"
     )
+    assert evaluate_condition({"in": ["TA0004", {"var": "mitre.tactics"}]}, ctx)
     assert evaluate_condition({"!!": [{"var": "floor_vetoed"}]}, ctx)
     assert not evaluate_condition(
         {"==": [{"var": "worker_disposition"}, "escalate"]}, ctx

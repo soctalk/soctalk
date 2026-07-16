@@ -85,8 +85,12 @@ async def _promoted_investigation_and_run(
         evidence={
             "rule_groups": ["sudo", "pam"],
             "entities": [{"type": "host", "value": f"resp-{tag}", "role": "target"}],
-            # WireMitre contract: ids = Txxxx, techniques = names.
-            "mitre": {"ids": ["T1078"], "techniques": ["Valid Accounts"]},
+            # Stored WireMitre: ids = Txxxx, tactics = tactic refs, techniques = names.
+            "mitre": {
+                "ids": ["T1078"],
+                "tactics": ["TA0004"],
+                "techniques": ["Valid Accounts"],
+            },
             "schema_version": 2,
         },
     )
@@ -148,9 +152,11 @@ async def test_dispatch_enqueues_idempotently_and_audits(
     assert envelope["disposition"] == "escalate"
     assert "sudo" in envelope["rule"]["groups"]
     assert envelope["severity"] == 12
-    assert envelope["mitre"]["ids"] == ["T1078"], (
-        "envelope must read the stored WireMitre keys, not invented ones"
-    )
+    # envelope v2: techniques = canonical Txxxx ids (from stored WireMitre.ids),
+    # tactics = tactic refs, names demoted to the non-contract technique_names.
+    assert envelope["mitre"]["techniques"] == ["T1078"]
+    assert envelope["mitre"]["tactics"] == ["TA0004"]
+    assert envelope["mitre"]["technique_names"] == ["Valid Accounts"]
 
     # Replayed completion → ON CONFLICT no-op, still one row.
     await _dispatch(mssp_session, tenant_a.tenant_id, inv, run)
@@ -170,6 +176,33 @@ async def test_dispatch_enqueues_idempotently_and_audits(
     assert SHADOW_AUDIT_ACTION in audits, (
         "the shadow playbook matched the same envelope and must leave its audit trail"
     )
+
+
+async def test_dispatch_matches_on_mitre_technique(
+    mssp_session: AsyncSession, seed_two_tenants, tmp_path, monkeypatch
+):
+    """A playbook that matches ONLY on an ATT&CK technique id dispatches for an
+    alert carrying that technique — no rule-group overlap needed (envelope v2)."""
+    (tmp_path / "att.yaml").write_text(
+        "id: resp-att\nversion: 1\nstatus: active\n"
+        "applies_to: {mitre_techniques: [T1078]}\n"
+        "response: {on_escalate: [{capability: annotate_investigation, "
+        'params: {body: "matched on ATT&CK"}}]}\n'
+    )
+    monkeypatch.setenv("SOCTALK_RESPONSE_PLAYBOOK_DIR", str(tmp_path))
+    reset_registry_cache()
+    try:
+        tenant_a, _ = seed_two_tenants
+        # The promoted alert carries mitre ids [T1078] but rule_groups sudo/pam —
+        # the playbook has NO rule_groups, so only the technique match can fire it.
+        inv, run = await _promoted_investigation_and_run(
+            mssp_session, tenant_a.tenant_id, tag="att"
+        )
+        n = await _dispatch(mssp_session, tenant_a.tenant_id, inv, run)
+        await mssp_session.commit()
+        assert n == 1, "playbook must dispatch on the ATT&CK technique match"
+    finally:
+        reset_registry_cache()
 
 
 async def test_shadow_playbook_never_enqueues(

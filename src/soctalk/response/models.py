@@ -18,13 +18,16 @@ from soctalk.triage_policy.conditions import validate_condition
 # The disposition envelope's schema version. Bump on any breaking change to
 # the envelope shape — the envelope is a PUBLIC contract (webhook receivers
 # parse it), not an internal detail.
-ENVELOPE_VERSION = 1
+# v2: MITRE normalized to the codebase convention — mitre.techniques now carries
+# the canonical Txxxx ids (was names), mitre.tactics added, names demoted to the
+# non-contract mitre.technique_names display field.
+ENVELOPE_VERSION = 2
 
 # The documented read-only surface a response ``when:`` condition may
 # reference — same discipline as the triage-policy STATE_CONTRACT: additions
 # are deliberate API decisions, never reflected in from arbitrary state.
-# List-valued fields (rule.groups, rule.ids, mitre.techniques) are membership
-# targets: ``{"in": ["sudo", {"var": "rule.groups"}]}``.
+# List-valued fields (rule.groups, rule.ids, mitre.techniques, mitre.tactics) are
+# membership targets: ``{"in": ["sudo", {"var": "rule.groups"}]}``.
 RESPONSE_STATE_CONTRACT: frozenset[str] = frozenset(
     {
         "disposition",
@@ -34,9 +37,11 @@ RESPONSE_STATE_CONTRACT: frozenset[str] = frozenset(
         "severity",
         "rule.groups",
         "rule.ids",
-        # WireMitre split: ids = Txxxx technique ids, techniques = names.
-        "mitre.ids",
+        # ATT&CK, matchable ids only (core/ir/triage.py convention): techniques
+        # are the canonical Txxxx ids, tactics the tactic refs. The
+        # human-readable names are display-only and deliberately NOT here.
         "mitre.techniques",
+        "mitre.tactics",
     }
 )
 
@@ -66,12 +71,18 @@ class ResponseAction(BaseModel):
 class ResponseMatch(BaseModel):
     """Envelope-matching rules, OR'd — same semantics as TriagePolicyMatch.
     Empty (the default) matches everything: the disposition phase lists
-    (on_escalate/on_close) already scope when the playbook fires."""
+    (on_escalate/on_close) already scope when the playbook fires.
+
+    ATT&CK matchers use the canonical identifiers only: ``mitre_techniques`` are
+    Txxxx technique ids, ``mitre_tactics`` are tactic refs — never technique
+    names (the codebase convention, core/ir/triage.py)."""
 
     model_config = ConfigDict(extra="forbid")
 
     rule_groups: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
+    mitre_techniques: list[str] = Field(default_factory=list)
+    mitre_tactics: list[str] = Field(default_factory=list)
 
 
 class ResponseBlock(BaseModel):
