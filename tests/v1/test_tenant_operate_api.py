@@ -135,6 +135,13 @@ def _principal(tenant_id):
     )
 
 
+def _mssp_analyst_pinned(pin_tenant_id):
+    # an MSSP analyst carries no home tenant_id; it works a tenant via an Open-SOC pin
+    return SimpleNamespace(
+        role=Role.ANALYST.value, tenant_id=None, current_tenant=pin_tenant_id
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(SKIP_INTEGRATION, reason="needs Postgres")
 async def test_tenant_operator_resolves_only_its_own_reviews(mssp_session, seed_two_tenants):
@@ -176,6 +183,15 @@ async def test_tenant_operator_resolves_only_its_own_reviews(mssp_session, seed_
         with pytest.raises(HTTPException) as exc:
             await _resolve_pending_review(str(rev_id), _principal(b.tenant_id))
         assert exc.value.status_code == 404
+
+        # #3 fix: a pinned MSSP analyst (no home tenant_id) resolves via its Open-SOC pin —
+        # the review is scoped by the effective tenant (the pin), not identity.tenant_id.
+        pinned_ok = await _resolve_pending_review(str(rev_id), _mssp_analyst_pinned(a.tenant_id))
+        assert pinned_ok["id"] == str(rev_id)
+        # …pinned to the WRONG tenant it still fails closed
+        with pytest.raises(HTTPException) as exc2:
+            await _resolve_pending_review(str(rev_id), _mssp_analyst_pinned(b.tenant_id))
+        assert exc2.value.status_code == 404
     finally:
         await mssp_session.execute(
             text("DELETE FROM pending_reviews WHERE id = :id"), {"id": str(rev_id)}

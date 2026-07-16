@@ -194,13 +194,14 @@ async def review_pending(
                 await s.execute(list_sql, {"off": offset, "lim": page_size})
             ).mappings().all()
     else:
-        if identity.tenant_id is None:
+        tid = _effective_review_tenant(identity)
+        if tid is None:
             return _PendingReviewList(
                 items=[], total=0, page=page, page_size=page_size, has_more=False
             )
         sm = get_app_sessionmaker()
         async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
+            async with tenant_context(s, tid):
                 total = (await s.execute(count_sql)).scalar_one()
                 rows = (
                     await s.execute(list_sql, {"off": offset, "lim": page_size})
@@ -217,6 +218,15 @@ async def review_pending(
 
 
 _MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin", "mssp_manager"}
+
+
+def _effective_review_tenant(identity: "UserIdentity"):
+    """The tenant a non-fleet caller reads reviews for: an MSSP operator's Open-SOC pin
+    (``current_tenant``) if present, else the caller's home ``tenant_id``. A pinned MSSP
+    ``analyst`` (which carries no home ``tenant_id``) can then work the pinned tenant's queue;
+    a tenant user always resolves to its own ``tenant_id`` (it cannot pin — see
+    ``/auth/assume-tenant``, MSSP-only), so this never widens a tenant caller's scope."""
+    return getattr(identity, "current_tenant", None) or identity.tenant_id
 
 
 def _pending_review_item(r: "Any") -> _PendingReviewItem:
@@ -275,9 +285,10 @@ async def review_detail(review_id: str, request: Request) -> _PendingReviewItem:
     """Fetch a single HIL review by id, role-aware tenant-scoped.
 
     Uses the same two-pool RLS idiom as ``_resolve_pending_review``:
-    MSSP-level roles read cross-tenant via the BYPASSRLS session; tenant
-    users are pinned by ``tenant_context`` so a cross-tenant id 404s the
-    same way a truly missing row does (never disclose existence).
+    fleet MSSP roles read cross-tenant via the BYPASSRLS session; everyone
+    else is pinned by ``tenant_context`` to their effective tenant (Open-SOC
+    pin or home tenant_id) so a cross-tenant id 404s the same way a truly
+    missing row does (never disclose existence).
     """
     from fastapi import HTTPException
     from sqlalchemy import text
@@ -298,11 +309,12 @@ async def review_detail(review_id: str, request: Request) -> _PendingReviewItem:
         async with sm() as s:
             row = (await s.execute(sql, {"rid": review_id})).mappings().first()
     else:
-        if identity.tenant_id is None:
+        tid = _effective_review_tenant(identity)
+        if tid is None:
             raise HTTPException(403, "tenant scope required")
         sm = get_app_sessionmaker()
         async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
+            async with tenant_context(s, tid):
                 row = (await s.execute(sql, {"rid": review_id})).mappings().first()
 
     if row is None:
@@ -323,8 +335,9 @@ async def _resolve_pending_review(
     """Resolve a review with role-aware tenant scoping.
 
     Fleet MSSP roles (``platform_admin``, ``mssp_admin``, ``mssp_manager``) see all tenants' rows
-    via the BYPASSRLS MSSP session. Tenant-scoped callers (``tenant_analyst`` etc.) are scoped to
-    their own ``tenant_id`` via the RLS-subject app session with ``tenant_context`` set.
+    via the BYPASSRLS MSSP session. Every other caller is scoped to its *effective* tenant (an
+    Open-SOC pin for a pinned MSSP ``analyst``, else the home ``tenant_id`` for a tenant user) via
+    the RLS-subject app session with ``tenant_context`` set.
 
     Raises HTTP 404 if the review is not found within the caller's tenant scope (cross-tenant
     lookups fail with the same code path as truly missing rows — never disclose existence).
@@ -349,11 +362,12 @@ async def _resolve_pending_review(
                 await s.execute(text(sql), {"rid": review_id})
             ).mappings().first()
     else:
-        if identity.tenant_id is None:
+        tid = _effective_review_tenant(identity)
+        if tid is None:
             raise HTTPException(403, "tenant scope required")
         sm = get_app_sessionmaker()
         async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
+            async with tenant_context(s, tid):
                 r = (
                     await s.execute(text(sql), {"rid": review_id})
                 ).mappings().first()
@@ -404,9 +418,12 @@ async def _apply_review_decision(
             )
             await s.commit()
     else:
+        # Scope the write to the RESOLVED review's tenant (already validated by
+        # _resolve_pending_review under the caller's scope), NOT identity.tenant_id — a pinned
+        # MSSP analyst carries no home tenant_id, so keying on it would break the write.
         sm = get_app_sessionmaker()
         async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
+            async with tenant_context(s, tenant_uuid):
                 await record_human_decision_received(
                     s,
                     review_id=UUID(review_id),
@@ -557,7 +574,9 @@ async def review_expire(
     else:
         sm = get_app_sessionmaker()
         async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
+            # Scope to the resolved review's tenant (see _apply_review_decision), not
+            # identity.tenant_id, so a pinned MSSP analyst's expire also succeeds.
+            async with tenant_context(s, tenant_uuid):
                 await record_human_review_expired(
                     s,
                     review_id=UUID(review_id),
