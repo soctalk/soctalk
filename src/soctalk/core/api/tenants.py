@@ -685,7 +685,7 @@ async def create_tenant(
     "",
     response_model=list[TenantRead],
     dependencies=[
-        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))
     ],
 )
 async def list_tenants(request: Request) -> list[TenantRead]:
@@ -711,7 +711,7 @@ async def list_tenants(request: Request) -> list[TenantRead]:
     "/{tenant_id}",
     response_model=TenantRead,
     dependencies=[
-        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))
     ],
 )
 async def get_tenant(tenant_id: UUID, request: Request) -> TenantRead:
@@ -840,7 +840,7 @@ async def decommission_tenant(
     "/{tenant_id}/events",
     response_model=list[LifecycleEventRead],
     dependencies=[
-        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))
     ],
 )
 async def list_events(

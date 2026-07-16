@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from soctalk.core.tenancy.auth import UserIdentity
 
 
-MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "analyst"})
+MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "mssp_manager", "analyst"})
 
 
 class TenantSlugRequired(ValueError):

@@ -56,7 +56,7 @@ router = APIRouter(
     dependencies=[Depends(current_identity)],
 )
 
-MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "analyst"})
+MSSP_LEVEL_ROLES = frozenset({"platform_admin", "mssp_admin", "mssp_manager", "analyst"})
 
 
 def _db(request: Request) -> AsyncSession:

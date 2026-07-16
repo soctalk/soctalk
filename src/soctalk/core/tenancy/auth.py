@@ -413,7 +413,7 @@ def mint_impersonation_token(
     mssp_user: UserIdentity, tenant_id: UUID
 ) -> str:
     """Mint a short-lived token for an MSSP-side user to act as a tenant."""
-    if mssp_user.role not in {Role.MSSP_ADMIN.value, Role.PLATFORM_ADMIN.value, Role.ANALYST.value}:
+    if mssp_user.role not in {Role.MSSP_ADMIN.value, Role.PLATFORM_ADMIN.value, Role.MSSP_MANAGER.value, Role.ANALYST.value}:
         raise HTTPException(403, "role not allowed to impersonate")
     impersonating = UserIdentity(
         user_id=mssp_user.user_id,

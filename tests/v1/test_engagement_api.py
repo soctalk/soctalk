@@ -114,7 +114,8 @@ async def test_revoke_unknown_returns_404(mssp_session: AsyncSession, seed_two_t
 
 
 def test_declare_route_role_gate():
-    """Customer viewers cannot declare an engagement; an analyst passes the gate.
+    """Authorizing an engagement is a SOC-manager capability (separation of duties):
+    customer viewers AND analysts are blocked; only mssp_manager (or above) passes the gate.
 
     No DB — the app runs with a noop DB session, so a passed gate reaches the handler and
     500s on the None session (proof the gate opened); a blocked gate returns 403 first."""
@@ -161,10 +162,17 @@ def test_declare_route_role_gate():
         "user_type": UserType.MSSP.value, "role": Role.ANALYST.value,
         "tenant_id": None, "current_tenant": None,
     }
+    manager = {**analyst, "role": Role.MSSP_MANAGER.value, "email": "m@mssp.example"}
     url = f"/api/mssp/tenants/{tid}/engagements"
 
+    # customer viewer — wrong audience/no capability
     cv = TestClient(_app_as(viewer), raise_server_exceptions=False)
     assert cv.post(url, json=body).status_code == 403
 
+    # analyst — an MSSP operator, but authorizing risk is not an analyst capability
     ca = TestClient(_app_as(analyst), raise_server_exceptions=False)
-    assert ca.post(url, json=body).status_code != 403  # gate opened
+    assert ca.post(url, json=body).status_code == 403
+
+    # mssp_manager — holds AUTHORIZE_ENGAGEMENT; gate opens (handler 500s on the noop DB)
+    cm = TestClient(_app_as(manager), raise_server_exceptions=False)
+    assert cm.post(url, json=body).status_code != 403

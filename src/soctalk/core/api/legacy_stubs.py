@@ -26,7 +26,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from soctalk.core.tenancy.auth import current_identity
-
+from soctalk.core.tenancy.decorators import require_permission
+from soctalk.core.tenancy.permissions import Permission
 
 # All stubs sit behind the same session middleware as the rest of the
 # canonical-frontend bridges. The middleware *attaches* identity but
@@ -194,7 +195,7 @@ async def review_pending(
     )
 
 
-_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
+_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin", "mssp_manager"}
 
 
 def _pending_review_item(r: "Any") -> _PendingReviewItem:
@@ -407,7 +408,11 @@ class _ApproveBody(BaseModel):
     feedback: str | None = None
 
 
-@router.post("/api/review/{review_id}/approve", response_model=_ReviewActionResponse)
+@router.post(
+    "/api/review/{review_id}/approve",
+    response_model=_ReviewActionResponse,
+    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+)
 async def review_approve(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
@@ -424,7 +429,11 @@ async def review_approve(
     )
 
 
-@router.post("/api/review/{review_id}/reject", response_model=_ReviewActionResponse)
+@router.post(
+    "/api/review/{review_id}/reject",
+    response_model=_ReviewActionResponse,
+    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+)
 async def review_reject(
     review_id: str, body: _ApproveBody, request: Request
 ) -> _ReviewActionResponse:
@@ -445,7 +454,11 @@ class _RequestInfoBody(BaseModel):
     questions: list[str] = []
 
 
-@router.post("/api/review/{review_id}/request-info", response_model=_ReviewActionResponse)
+@router.post(
+    "/api/review/{review_id}/request-info",
+    response_model=_ReviewActionResponse,
+    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+)
 async def review_request_info(
     review_id: str, body: _RequestInfoBody, request: Request
 ) -> _ReviewActionResponse:
@@ -467,7 +480,11 @@ class _ExpireBody(BaseModel):
     reason: str | None = None
 
 
-@router.post("/api/review/{review_id}/expire", response_model=_ReviewActionResponse)
+@router.post(
+    "/api/review/{review_id}/expire",
+    response_model=_ReviewActionResponse,
+    dependencies=[Depends(require_permission(Permission.REVIEW_DECIDE, audience="mssp"))],
+)
 async def review_expire(
     review_id: str, body: _ExpireBody, request: Request
 ) -> _ReviewActionResponse:

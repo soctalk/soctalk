@@ -113,7 +113,12 @@ def tenant_scoped_worker(func: Callable[..., Any]) -> Callable[..., Any]:
 
 
 MSSP_ROLES = frozenset(
-    {Role.PLATFORM_ADMIN.value, Role.MSSP_ADMIN.value, Role.ANALYST.value}
+    {
+        Role.PLATFORM_ADMIN.value,
+        Role.MSSP_ADMIN.value,
+        Role.MSSP_MANAGER.value,
+        Role.ANALYST.value,
+    }
 )
 
 
@@ -198,6 +203,51 @@ def require_tenant_role(*allowed: str | Role) -> Callable[..., Callable[..., Any
 
     _checker._soctalk_roles = tuple(sorted(allowed_values))  # type: ignore[attr-defined]
     _checker._soctalk_scope = "tenant"  # type: ignore[attr-defined]
+    return _checker
+
+
+def require_permission(
+    *perms: "Permission", audience: str
+) -> Callable[..., Callable[..., Any]]:
+    """Capability guard — the preferred gate. Asserts the caller's role holds every
+    ``perm`` (via ``permissions.ROLE_PERMISSIONS``) AND that its ``user_type`` matches
+    the endpoint ``audience`` (``"mssp"`` or ``"tenant"``). Audience is mandatory: a
+    capability alone must never cross the MSSP/tenant boundary.
+
+    Example::
+
+        @router.post(..., dependencies=[Depends(
+            require_permission(Permission.AUTHORIZE_ENGAGEMENT, audience="mssp"))])
+    """
+    from soctalk.core.tenancy.permissions import Permission as _Perm
+    from soctalk.core.tenancy.permissions import has_permission
+
+    if audience not in ("mssp", "tenant"):
+        raise ValueError(f"audience must be 'mssp' or 'tenant', got {audience!r}")
+    expected_ut = UserType.MSSP.value if audience == "mssp" else UserType.TENANT.value
+    perm_list: tuple[_Perm, ...] = tuple(perms)
+
+    async def _checker(request: Request) -> None:
+        identity = _resolve_user_from_request(request)
+        if identity is None:
+            raise HTTPException(status_code=401, detail="authentication required")
+        if identity.get("user_type") != expected_ut:
+            raise HTTPException(
+                status_code=403,
+                detail=f"{audience}-scoped endpoint; wrong audience denied",
+            )
+        if audience == "tenant" and not identity.get("tenant_id"):
+            raise HTTPException(status_code=400, detail="tenant_id claim missing from token")
+        role = identity.get("role")
+        if any(not has_permission(role, p) for p in perm_list):
+            missing = ", ".join(p.value for p in perm_list if not has_permission(role, p))
+            raise HTTPException(
+                status_code=403,
+                detail=f"role '{role}' lacks required permission(s): {missing}",
+            )
+
+    _checker._soctalk_permissions = tuple(p.value for p in perm_list)  # type: ignore[attr-defined]
+    _checker._soctalk_scope = audience  # type: ignore[attr-defined]
     return _checker
 
 

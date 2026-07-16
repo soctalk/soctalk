@@ -27,12 +27,12 @@ from soctalk.core.ir.authorization_store import (
 )
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
-from soctalk.core.tenancy.decorators import require_role
-from soctalk.core.tenancy.models import Role
+from soctalk.core.tenancy.decorators import require_permission
+from soctalk.core.tenancy.permissions import Permission
 from soctalk.models.authorization import (
     AUTHORIZATION_FACT_ADAPTER,
-    AuthorizationSourceType,
     TRUST_TIER,
+    AuthorizationSourceType,
 )
 
 logger = structlog.get_logger()
@@ -144,7 +144,6 @@ async def revoke(fact_id: str, payload: RevokeRequest, request: Request) -> dict
 
 mssp_router = APIRouter(prefix="/api/mssp/tenants", tags=["authz-facts-mssp"])
 
-_ANALYST_ROLES = (Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST)
 
 
 class FactCreateRequest(BaseModel):
@@ -153,7 +152,7 @@ class FactCreateRequest(BaseModel):
 
 @mssp_router.get(
     "/{tenant_id}/authorization/facts",
-    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+    dependencies=[Depends(require_permission(Permission.VIEW_AUTHORIZATION_FACTS, audience="mssp"))],
 )
 async def mssp_list_facts(tenant_id: UUID, request: Request) -> dict:
     db = _db(request)
@@ -164,7 +163,7 @@ async def mssp_list_facts(tenant_id: UUID, request: Request) -> dict:
 
 @mssp_router.post(
     "/{tenant_id}/authorization/facts",
-    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+    dependencies=[Depends(require_permission(Permission.MANAGE_AUTHORIZATION_FACTS, audience="mssp"))],
 )
 async def mssp_create_fact(tenant_id: UUID, payload: FactCreateRequest, request: Request) -> dict:
     """Create an analyst-asserted fact (HIL / manual). Trust is stamped analyst_asserted."""
@@ -186,7 +185,7 @@ async def mssp_create_fact(tenant_id: UUID, payload: FactCreateRequest, request:
 
 @mssp_router.post(
     "/{tenant_id}/authorization/facts/{fact_id}/revoke",
-    dependencies=[Depends(require_role(*_ANALYST_ROLES))],
+    dependencies=[Depends(require_permission(Permission.MANAGE_AUTHORIZATION_FACTS, audience="mssp"))],
 )
 async def mssp_revoke_fact(
     tenant_id: UUID, fact_id: str, payload: RevokeRequest, request: Request

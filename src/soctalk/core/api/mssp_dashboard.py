@@ -30,7 +30,7 @@ from soctalk.core.tenancy.models import Role
 router = APIRouter(
     prefix="/api/mssp/dashboard",
     tags=["mssp-dashboard"],
-    dependencies=[Depends(require_role(Role.MSSP_ADMIN, Role.ANALYST, Role.PLATFORM_ADMIN))],
+    dependencies=[Depends(require_role(Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST, Role.PLATFORM_ADMIN))],
 )
 
 

@@ -28,8 +28,17 @@ from soctalk.core.ir.runtime import (
 from soctalk.core.observability.audit import log_audit
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
-from soctalk.core.tenancy.decorators import require_role, require_tenant_role
+from soctalk.core.tenancy.decorators import (
+    require_permission,
+    require_role,
+    require_tenant_role,
+)
 from soctalk.core.tenancy.models import Role
+from soctalk.core.tenancy.permissions import (
+    PRIVILEGED_CAPABILITY_CLASSES,
+    Permission,
+    has_permission,
+)
 from soctalk.triage_policy.authoring import (
     TriagePolicyConflictError,
     TriagePolicyValidationError,
@@ -334,7 +343,7 @@ async def _case_detail(
 @mssp_investigations_router.get(
     "",
     response_model=list[CaseSummary],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def list_cases_mssp(
     request: Request,
@@ -386,7 +395,7 @@ async def list_cases_mssp(
 @mssp_investigations_router.get(
     "/{investigation_id}",
     response_model=CaseDetail,
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def get_case_mssp(investigation_id: UUID, request: Request) -> CaseDetail:
     db = _db(request)
@@ -396,7 +405,7 @@ async def get_case_mssp(investigation_id: UUID, request: Request) -> CaseDetail:
 @mssp_investigations_router.get(
     "/{investigation_id}/events",
     response_model=list[CaseEventDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def list_case_events_mssp(investigation_id: UUID, request: Request) -> list[CaseEventDTO]:
     db = _db(request)
@@ -424,7 +433,7 @@ async def list_case_events_mssp(investigation_id: UUID, request: Request) -> lis
 
 @mssp_investigations_router.post(
     "/{investigation_id}/messages",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def post_analyst_message(
     investigation_id: UUID, payload: AnalystMessageRequest, request: Request
@@ -452,7 +461,7 @@ async def post_analyst_message(
 
 @mssp_investigations_router.patch(
     "/{investigation_id}/facts",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def patch_case_facts(
     investigation_id: UUID, payload: FactsCorrectionRequest, request: Request
@@ -560,7 +569,7 @@ async def get_case_tenant(investigation_id: UUID, request: Request) -> CustomerC
 @proposals_router.get(
     "",
     response_model=list[ProposalDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def list_pending_proposals(request: Request) -> list[ProposalDTO]:
     db = _db(request)
@@ -592,7 +601,7 @@ async def list_pending_proposals(request: Request) -> list[ProposalDTO]:
 
 @proposals_router.post(
     "/{proposal_id}/approve",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def approve_proposal_route(
     proposal_id: UUID,
@@ -603,15 +612,24 @@ async def approve_proposal_route(
     identity = current_identity(request)
     # Resolve the tenant from the proposal so RLS WITH CHECK passes on
     # the writes inside approve_proposal.
-    tid_row = (
+    row = (
         await db.execute(
-            text("SELECT tenant_id FROM proposals WHERE id = :id"),
+            text("SELECT tenant_id, capability_class FROM proposals WHERE id = :id"),
             {"id": str(proposal_id)},
         )
-    ).scalar_one_or_none()
-    if tid_row is None:
+    ).mappings().first()
+    if row is None:
         raise HTTPException(404, "proposal not found")
-    tid = UUID(str(tid_row))
+    tid = UUID(str(row["tenant_id"]))
+    # Approving a proposal enqueues+dispatches its action. Standard/read/sandbox actions are
+    # analyst-approvable; anything that writes to an external system (isolate/block/ticket) is a
+    # privileged sign-off — SOC-manager tier only (separation of duties).
+    if str(row["capability_class"]) in PRIVILEGED_CAPABILITY_CLASSES and not has_permission(
+        identity.role, Permission.APPROVE_PRIVILEGED_PROPOSAL
+    ):
+        raise HTTPException(
+            403, "approving an external-write action requires the SOC-manager role"
+        )
 
     async with tenant_context(db, tid):
         try:
@@ -628,7 +646,7 @@ async def approve_proposal_route(
 
 @proposals_router.post(
     "/{proposal_id}/reject",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def reject_proposal_route(
     proposal_id: UUID,
@@ -668,7 +686,7 @@ async def reject_proposal_route(
 @alerts_router.get(
     "",
     response_model=list[AlertDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def list_alerts(
     request: Request,
@@ -857,7 +875,7 @@ def _engagement_dto(row: dict[str, Any]) -> EngagementDTO:
 @engagements_router.get(
     "/{tenant_id}/engagements",
     response_model=list[EngagementDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_permission(Permission.VIEW_ENGAGEMENTS, audience="mssp"))],
 )
 async def list_engagements_route(
     tenant_id: UUID, request: Request, include_revoked: bool = False
@@ -872,7 +890,7 @@ async def list_engagements_route(
 
 @engagements_router.post(
     "/{tenant_id}/engagements",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_permission(Permission.AUTHORIZE_ENGAGEMENT, audience="mssp"))],
 )
 async def declare_engagement_route(
     tenant_id: UUID, payload: DeclareEngagementRequest, request: Request
@@ -896,7 +914,7 @@ async def declare_engagement_route(
 
 @engagements_router.post(
     "/{tenant_id}/engagements/{engagement_id}/revoke",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_permission(Permission.AUTHORIZE_ENGAGEMENT, audience="mssp"))],
 )
 async def revoke_engagement_route(
     tenant_id: UUID, engagement_id: UUID,
@@ -951,12 +969,12 @@ class TriagePolicyDTO(BaseModel):
 @triage_policies_router.get(
     "",
     response_model=list[TriagePolicyDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 @playbooks_router.get(
     "",
     response_model=list[TriagePolicyDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
     deprecated=True,
 )
 async def list_triage_policies_route(request: Request) -> list[TriagePolicyDTO]:
@@ -1026,12 +1044,12 @@ def _authored_dto(row: dict[str, Any]) -> AuthoredTriagePolicyDTO:
 @authored_playbooks_router.get(
     "/{tenant_id}/triage-policies",
     response_model=list[AuthoredTriagePolicyDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 @authored_playbooks_router.get(
     "/{tenant_id}/playbooks",
     response_model=list[AuthoredTriagePolicyDTO],
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
     deprecated=True,
 )
 async def list_authored_triage_policies_route(
@@ -1256,11 +1274,11 @@ async def deactivate_authored_triage_policy_route(
 
 @authored_playbooks_router.get(
     "/{tenant_id}/triage-policies/{triage_policy_id}/export",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 @authored_playbooks_router.get(
     "/{tenant_id}/playbooks/{triage_policy_id}/export",
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
     deprecated=True,
 )
 async def export_authored_triage_policy_route(

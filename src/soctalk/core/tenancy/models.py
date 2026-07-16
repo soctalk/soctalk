@@ -34,16 +34,22 @@ from sqlmodel import Field, SQLModel, Text
 
 
 class Role(str, Enum):
-    """Roles. The original 4 plus ``tenant_admin`` introduced for
-    the per-tenant bootstrap user created at provisioning time
-    (``_mint_tenant_admin_user``) — gives a tenant-scoped principal that
-    can edit settings within their own tenant without holding any MSSP
-    privilege. Frontend role gating treats the substring ``admin`` /
-    ``analyst`` as review-capable so this name fits the existing matrix.
+    """Roles across three functional tiers per audience (see
+    ``soctalk.core.tenancy.permissions`` for the capability bundles):
+
+      MSSP:   platform_admin (super) · mssp_admin (configure) ·
+              mssp_manager (authorize risk) · analyst (operate)
+      tenant: tenant_admin (configure) · customer_viewer (view)
+
+    ``mssp_manager`` holds the "authorize risk" capabilities (engagements,
+    authorization facts, privileged proposal sign-off) that used to sit
+    with every MSSP role. Capability checks go through ``require_permission``;
+    do not add new inline role-set checks.
     """
 
     PLATFORM_ADMIN = "platform_admin"
     MSSP_ADMIN = "mssp_admin"
+    MSSP_MANAGER = "mssp_manager"
     ANALYST = "analyst"
     TENANT_ADMIN = "tenant_admin"
     CUSTOMER_VIEWER = "customer_viewer"

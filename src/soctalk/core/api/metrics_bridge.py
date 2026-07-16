@@ -79,7 +79,7 @@ class HourlyMetricsResponse(BaseModel):
     total_hours: int
 
 
-_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin"}
+_MSSP_LEVEL_ROLES = {"platform_admin", "mssp_admin", "mssp_manager"}
 
 
 @asynccontextmanager

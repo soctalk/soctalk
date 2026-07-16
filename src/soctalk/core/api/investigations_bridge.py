@@ -426,7 +426,7 @@ async def _resolve_tenant(db: AsyncSession, investigation_id: UUID) -> UUID:
 @router.post(
     "/{investigation_id}/cancel",
     response_model=ActionResponse,
-    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.ANALYST))],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
 )
 async def post_cancel_investigation(
     investigation_id: UUID, payload: CancelRequest, request: Request
