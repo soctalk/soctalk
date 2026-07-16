@@ -102,6 +102,14 @@ export function whenToRow(when: unknown): WhenRow | null {
 	return { field: String(lhs.var), op, value: String(args[1]) };
 }
 
+/** A human sentence for a stored `when` condition, for the flow diagram. */
+export function whenToSentence(when: unknown): string {
+	const row = whenToRow(when);
+	if (!row) return when ? 'advanced condition' : '';
+	if (row.op === 'in') return `${row.field} contains ${row.value}`;
+	return `${row.field} ${row.op} ${row.value}`;
+}
+
 export interface ResponseActionDef {
 	capability: string;
 	when?: Record<string, unknown>;

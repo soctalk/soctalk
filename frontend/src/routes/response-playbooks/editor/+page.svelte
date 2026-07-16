@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
 	import { currentTenantId } from '$lib/stores';
+	import ResponseFlowPreview from '$lib/response-playbook/ResponseFlowPreview.svelte';
 	import {
 		CAPABILITIES,
 		CAP_BY_NAME,
@@ -220,7 +221,8 @@
 {:else if !loaded}
 	<div class="card p-6 opacity-60 text-sm">{loadError ?? 'Loading…'}</div>
 {:else}
-	<div class="grid gap-6 max-w-3xl" data-testid="response-editor">
+	<div class="grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 items-start">
+	<div class="grid gap-6 content-start min-w-0" data-testid="response-editor">
 		<!-- Identity -->
 		<div class="card p-4 grid gap-3">
 			<h3 class="h4">Identity</h3>
@@ -354,5 +356,20 @@
 			<summary class="cursor-pointer text-sm opacity-70">Preview JSON</summary>
 			<pre class="text-xs mt-2 overflow-x-auto">{JSON.stringify(definition, null, 2)}</pre>
 		</details>
+	</div>
+
+	<!-- Live flow diagram: the disposition envelope fans out to the actions;
+	     gated actions route through human approval before executing. -->
+	<aside class="hidden xl:block">
+		<div class="card p-1 sticky top-4 h-[calc(100vh-7rem)] flex flex-col">
+			<div class="flex items-center justify-between px-3 pt-2 pb-1">
+				<h3 class="h4">Flow</h3>
+				<span class="text-xs opacity-50">derived from the definition</span>
+			</div>
+			<div class="flex-1 min-h-0">
+				<ResponseFlowPreview {definition} />
+			</div>
+		</div>
+	</aside>
 	</div>
 {/if}
