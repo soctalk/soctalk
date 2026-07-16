@@ -49,8 +49,13 @@ def validate_authored(raw: dict[str, Any]) -> ResponsePlaybook:
         raise ResponsePlaybookValidationError(
             f"definition exceeds {_MAX_AUTHORED_BYTES} bytes"
         )
+    # The stored DEFINITION is always shadow (the safe default for a file rollout /
+    # export); the DB ROW's status column carries the draft/shadow/active lifecycle
+    # separately, and live dispatch keys on the row status, never on this field.
+    # Without this, an exported shadow playbook would carry status:active and
+    # activate on a file rollout (Codex ph2 incr3 finding 3).
     try:
-        pb = ResponsePlaybook.model_validate(raw)
+        pb = ResponsePlaybook.model_validate({**raw, "status": "shadow"})
     except Exception as exc:  # noqa: BLE001 — surface pydantic errors as author feedback
         raise ResponsePlaybookValidationError(str(exc)) from exc
     if not _SLUG_RE.match(pb.id):
@@ -188,7 +193,11 @@ async def set_authored_status(
     )
     if latest is None or latest["status"] == "retired":
         return None
-    definition = dict(latest["definition"])
+    # Pass the stored definition through WITHOUT coercing to dict: deactivation must
+    # always succeed even for a malformed row (Codex ph2 incr3 finding 2), so a
+    # now-invalid playbook can still be turned OFF. Activation revalidates fail-closed
+    # (validate_authored raises on a non-mapping), so garbage can never be activated.
+    definition = latest["definition"]
     if status == "active":
         validate_authored(definition)
     revision = latest["revision"] + 1
@@ -231,8 +240,18 @@ async def load_dispatchable(
     for r in rows:
         if r["status"] != status:
             continue
+        # Fully fail-closed per row (Codex ph2 incr3 finding 2): a malformed JSONB
+        # scalar/array must skip, never raise, or one bad row aborts the whole
+        # completion's response dispatch. Also reassert the tenant pin — a
+        # tampered/imported row whose definition tenant != this tenant is skipped.
         try:
-            out.append(validate_authored(dict(r["definition"])))
+            definition = dict(r["definition"])
+        except (TypeError, ValueError):
+            continue
+        if str(definition.get("tenant")) != str(tenant_id):
+            continue
+        try:
+            out.append(validate_authored(definition))
         except ResponsePlaybookValidationError:
             continue
     return out

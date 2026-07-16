@@ -44,10 +44,23 @@ async def _matched(
     status: str,
 ) -> list[ResponsePlaybook]:
     """Matching playbooks of a governing status — file registry PLUS DB-authored
-    rows (#49 phase 2), deduped by id (an authored row overrides a file row of the
-    same id) and priority-sorted. DB-authored playbooks let a tenant activate a
-    response playbook live, since the dispatcher runs on L1 with DB access."""
-    from soctalk.response.authoring import load_dispatchable
+    rows (#49 phase 2), priority-sorted. DB-authored playbooks let a tenant govern
+    response dispatch live, since the dispatcher runs on L1 with DB access.
+
+    DB is the tenant OVERRIDE layer: an authored id in ANY governing status
+    suppresses the file playbook of the same id entirely (Codex ph2 incr3
+    finding 1). Otherwise a DB shadow row could not turn OFF a file-active row of
+    the same id — the active pass would still see the file row. So a tenant that
+    authors `foo` owns `foo` completely: only its DB row governs, at the status
+    it chose."""
+    from soctalk.response.authoring import (
+        ResponsePlaybookValidationError,
+        list_authored,
+        validate_authored,
+    )
+
+    db_rows = await list_authored(db, tenant_id=tenant_id)
+    authored_ids = {r["response_playbook_id"] for r in db_rows}
 
     by_id: dict[str, ResponsePlaybook] = {
         pb.id: pb
@@ -55,8 +68,21 @@ async def _matched(
             rule_groups=rule_groups, rule_ids=rule_ids,
             tenant_identifiers=identifiers, status=status,
         )
+        if pb.id not in authored_ids
     }
-    for pb in await load_dispatchable(db, tenant_id=tenant_id, status=status):
+    for r in db_rows:
+        if r["status"] != status:
+            continue
+        try:
+            definition = dict(r["definition"])
+        except (TypeError, ValueError):
+            continue
+        if str(definition.get("tenant")) != str(tenant_id):
+            continue
+        try:
+            pb = validate_authored(definition)
+        except ResponsePlaybookValidationError:
+            continue
         if playbook_matches(
             pb, rule_groups=rule_groups, rule_ids=rule_ids,
             tenant_identifiers=identifiers,

@@ -157,6 +157,68 @@ async def test_active_authored_dispatches_shadow_does_not(
     assert audits >= 1
 
 
+async def test_stored_definition_is_shadow_for_export(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """The stored definition is always status:shadow (Codex ph2 incr3 finding 3),
+    so an export of a shadow row can't carry status:active and self-activate on a
+    file rollout — even after the row is ACTIVATED (row status != definition
+    status)."""
+    a, _ = seed_two_tenants
+    r = await upsert_authored(
+        mssp_session, tenant_id=a.tenant_id,
+        definition={**DEF, "status": "active"},  # author tries to force active
+    )
+    assert r["definition"]["status"] == "shadow"
+    await set_authored_status(
+        mssp_session, tenant_id=a.tenant_id, response_playbook_id="authored-sudo",
+        status="active",
+    )
+    row = await get_authored(
+        mssp_session, tenant_id=a.tenant_id, response_playbook_id="authored-sudo"
+    )
+    assert row["status"] == "active"  # row lifecycle
+    assert row["definition"]["status"] == "shadow"  # exported bytes stay shadow
+
+
+async def test_db_shadow_suppresses_file_active_same_id(
+    mssp_session: AsyncSession, seed_two_tenants, tmp_path, monkeypatch
+):
+    """DB is the override layer (Codex ph2 incr3 finding 1): a file-active playbook
+    and a DB row of the SAME id must be governed only by the DB row's status. A DB
+    SHADOW row turns the file-active one OFF."""
+    from soctalk.response.dispatch import _matched
+    from soctalk.response.registry import reset_registry_cache as _reset
+
+    a, _ = seed_two_tenants
+    (tmp_path / "f.yaml").write_text(
+        "id: authored-sudo\nversion: 1\nstatus: active\n"
+        "applies_to: {rule_groups: [sudo]}\n"
+        "response: {on_escalate: [{capability: annotate_investigation}]}\n"
+    )
+    monkeypatch.setenv("SOCTALK_RESPONSE_PLAYBOOK_DIR", str(tmp_path))
+    _reset()
+    try:
+        # DB row of the same id, left SHADOW.
+        await upsert_authored(mssp_session, tenant_id=a.tenant_id, definition=DEF)
+        await mssp_session.commit()
+        ids = frozenset({str(a.tenant_id)})
+        active = await _matched(
+            mssp_session, a.tenant_id, rule_groups={"sudo"}, rule_ids=set(),
+            identifiers=ids, status="active",
+        )
+        assert [p.id for p in active] == [], (
+            "a DB shadow row must suppress the file-active row of the same id"
+        )
+        shadow = await _matched(
+            mssp_session, a.tenant_id, rule_groups={"sudo"}, rule_ids=set(),
+            identifiers=ids, status="shadow",
+        )
+        assert [p.id for p in shadow] == ["authored-sudo"]
+    finally:
+        _reset()
+
+
 async def test_deactivate_stops_dispatch(mssp_session: AsyncSession, seed_two_tenants):
     a, _ = seed_two_tenants
     await upsert_authored(mssp_session, tenant_id=a.tenant_id, definition=DEF)
