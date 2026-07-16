@@ -116,12 +116,13 @@ test.describe('Triage Policies page', () => {
 		await page.goto('/triage-policies');
 		await expect(page.getByRole('heading', { name: 'Authored triage policies' })).toBeVisible();
 		await expect(page.getByText('existing-pb')).toBeVisible();
-		await expect(page.getByRole('button', { name: '+ New playbook' })).toBeVisible();
+		await expect(page.getByRole('link', { name: '+ New triage policy' })).toBeVisible();
 	});
 
-	test('creates an authored playbook via the editor', async ({ page }) => {
+	test('creates an authored policy via the raw-JSON editor', async ({ page }) => {
 		await page.goto('/triage-policies');
-		await page.getByRole('button', { name: '+ New playbook' }).click();
+		// the "JSON" button opens the inline raw-JSON create editor (openCreate)
+		await page.getByRole('button', { name: 'JSON' }).first().click();
 		const editor = page.locator('textarea');
 		await expect(editor).toBeVisible();
 		await editor.fill(
@@ -168,7 +169,7 @@ test.describe('Triage Policies page', () => {
 			}
 		});
 		await page.goto('/triage-policies');
-		await page.getByRole('button', { name: '+ New playbook' }).click();
+		await page.getByRole('button', { name: 'JSON' }).first().click();
 		await page.locator('textarea').fill(JSON.stringify({ id: 'x', priority: 5 }));
 		await page.getByRole('button', { name: 'Save', exact: true }).click();
 		await expect(page.getByText('priority must be >= 60')).toBeVisible();
