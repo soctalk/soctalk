@@ -405,7 +405,7 @@ async def claim_next_outbox(
                 SELECT id FROM investigation_outbox
                 WHERE status = 'pending' AND next_attempt_at <= now()
                    OR (status = 'in_flight'
-                       AND claimed_at < now() - (:lease || ' seconds')::interval)
+                       AND claimed_at < now() - make_interval(secs => :lease))
                 ORDER BY next_attempt_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -480,7 +480,7 @@ async def mark_outbox_failed(
             text(
                 "UPDATE investigation_outbox SET status = 'pending', attempts = :a, "
                 "       last_error = :e, claimed_at = NULL, claimed_by = NULL, "
-                "       next_attempt_at = now() + (:d || ' seconds')::interval, "
+                "       next_attempt_at = now() + make_interval(secs => :d), "
                 "       updated_at = now() "
                 "WHERE id = :id"
             ),

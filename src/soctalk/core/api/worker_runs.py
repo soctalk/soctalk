@@ -12,8 +12,7 @@ scope claims.
 
 from __future__ import annotations
 
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -82,12 +81,6 @@ async def _record_verdict_memo(
 # chat handler can enforce the same ceiling. Re-export for back-compat.
 from soctalk.core.cost import (  # noqa: E402
     assert_tenant_daily_cap_ok,
-)
-from soctalk.core.cost import (
-    tenant_daily_dollar_cap as _tenant_daily_dollar_cap,
-)
-from soctalk.core.cost import (
-    tenant_daily_token_cap as _tenant_daily_token_cap,
 )
 
 
@@ -281,7 +274,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
             return None
 
         lease_id = uuid4()
-        lease_expires = datetime.now(timezone.utc) + timedelta(
+        lease_expires = datetime.now(UTC) + timedelta(
             seconds=LEASE_TTL_SECONDS
         )
         await db.execute(
@@ -378,7 +371,7 @@ async def claim_run(request: Request) -> ClaimedRun | None:
                 source=alert[0]["source"],
                 rule_id=alert[0]["rule_id"],
                 entities=list(alert[0]["entities"] or []),
-                ts=datetime.now(timezone.utc),
+                ts=datetime.now(UTC),
             )
         except Exception as exc:  # noqa: BLE001 — authz load must never block a claim
             logger.warning("authz_context_load_failed", error=str(exc))
@@ -412,7 +405,7 @@ async def heartbeat_run(
     """
     tenant_id = _verify_worker_jwt(request)
     db = _db(request)
-    new_expiry = datetime.now(timezone.utc) + timedelta(
+    new_expiry = datetime.now(UTC) + timedelta(
         seconds=LEASE_TTL_SECONDS
     )
     async with tenant_context(db, tenant_id):
@@ -630,6 +623,39 @@ async def complete_run(
                 decision="close" if effective_disposition == "close_fp" else "escalate",
                 confidence=float(payload.verdict_confidence),
             )
+
+        # Response-playbook dispatch (issue #49): match + enqueue response
+        # actions in THIS transaction — only here is the disposition post-floor
+        # and committed-with. Under a SAVEPOINT so a dispatch failure can never
+        # poison the completion (an aborted subtransaction would otherwise fail
+        # every later statement and roll back the close itself).
+        if payload.status == "completed" and effective_disposition in (
+            "close_fp",
+            "escalate",
+        ):
+            try:
+                from soctalk.response.dispatch import dispatch_for_completed_run
+
+                async with db.begin_nested():
+                    await dispatch_for_completed_run(
+                        db,
+                        tenant_id=tenant_id,
+                        investigation_id=investigation_id,
+                        run_id=run_id,
+                        worker_disposition=payload.disposition,
+                        effective_disposition=effective_disposition,
+                        server_floor_veto=floor_veto,
+                        verdict_summary=payload.verdict_summary,
+                        verdict_confidence=payload.verdict_confidence,
+                        enrichments=payload.enrichments,
+                    )
+            except Exception as exc:  # noqa: BLE001 — never fail a completion
+                logger.warning(
+                    "response_dispatch_failed",
+                    run_id=str(run_id),
+                    investigation_id=str(investigation_id),
+                    error=str(exc)[:300],
+                )
 
         # Follow-up run (review finding #2): if alerts correlated onto this
         # investigation WHILE the run was executing, they were invisible to

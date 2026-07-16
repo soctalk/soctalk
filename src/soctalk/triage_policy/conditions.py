@@ -57,7 +57,9 @@ class ConditionError(ValueError):
     """A condition failed author-time validation."""
 
 
-def _walk_validate(node: Any, depth: int, counter: list[int]) -> None:
+def _walk_validate(
+    node: Any, depth: int, counter: list[int], contract: frozenset[str]
+) -> None:
     counter[0] += 1
     if counter[0] > _MAX_NODES:
         raise ConditionError(f"condition exceeds {_MAX_NODES} nodes")
@@ -74,7 +76,7 @@ def _walk_validate(node: Any, depth: int, counter: list[int]) -> None:
         if op == "var":
             if not isinstance(args, str):
                 raise ConditionError("var takes a single dotted field name string")
-            if args not in STATE_CONTRACT:
+            if args not in contract:
                 raise ConditionError(
                     f"field {args!r} is not in the declared state contract"
                 )
@@ -87,7 +89,7 @@ def _walk_validate(node: Any, depth: int, counter: list[int]) -> None:
         if op in ("!", "!!") and len(args_list) != 1:
             raise ConditionError(f"{op} takes exactly 1 argument")
         for a in args_list:
-            _walk_validate(a, depth + 1, counter)
+            _walk_validate(a, depth + 1, counter, contract)
         return
     if isinstance(node, (str, int, float, bool)) or node is None:
         return
@@ -104,12 +106,18 @@ def _walk_validate(node: Any, depth: int, counter: list[int]) -> None:
     raise ConditionError(f"unsupported node type {type(node).__name__}")
 
 
-def validate_condition(condition: Any) -> None:
+def validate_condition(
+    condition: Any, contract: frozenset[str] = STATE_CONTRACT
+) -> None:
     """Author-time validation: raises ConditionError unless the condition is a
-    well-formed allowlisted-operator tree over declared contract fields."""
+    well-formed allowlisted-operator tree over declared contract fields.
+
+    ``contract`` defaults to the triage-policy state contract; other layers
+    (the response-playbook envelope, #49) pass their own declared surface —
+    the operator sandbox is identical, only the referencable fields differ."""
     if not isinstance(condition, Mapping):
         raise ConditionError("a condition must be a mapping at its root")
-    _walk_validate(condition, 0, [0])
+    _walk_validate(condition, 0, [0], contract)
 
 
 def _lookup(ctx: Mapping[str, Any], dotted: str) -> Any:

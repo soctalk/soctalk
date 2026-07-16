@@ -163,9 +163,31 @@ async def _lifespan(app: FastAPI):
             _token_renewal_loop(renewal_stop), name="token-renewal"
         )
 
+    # Response executor (issue #49): drains ``response_action`` rows the
+    # complete_run dispatcher enqueued. SKIP LOCKED claims make it safe on
+    # every replica (unlike the provisioning worker, no single-owner gate).
+    # BYPASSRLS sessionmaker: the claim query spans tenants; per-row writes
+    # still run under tenant_context.
+    response_executor = None
+    response_task: asyncio.Task | None = None
+    if os.getenv("SOCTALK_RESPONSE_EXECUTOR", "1").lower() not in ("0", "false", "no"):
+        from soctalk.response.executor import ResponseExecutor
+
+        response_executor = ResponseExecutor(tenancy_db.get_mssp_sessionmaker())
+        response_task = asyncio.create_task(
+            response_executor.run_forever(), name="response-executor"
+        )
+        logger.info("response_executor_enabled")
+
     try:
         yield
     finally:
+        if response_executor is not None and response_task is not None:
+            response_executor.stop()
+            try:
+                await asyncio.wait_for(response_task, timeout=10)
+            except TimeoutError:
+                response_task.cancel()
         reaper_stop.set()
         try:
             await asyncio.wait_for(reaper_task, timeout=5)
