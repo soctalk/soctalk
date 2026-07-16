@@ -30,7 +30,8 @@ test.describe('Authorization facts page', () => {
 					role: 'mssp_admin',
 					tenant_id: null,
 					current_tenant: TID,
-					current_tenant_slug: 'acme'
+					current_tenant_slug: 'acme',
+					permissions: ['view_investigations','triage_investigation','review_decide','approve_proposal','view_alerts','view_dashboard','view_analytics','view_audit','use_chat','view_triage_policies','view_engagements','view_authorization_facts','view_tenants','authorize_engagement','manage_authorization_facts','approve_privileged_proposal','configure_integrations','manage_external_siem','configure_llm','manage_branding','manage_users','manage_triage_policies','manage_tenant_lifecycle']
 				})
 			})
 		);
@@ -87,5 +88,29 @@ test.describe('Authorization facts page', () => {
 		await expect(page.getByText('CHG-1001')).toBeVisible();
 		await page.getByRole('button', { name: 'Revoke' }).click();
 		await expect(page.getByText('No authorization facts for this tenant yet.')).toBeVisible();
+	});
+
+	test('a view-only role sees the facts but no write controls (RBAC)', async ({ page }) => {
+		// override the identity: an operator who can VIEW but lacks manage_authorization_facts
+		await page.route('**/auth/me', (r) =>
+			r.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					user_id: 'u2',
+					email: 'analyst@mssp.example',
+					user_type: 'mssp',
+					role: 'analyst',
+					tenant_id: null,
+					current_tenant: TID,
+					current_tenant_slug: 'acme',
+					permissions: ['view_authorization_facts', 'view_investigations']
+				})
+			})
+		);
+		await page.goto('/authorization');
+		await expect(page.getByText('CHG-1001')).toBeVisible(); // read still works
+		await expect(page.getByRole('button', { name: '+ New fact' })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: 'Revoke' })).toHaveCount(0);
 	});
 });

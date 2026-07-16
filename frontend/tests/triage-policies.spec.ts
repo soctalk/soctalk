@@ -63,7 +63,8 @@ test.describe('Triage Policies page', () => {
 					role: 'mssp_admin',
 					tenant_id: null,
 					current_tenant: TID,
-					current_tenant_slug: 'acme'
+					current_tenant_slug: 'acme',
+					permissions: ['view_investigations','triage_investigation','review_decide','approve_proposal','view_alerts','view_dashboard','view_analytics','view_audit','use_chat','view_triage_policies','view_engagements','view_authorization_facts','view_tenants','authorize_engagement','manage_authorization_facts','approve_privileged_proposal','configure_integrations','manage_external_siem','configure_llm','manage_branding','manage_users','manage_triage_policies','manage_tenant_lifecycle']
 				})
 			});
 		});

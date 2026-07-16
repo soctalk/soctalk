@@ -24,6 +24,9 @@ export interface AuthUser {
 	current_tenant: string | null;
 	current_tenant_slug?: string | null;
 	current_tenant_display_name?: string | null;
+	/** Capabilities the role holds (from the backend role→permission map). The UI gates
+	 * nav and actions on these rather than guessing from the role string. */
+	permissions?: string[];
 }
 
 export interface AuthSession {

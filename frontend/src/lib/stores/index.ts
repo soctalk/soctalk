@@ -65,26 +65,34 @@ export const isAuthenticated: Readable<boolean> = derived(authSession, ($session
 	return $session.user !== null;
 });
 
-// Role helpers for the V1 RBAC model. The backend exposes ``role`` and
-// ``user_type`` on /api/auth/me; we map both into UI capability gates.
-//
-// Roles seen so far: ``mssp_admin``, ``mssp_analyst``, ``tenant_admin``,
-// ``tenant_analyst``, ``tenant_viewer``, ``customer_viewer``. We treat any
-// role containing ``admin`` or ``analyst`` as review-capable. ``viewer``
-// roles see read-only screens; ``customer_viewer`` further hides
-// MSSP-internal content (verdict reasoning, token spend) — see
-// ``isCustomerScope`` below.
-export const canReview: Readable<boolean> = derived(authSession, ($session) => {
-	if (!$session.enabled) return true;
-	const role = $session.user?.role ?? '';
-	return /admin|analyst/.test(role);
-});
+// Capability gates. The backend puts a ``permissions`` array on /api/auth/me (derived from
+// the role→permission map — the single source of truth). The UI gates on capabilities, not on
+// role-string guesses, so a new role like ``mssp_manager`` works automatically.
+export function hasPermission(perm: string): Readable<boolean> {
+	return derived(authSession, ($session) => {
+		if (!$session.enabled) return true; // auth off (dev): everything visible
+		return ($session.user?.permissions ?? []).includes(perm);
+	});
+}
 
+// review a pending AI verdict (approve/reject/request-info)
+export const canReview: Readable<boolean> = hasPermission('review_decide');
+// configure the system (any admin-tier capability) — Settings / integrations screens
 export const canEditSettings: Readable<boolean> = derived(authSession, ($session) => {
 	if (!$session.enabled) return true;
-	const role = $session.user?.role ?? '';
-	return /admin/.test(role);
+	const p = $session.user?.permissions ?? [];
+	return (
+		p.includes('configure_integrations') ||
+		p.includes('manage_triage_policies') ||
+		p.includes('manage_users')
+	);
 });
+// author/activate custom triage policies (admin tier)
+export const canManageTriagePolicies: Readable<boolean> = hasPermission('manage_triage_policies');
+// curate authorization facts (SOC-manager tier)
+export const canManageAuthorization: Readable<boolean> = hasPermission('manage_authorization_facts');
+// declare/revoke engagements (SOC-manager tier)
+export const canAuthorizeEngagements: Readable<boolean> = hasPermission('authorize_engagement');
 
 // Whether the *user* is an MSSP-type identity (mssp_admin, mssp_analyst).
 // Stable across "Open SOC" / "Clear" — pinning a tenant doesn't change

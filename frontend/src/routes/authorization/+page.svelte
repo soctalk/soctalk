@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { api, type AuthorizationFact } from '$lib/api/client';
-	import { currentTenantId } from '$lib/stores';
+	import { currentTenantId, canManageAuthorization } from '$lib/stores';
 
 	let facts: AuthorizationFact[] = [];
 	let loading = false;
@@ -95,13 +95,15 @@
 				SIEM-derived routine, or analyst answers. Revoking is a soft delete; the audit row survives.
 			</p>
 		</div>
-		<button
-			class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-			on:click={openCreate}
-			disabled={!tenantId}
-		>
-			+ New fact
-		</button>
+		{#if $canManageAuthorization}
+			<button
+				class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+				on:click={openCreate}
+				disabled={!tenantId}
+			>
+				+ New fact
+			</button>
+		{/if}
 	</div>
 
 	{#if !tenantId}
@@ -142,9 +144,11 @@
 								{f.provenance?.api_caller ?? f.created_by ?? '—'}
 							</td>
 							<td class="px-3 py-2 text-right">
-								<button class="text-red-600 hover:underline" on:click={() => revoke(f)}>
-									Revoke
-								</button>
+								{#if $canManageAuthorization}
+									<button class="text-red-600 hover:underline" on:click={() => revoke(f)}>
+										Revoke
+									</button>
+								{/if}
 							</td>
 						</tr>
 					{/each}

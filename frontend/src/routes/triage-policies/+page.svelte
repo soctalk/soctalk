@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TriagePolicy, type AuthoredTriagePolicy } from '$lib/api/client';
-	import { currentTenantId } from '$lib/stores';
+	import { currentTenantId, canManageTriagePolicies } from '$lib/stores';
 
 	let policies: TriagePolicy[] = [];
 	let loading = true;
@@ -347,7 +347,7 @@
 <div class="mt-10">
 	<div class="flex items-center justify-between mb-2">
 		<h2 class="h3">Authored triage policies</h2>
-		{#if tenantId}
+		{#if tenantId && $canManageTriagePolicies}
 			<div class="flex gap-2">
 				<a class="btn btn-sm variant-filled-primary" href="/triage-policies/editor">+ New triage policy</a>
 				<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">
@@ -386,43 +386,45 @@
 							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
 						</div>
 						<div class="flex items-center gap-2 flex-shrink-0">
-							{#if pb.status === 'active'}
-								<button
-									class="btn btn-sm variant-soft"
-									on:click={() => setActive(pb.triage_policy_id, false)}
-								>
-									Deactivate
-								</button>
-							{:else}
-								<button
-									class="btn btn-sm variant-filled-success"
-									on:click={() => setActive(pb.triage_policy_id, true)}
-								>
-									Activate
-								</button>
-							{/if}
-							<a
-								class="btn btn-sm variant-filled-primary"
-								href="/triage-policies/editor?id={encodeURIComponent(pb.triage_policy_id)}"
-							>
-								Edit
-							</a>
-							<button
-								class="btn btn-sm variant-soft"
-								on:click={() => openEdit(pb)}
-								title="Raw JSON editor"
-							>
-								JSON
-							</button>
 							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.triage_policy_id)}>
 								Export
 							</button>
-							<button
-								class="btn btn-sm variant-soft-error"
-								on:click={() => retire(pb.triage_policy_id)}
-							>
-								Delete
-							</button>
+							{#if $canManageTriagePolicies}
+								{#if pb.status === 'active'}
+									<button
+										class="btn btn-sm variant-soft"
+										on:click={() => setActive(pb.triage_policy_id, false)}
+									>
+										Deactivate
+									</button>
+								{:else}
+									<button
+										class="btn btn-sm variant-filled-success"
+										on:click={() => setActive(pb.triage_policy_id, true)}
+									>
+										Activate
+									</button>
+								{/if}
+								<a
+									class="btn btn-sm variant-filled-primary"
+									href="/triage-policies/editor?id={encodeURIComponent(pb.triage_policy_id)}"
+								>
+									Edit
+								</a>
+								<button
+									class="btn btn-sm variant-soft"
+									on:click={() => openEdit(pb)}
+									title="Raw JSON editor"
+								>
+									JSON
+								</button>
+								<button
+									class="btn btn-sm variant-soft-error"
+									on:click={() => retire(pb.triage_policy_id)}
+								>
+									Delete
+								</button>
+							{/if}
 						</div>
 					</div>
 				{/each}

@@ -10,7 +10,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.auth.rate_limit import default_limiter
@@ -21,6 +21,8 @@ from soctalk.core.auth.service import (
     admin_reset_password,
     authenticate,
     change_password,
+)
+from soctalk.core.auth.service import (
     logout as logout_service,
 )
 from soctalk.core.tenancy.auth import (
@@ -66,6 +68,16 @@ class UserPayload(BaseModel):
     # round-trip. Both null when scope is cross-tenant (MSSP audience).
     current_tenant_slug: str | None = None
     current_tenant_display_name: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def permissions(self) -> list[str]:
+        """The capabilities this role holds — the frontend gates nav/actions on these
+        instead of guessing from the role string. Derived from the single-source-of-truth
+        role→permission map."""
+        from soctalk.core.tenancy.permissions import permissions_for
+
+        return sorted(p.value for p in permissions_for(self.role))
 
 
 class LoginResponse(BaseModel):
@@ -115,6 +127,7 @@ async def _resolve_tenant_label(
     if tenant_id is None:
         return None, None
     from sqlalchemy import select as _select
+
     from soctalk.core.tenancy.models import Tenant as _Tenant
 
     tid = tenant_id if isinstance(tenant_id, UUID) else UUID(str(tenant_id))
@@ -345,8 +358,9 @@ async def assume_tenant(
     session_id_raw = getattr(request.state, "session_id", None)
     if session_id_raw is None:
         raise HTTPException(500, "session not attached")
-    from soctalk.core.auth.models import Session as _Session
     from sqlalchemy import select as _select2
+
+    from soctalk.core.auth.models import Session as _Session
 
     session_row = (
         await db.execute(
