@@ -200,4 +200,24 @@
 		fill: rgb(var(--color-surface-200) / 1);
 		font-size: 9px;
 	}
+	/* Theme the zoom/pan controls for the dark UI — the library default is a
+	   white box with black icons, which clashes with the surface theme. */
+	.rp-flow :global(.svelte-flow__controls) {
+		box-shadow: none;
+	}
+	.rp-flow :global(.svelte-flow__controls-button) {
+		background: rgb(var(--color-surface-700) / 1);
+		border-bottom: 1px solid rgb(var(--color-surface-500) / 0.25);
+		color: rgb(var(--color-surface-100) / 1);
+	}
+	.rp-flow :global(.svelte-flow__controls-button:hover) {
+		background: rgb(var(--color-surface-600) / 1);
+	}
+	.rp-flow :global(.svelte-flow__controls-button svg) {
+		fill: rgb(var(--color-surface-100) / 1);
+	}
+	.rp-flow :global(.svelte-flow__attribution) {
+		background: transparent;
+		color: rgb(var(--color-surface-400) / 0.6);
+	}
 </style>
