@@ -34,6 +34,8 @@ RESPONSE_STATE_CONTRACT: frozenset[str] = frozenset(
         "severity",
         "rule.groups",
         "rule.ids",
+        # WireMitre split: ids = Txxxx technique ids, techniques = names.
+        "mitre.ids",
         "mitre.techniques",
     }
 )

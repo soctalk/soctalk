@@ -8,9 +8,6 @@ Authoritative state machine: core-invariants §4 (runs), §6 (proposals).
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -22,7 +19,6 @@ from soctalk.core.ir.events import (
     EventKind,
     append_event,
     canonical_json,
-    event_idempotency_key,
     proposal_idempotency_key,
 )
 from soctalk.core.ir.reducer import apply_event, load_facts, save_facts
@@ -391,11 +387,13 @@ def _backoff(attempts: int) -> int:
 
 
 async def claim_next_outbox(
-    db: AsyncSession, worker_id: str
+    db: AsyncSession, worker_id: str, kinds: tuple[str, ...] | None = None
 ) -> dict[str, Any] | None:
     """Claim the next pending outbox row with a 60s lease.
 
     Uses FOR UPDATE SKIP LOCKED to avoid workers fighting over rows.
+    ``kinds`` scopes the claim: an executor that only knows how to handle
+    certain kinds must not claim (and terminally fail) everyone else's rows.
     """
 
     row = (
@@ -403,15 +401,20 @@ async def claim_next_outbox(
             text(
                 """
                 SELECT id FROM investigation_outbox
-                WHERE status = 'pending' AND next_attempt_at <= now()
+                WHERE (status = 'pending' AND next_attempt_at <= now()
                    OR (status = 'in_flight'
-                       AND claimed_at < now() - make_interval(secs => :lease))
+                       AND claimed_at < now() - make_interval(secs => :lease)))
+                  AND (:kinds_all OR kind = ANY(:kinds))
                 ORDER BY next_attempt_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
                 """
             ),
-            {"lease": LEASE_SECONDS},
+            {
+                "lease": LEASE_SECONDS,
+                "kinds_all": kinds is None,
+                "kinds": list(kinds or ()),
+            },
         )
     ).scalar_one_or_none()
     if row is None:
@@ -489,17 +492,22 @@ async def mark_outbox_failed(
 
 
 async def execute_one(
-    db: AsyncSession, worker_id: str, handlers: dict[str, Any] | None = None
+    db: AsyncSession,
+    worker_id: str,
+    handlers: dict[str, Any] | None = None,
+    *,
+    kinds: tuple[str, ...] | None = None,
 ) -> bool:
     """Claim and execute a single outbox row. Returns True if work was done.
 
     ``handlers`` maps ``kind`` → async callable(db, outbox_row) → Optional[external_ref].
     Unknown kinds are marked failed with a clear error. Defaults to
-    :func:`default_handlers` if none provided.
+    :func:`default_handlers` if none provided. ``kinds`` restricts which rows
+    this executor claims at all (see :func:`claim_next_outbox`).
     """
 
     handlers = handlers or default_handlers()
-    row = await claim_next_outbox(db, worker_id)
+    row = await claim_next_outbox(db, worker_id, kinds)
     if row is None:
         return False
 

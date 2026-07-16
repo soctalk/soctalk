@@ -61,7 +61,8 @@ async def build_envelope(
 
     rule_ids: list[str] = []
     rule_groups: list[str] = []
-    techniques: list[str] = []
+    mitre_ids: list[str] = []
+    mitre_techniques: list[str] = []
     entities: list[Any] = []
     iocs: list[Any] = []
     severity = 0
@@ -73,11 +74,17 @@ async def build_envelope(
             g = str(g).lower()
             if g not in rule_groups:
                 rule_groups.append(g)
+        # Stored evidence contract is WireMitre: {ids, tactics, techniques}
+        # (ids = Txxxx, techniques = names). Tolerate scalar forms.
         mitre = a["mitre"] or {}
         if isinstance(mitre, dict):
-            for t in mitre.get("id") or mitre.get("technique_ids") or []:
-                if str(t) not in techniques:
-                    techniques.append(str(t))
+            for target, key in ((mitre_ids, "ids"), (mitre_techniques, "techniques")):
+                vals = mitre.get(key) or []
+                if isinstance(vals, str):
+                    vals = [vals]
+                for t in vals:
+                    if str(t) not in target:
+                        target.append(str(t))
         for e in a["entities"] or []:
             if e not in entities:
                 entities.append(e)
@@ -110,7 +117,7 @@ async def build_envelope(
         },
         "severity": severity,
         "rule": {"ids": rule_ids, "groups": rule_groups},
-        "mitre": {"techniques": techniques},
+        "mitre": {"ids": mitre_ids, "techniques": mitre_techniques},
         "entities": entities[:64],
         "iocs": iocs[:64],
     }
@@ -135,6 +142,7 @@ def condition_context(envelope: dict[str, Any]) -> dict[str, Any]:
             "ids": (envelope.get("rule") or {}).get("ids") or [],
         },
         "mitre": {
+            "ids": (envelope.get("mitre") or {}).get("ids") or [],
             "techniques": (envelope.get("mitre") or {}).get("techniques") or [],
         },
     }

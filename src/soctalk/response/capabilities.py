@@ -53,6 +53,44 @@ def sign_webhook_body(secret: str, body: bytes) -> str:
     return f"sha256={digest}"
 
 
+def assert_webhook_url_allowed(url: str) -> None:
+    """SSRF floor on the connector target (Codex #49 High-3).
+
+    The URL comes from tenant policy, not the playbook — but an AUTONOMOUS
+    ``write_external`` capability POSTing from L1 must still refuse to reach
+    into the cluster: https only (``SOCTALK_RESPONSE_WEBHOOK_ALLOW_HTTP=1`` is
+    the documented local-dev escape hatch), and every resolved address must be
+    globally routable — private, loopback, link-local, reserved, multicast and
+    unspecified ranges all reject. DNS re-resolution between this check and
+    the POST is accepted residual risk at this tier; a vetted-connector
+    allowlist is the phase-2 fix.
+    """
+    import ipaddress
+    import os
+    import socket
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    allow_http = os.getenv("SOCTALK_RESPONSE_WEBHOOK_ALLOW_HTTP", "").lower() in (
+        "1", "true", "yes",
+    )
+    if parts.scheme != "https" and not (allow_http and parts.scheme == "http"):
+        raise ValueError("response_webhook_url must be https")
+    host = parts.hostname or ""
+    if not host:
+        raise ValueError("response_webhook_url has no host")
+    try:
+        infos = socket.getaddrinfo(host, parts.port or 443, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise ValueError(f"response_webhook_url host does not resolve: {exc}") from exc
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0])
+        if not addr.is_global:
+            raise ValueError(
+                f"response_webhook_url resolves to non-global address {addr} — refused"
+            )
+
+
 # Handler contract: (db, tenant_id, payload) -> external_ref | None.
 # ``payload`` is the outbox row's payload: {envelope, playbook, capability,
 # params, delivery}. Raise to fail the action (the outbox retries per its
@@ -122,11 +160,12 @@ async def _notify_webhook(
 
     policy = await effective_policy(db, tenant_id)
     url = str(policy.get("response_webhook_url") or "").strip()
-    if not url.startswith(("https://", "http://")):
+    if not url:
         raise ValueError(
-            "response_webhook_url tenant policy is missing or not http(s) — "
-            "configure the connector before activating a notify_webhook playbook"
+            "response_webhook_url tenant policy is missing — configure the "
+            "connector before activating a notify_webhook playbook"
         )
+    assert_webhook_url_allowed(url)
     body_obj = {
         "envelope": payload.get("envelope") or {},
         "playbook": payload.get("playbook") or {},

@@ -25,7 +25,7 @@ from soctalk.response.dispatch import (
     SHADOW_AUDIT_ACTION,
     dispatch_for_completed_run,
 )
-from soctalk.response.executor import response_handlers
+from soctalk.response.executor import RESPONSE_KINDS, response_handlers
 from soctalk.response.registry import reset_registry_cache
 
 SKIP_INTEGRATION = os.getenv("SKIP_INTEGRATION", "0") == "1"
@@ -85,7 +85,8 @@ async def _promoted_investigation_and_run(
         evidence={
             "rule_groups": ["sudo", "pam"],
             "entities": [{"type": "host", "value": f"resp-{tag}", "role": "target"}],
-            "mitre": {"id": ["T1078"]},
+            # WireMitre contract: ids = Txxxx, techniques = names.
+            "mitre": {"ids": ["T1078"], "techniques": ["Valid Accounts"]},
             "schema_version": 2,
         },
     )
@@ -147,6 +148,9 @@ async def test_dispatch_enqueues_idempotently_and_audits(
     assert envelope["disposition"] == "escalate"
     assert "sudo" in envelope["rule"]["groups"]
     assert envelope["severity"] == 12
+    assert envelope["mitre"]["ids"] == ["T1078"], (
+        "envelope must read the stored WireMitre keys, not invented ones"
+    )
 
     # Replayed completion → ON CONFLICT no-op, still one row.
     await _dispatch(mssp_session, tenant_a.tenant_id, inv, run)
@@ -213,7 +217,9 @@ async def test_executor_drains_annotation_and_writes_ledger(
 
     from soctalk.core.ir.runtime import execute_one
 
-    did = await execute_one(mssp_session, "test-executor", response_handlers())
+    did = await execute_one(
+        mssp_session, "test-executor", response_handlers(), kinds=RESPONSE_KINDS
+    )
     await mssp_session.commit()
     assert did is True
 
@@ -251,6 +257,124 @@ async def test_executor_drains_annotation_and_writes_ledger(
     assert entry["after"]["capability"] == "annotate_investigation"
 
 
+async def test_executor_claims_only_response_kind(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """A foreign outbox kind (e.g. an approved-proposal execution) must never
+    be claimed — and terminally failed — by the response executor."""
+    from uuid import uuid4
+
+    from soctalk.core.ir.runtime import execute_one
+
+    tenant_a, _ = seed_two_tenants
+    await mssp_session.execute(
+        text(
+            "INSERT INTO investigation_outbox "
+            "  (id, tenant_id, kind, idempotency_key, payload, status) "
+            "VALUES (:id, :t, 'execute_proposal', :ik, CAST('{}' AS JSONB), 'pending')"
+        ),
+        {"id": str(uuid4()), "t": str(tenant_a.tenant_id), "ik": f"foreign:{uuid4()}"},
+    )
+    await mssp_session.commit()
+
+    did = await execute_one(
+        mssp_session, "test-executor", response_handlers(), kinds=RESPONSE_KINDS
+    )
+    await mssp_session.commit()
+    assert did is False, "kind-scoped claim must skip foreign rows entirely"
+
+    status = (
+        await mssp_session.execute(
+            text(
+                "SELECT status FROM investigation_outbox "
+                "WHERE tenant_id = :t AND kind = 'execute_proposal'"
+            ),
+            {"t": str(tenant_a.tenant_id)},
+        )
+    ).scalar_one()
+    assert status == "pending", "the foreign row must be untouched"
+
+
+async def test_executor_rejects_row_envelope_scope_mismatch(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """BYPASSRLS executor: a row whose payload envelope points at a different
+    tenant's investigation must be rejected before any side effect."""
+    from uuid import uuid4
+
+    from soctalk.core.ir.events import canonical_json
+    from soctalk.core.ir.runtime import execute_one
+
+    tenant_a, tenant_b = seed_two_tenants
+    # A real investigation in tenant B — the mismatch target.
+    from soctalk.core.ir.triage import triage_event as te
+
+    victim = await te(
+        mssp_session, tenant_id=tenant_b.tenant_id,
+        source="wazuh", rule_id="5710", severity=12, asset_ids=["victim-1"],
+        initial_iocs=[], source_event_id="victim-1", ts=datetime.now(UTC),
+        description="tenant B investigation",
+        evidence={"schema_version": 2},
+    )
+    await mssp_session.commit()
+
+    payload = {
+        "envelope": {
+            "version": 1,
+            "tenant_id": str(tenant_b.tenant_id),  # != row tenant A
+            "investigation_id": victim["investigation_id"],
+            "run_id": str(uuid4()),
+            "disposition": "escalate",
+        },
+        "playbook": {"id": "evil", "version": 1},
+        "capability": "annotate_investigation",
+        "params": {"body": "cross-tenant write attempt"},
+        "delivery": f"response:{uuid4()}:evil@1:0",
+    }
+    await mssp_session.execute(
+        text(
+            "INSERT INTO investigation_outbox "
+            "  (id, tenant_id, kind, idempotency_key, payload, status) "
+            "VALUES (:id, :t, :k, :ik, CAST(:p AS JSONB), 'pending')"
+        ),
+        {
+            "id": str(uuid4()), "t": str(tenant_a.tenant_id),
+            "k": RESPONSE_OUTBOX_KIND, "ik": payload["delivery"],
+            "p": canonical_json(payload),
+        },
+    )
+    await mssp_session.commit()
+
+    did = await execute_one(
+        mssp_session, "test-executor", response_handlers(), kinds=RESPONSE_KINDS
+    )
+    await mssp_session.commit()
+    assert did is True
+
+    notes = (
+        await mssp_session.execute(
+            text("SELECT count(*) FROM notes WHERE investigation_id = :c"),
+            {"c": victim["investigation_id"]},
+        )
+    ).scalar_one()
+    assert notes == 0, "the cross-tenant note must never be written"
+
+    ledger = (
+        await mssp_session.execute(
+            text(
+                "SELECT kind, after FROM execution_log "
+                "WHERE tenant_id = :t AND subject_type = 'response_action'"
+            ),
+            {"t": str(tenant_a.tenant_id)},
+        )
+    ).mappings().all()
+    assert any(
+        r["kind"] == "response_action.rejected"
+        and "does not match outbox row scope" in (r["after"] or {}).get("error", "")
+        for r in ledger
+    )
+
+
 async def test_executor_webhook_posts_signed_envelope(
     mssp_session: AsyncSession, seed_two_tenants, tmp_path, monkeypatch
 ):
@@ -284,6 +408,12 @@ response:
         await _dispatch(mssp_session, tenant_a.tenant_id, inv, run)
         await mssp_session.commit()
 
+        # soar.example doesn't resolve; the SSRF guard must still see a
+        # globally-routable address for the target.
+        monkeypatch.setattr(
+            "socket.getaddrinfo",
+            lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 443))],
+        )
         captured: dict = {}
 
         async def fake_post(self, url, content=None, headers=None, **kw):
@@ -301,7 +431,9 @@ response:
 
         from soctalk.core.ir.runtime import execute_one
 
-        assert await execute_one(mssp_session, "test-executor", response_handlers())
+        assert await execute_one(
+            mssp_session, "test-executor", response_handlers(), kinds=RESPONSE_KINDS
+        )
         await mssp_session.commit()
 
         assert captured["url"] == "https://soar.example/hook"

@@ -162,9 +162,11 @@ async def dispatch_for_completed_run(
 
     enqueued = 0
     for pb in active:
-        for index, action in _selected_actions(pb, effective_disposition, ctx):
+        selected = _selected_actions(pb, effective_disposition, ctx)
+        inserted_for_pb = 0
+        for index, action in selected:
             delivery = _idempotency_key(run_id, pb, index)
-            await db.execute(
+            result = await db.execute(
                 text(
                     """
                     INSERT INTO investigation_outbox
@@ -193,27 +195,28 @@ async def dispatch_for_completed_run(
                     "xs": "webhook" if action.capability == "notify_webhook" else None,
                 },
             )
-            enqueued += 1
-        await log_audit(
-            db,
-            action=DISPATCH_AUDIT_ACTION,
-            actor_principal="system",
-            actor_id="response_dispatch",
-            tenant_id=tenant_id,
-            resource_type="investigation",
-            resource_id=str(investigation_id),
-            notes=canonical_json(
-                {
-                    "playbook": f"{pb.id}@{pb.version}",
-                    "run_id": str(run_id),
-                    "disposition": effective_disposition,
-                    "actions": [
-                        a.capability
-                        for _, a in _selected_actions(pb, effective_disposition, ctx)
-                    ],
-                }
-            )[:4096],
-        )
+            # ON CONFLICT DO NOTHING: a replayed completion inserts nothing
+            # and must not report/audit an enqueue that didn't happen.
+            inserted_for_pb += result.rowcount or 0
+        enqueued += inserted_for_pb
+        if inserted_for_pb:
+            await log_audit(
+                db,
+                action=DISPATCH_AUDIT_ACTION,
+                actor_principal="system",
+                actor_id="response_dispatch",
+                tenant_id=tenant_id,
+                resource_type="investigation",
+                resource_id=str(investigation_id),
+                notes=canonical_json(
+                    {
+                        "playbook": f"{pb.id}@{pb.version}",
+                        "run_id": str(run_id),
+                        "disposition": effective_disposition,
+                        "actions": [a.capability for _, a in selected],
+                    }
+                )[:4096],
+            )
     if enqueued:
         logger.info(
             "response_actions_enqueued",

@@ -629,9 +629,14 @@ async def complete_run(
         # and committed-with. Under a SAVEPOINT so a dispatch failure can never
         # poison the completion (an aborted subtransaction would otherwise fail
         # every later statement and roll back the close itself).
-        if payload.status == "completed" and effective_disposition in (
-            "close_fp",
-            "escalate",
+        # ``case_changed`` gates dispatch on the disposition having actually
+        # taken effect (Codex #49 High-1): an analyst who closed/merged the
+        # investigation mid-run makes the close update a no-op, and a response
+        # action must not fire on a state transition that never happened.
+        if (
+            payload.status == "completed"
+            and case_changed
+            and effective_disposition in ("close_fp", "escalate")
         ):
             try:
                 from soctalk.response.dispatch import dispatch_for_completed_run

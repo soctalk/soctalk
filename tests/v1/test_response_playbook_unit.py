@@ -218,7 +218,7 @@ def _envelope(**over):
         "verdict": {"summary": "s", "confidence": 0.4},
         "severity": 12,
         "rule": {"ids": ["5710"], "groups": ["sudo"]},
-        "mitre": {"techniques": ["T1078"]},
+        "mitre": {"ids": ["T1078"], "techniques": ["Valid Accounts"]},
         "entities": [],
         "iocs": [],
     }
@@ -239,6 +239,9 @@ def test_conditions_evaluate_over_context():
     ctx = condition_context(_envelope())
     assert evaluate_condition({">=": [{"var": "severity"}, 10]}, ctx)
     assert evaluate_condition({"in": ["sudo", {"var": "rule.groups"}]}, ctx)
+    assert evaluate_condition({"in": ["T1078", {"var": "mitre.ids"}]}, ctx), (
+        "mitre.ids carries the Txxxx ids (WireMitre contract)"
+    )
     assert evaluate_condition({"!!": [{"var": "floor_vetoed"}]}, ctx)
     assert not evaluate_condition(
         {"==": [{"var": "worker_disposition"}, "escalate"]}, ctx
@@ -274,6 +277,45 @@ def test_dispatch_kill_switch_env_and_policy(monkeypatch):
     )
     monkeypatch.setenv("SOCTALK_RESPONSE_DISPATCH_KILL", "1")
     assert response_dispatch_killed({})
+
+
+def test_webhook_url_guard_rejects_non_global_targets(monkeypatch):
+    from soctalk.response.capabilities import assert_webhook_url_allowed
+
+    with pytest.raises(ValueError, match="must be https"):
+        assert_webhook_url_allowed("http://example.com/hook")
+    for url in (
+        "https://10.0.0.1/hook",
+        "https://169.254.169.254/latest/meta-data",
+        "https://127.0.0.1/hook",
+        "https://localhost/hook",
+    ):
+        with pytest.raises(ValueError, match="non-global"):
+            assert_webhook_url_allowed(url)
+
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    assert_webhook_url_allowed("https://soar.example/hook")
+
+
+def test_webhook_url_guard_http_escape_hatch(monkeypatch):
+    from soctalk.response.capabilities import assert_webhook_url_allowed
+
+    monkeypatch.setenv("SOCTALK_RESPONSE_WEBHOOK_ALLOW_HTTP", "1")
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 80))],
+    )
+    assert_webhook_url_allowed("http://soar.example/hook")
+    # The escape hatch relaxes the scheme, never the address floor.
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 80))],
+    )
+    with pytest.raises(ValueError, match="non-global"):
+        assert_webhook_url_allowed("http://127.0.0.1/hook")
 
 
 def test_webhook_signature_is_hmac_sha256_of_exact_bytes():
