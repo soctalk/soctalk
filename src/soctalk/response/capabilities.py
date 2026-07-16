@@ -189,6 +189,74 @@ async def _notify_webhook(
     return remote_ref or f"http:{resp.status_code}"
 
 
+def _resolve_endpoint(policy: dict[str, Any], endpoint_id: str) -> dict[str, Any]:
+    """Resolve an operator-configured action endpoint by id from tenant policy.
+
+    The playbook names an endpoint id + action, NEVER a URL — the operator owns
+    the id→url/secret mapping in the ``response_action_endpoints`` policy, so a
+    playbook author can request an action but can never choose its target
+    (the SSRF/exfil boundary, #49). Fails closed on an unknown/blank id."""
+    registry = policy.get("response_action_endpoints") or {}
+    if not isinstance(registry, dict):
+        raise ValueError("response_action_endpoints policy is malformed")
+    cfg = registry.get(endpoint_id)
+    if not isinstance(cfg, dict) or not str(cfg.get("url") or "").strip():
+        raise ValueError(
+            f"response action endpoint {endpoint_id!r} is not configured — "
+            "an operator must define it in response_action_endpoints policy"
+        )
+    return cfg
+
+
+async def _external_action(
+    db: AsyncSession, tenant_id: UUID, payload: dict[str, Any]
+) -> str | None:
+    """Gated: POST the signed envelope + named action to an operator-configured
+    action endpoint (the generic external-action connector, #49 phase 2).
+
+    Unlike ``notify_webhook`` (a single tenant webhook, tier-0), this resolves
+    one of many named endpoints and carries a named ``action`` — the seam where
+    concrete stack behavior (disable a Wazuh endpoint) lives OUTSIDE core, behind
+    the response-action contract. WRITE_EXTERNAL + TYPED_REASON: it is never
+    autonomous, so it only ever runs after a human approves the routed proposal.
+    """
+    import httpx
+
+    from soctalk.core.ir.policies import effective_policy
+
+    params = payload.get("params") or {}
+    endpoint_id = str(params.get("endpoint") or "").strip()
+    action = str(params.get("action") or "").strip()
+    if not endpoint_id or not action:
+        raise ValueError("external_action requires params.endpoint and params.action")
+
+    policy = await effective_policy(db, tenant_id)
+    cfg = _resolve_endpoint(policy, endpoint_id)
+    url = str(cfg["url"]).strip()
+    assert_webhook_url_allowed(url)
+
+    body_obj = {
+        "action": action,
+        "envelope": payload.get("envelope") or {},
+        "playbook": payload.get("playbook") or {},
+        "params": {k: v for k, v in params.items() if k not in ("endpoint", "action")},
+    }
+    body = canonical_json(body_obj).encode()
+    headers = {
+        "Content-Type": "application/json",
+        DELIVERY_HEADER: str(payload.get("delivery") or ""),
+    }
+    secret = str(cfg.get("secret") or "")
+    if secret:
+        headers[SIGNATURE_HEADER] = sign_webhook_body(secret, body)
+    async with httpx.AsyncClient(timeout=_WEBHOOK_TIMEOUT_SECONDS) as client:
+        resp = await client.post(url, content=body, headers=headers)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"external action endpoint returned HTTP {resp.status_code}")
+    remote_ref = resp.headers.get("X-Request-Id") or resp.headers.get("Request-Id")
+    return remote_ref or f"http:{resp.status_code}"
+
+
 RESPONSE_CAPABILITIES: dict[str, ResponseCapability] = {
     cap.name: cap
     for cap in (
@@ -208,6 +276,18 @@ RESPONSE_CAPABILITIES: dict[str, ResponseCapability] = {
                 "webhook connector (generic external SOAR handoff)."
             ),
             handler=_notify_webhook,
+        ),
+        ResponseCapability(
+            name="external_action",
+            capability_class=CapabilityClass.WRITE_EXTERNAL,
+            # Gated: never autonomous. Routes to a human-approved proposal
+            # before the executor calls the operator-configured endpoint.
+            approval=ApprovalPolicy.TYPED_REASON,
+            description=(
+                "POST a named action + signed envelope to an operator-configured "
+                "action endpoint (concrete stack behavior lives outside core)."
+            ),
+            handler=_external_action,
         ),
     )
 }

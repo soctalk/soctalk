@@ -257,11 +257,15 @@ async def test_executor_drains_annotation_and_writes_ledger(
     assert entry["after"]["capability"] == "annotate_investigation"
 
 
-async def test_executor_claims_only_response_kind(
+async def test_executor_claims_only_its_kinds(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """A foreign outbox kind (e.g. an approved-proposal execution) must never
-    be claimed — and terminally failed — by the response executor."""
+    """A genuinely foreign outbox kind must never be claimed by the L1 executor.
+
+    The executor legitimately claims ``response_action`` and ``execute_proposal``
+    (#49 phase 2 — it drains approved-proposal executions too, delegating
+    non-response ones to core.ir). Any OTHER kind must be skipped entirely,
+    never claimed-and-failed."""
     from uuid import uuid4
 
     from soctalk.core.ir.runtime import execute_one
@@ -271,7 +275,7 @@ async def test_executor_claims_only_response_kind(
         text(
             "INSERT INTO investigation_outbox "
             "  (id, tenant_id, kind, idempotency_key, payload, status) "
-            "VALUES (:id, :t, 'execute_proposal', :ik, CAST('{}' AS JSONB), 'pending')"
+            "VALUES (:id, :t, 'export.thehive.case', :ik, CAST('{}' AS JSONB), 'pending')"
         ),
         {"id": str(uuid4()), "t": str(tenant_a.tenant_id), "ik": f"foreign:{uuid4()}"},
     )
@@ -287,7 +291,7 @@ async def test_executor_claims_only_response_kind(
         await mssp_session.execute(
             text(
                 "SELECT status FROM investigation_outbox "
-                "WHERE tenant_id = :t AND kind = 'execute_proposal'"
+                "WHERE tenant_id = :t AND kind = 'export.thehive.case'"
             ),
             {"t": str(tenant_a.tenant_id)},
         )

@@ -242,14 +242,143 @@ async def _route_to_proposal(
     )
 
 
-RESPONSE_KINDS: tuple[str, ...] = (RESPONSE_OUTBOX_KIND,)
+EXECUTE_PROPOSAL_KIND = "execute_proposal"
+
+
+async def handle_execute_proposal(
+    db: AsyncSession, outbox_row: dict[str, Any]
+) -> str | None:
+    """Drain an approved-proposal execution (#49 phase 2 increment 2).
+
+    ``approve_proposal`` enqueues ``kind='execute_proposal'`` on approval. This
+    L1 executor is the drain path for it. It dispatches by ``action_type``:
+
+    - a RESPONSE capability name → run the vetted response handler with the
+      stored response payload (the proposal ``params`` IS that payload), then
+      advance the proposal executing→executed/failed and ledger the outcome;
+    - anything else → delegate to the core.ir tool-proposal handler unchanged,
+      so this executor draining the shared ``execute_proposal`` kind never
+      strands a triage tool proposal.
+    """
+    payload = dict(outbox_row.get("payload") or {})
+    action_type = str(payload.get("action_type") or "")
+    spec = RESPONSE_CAPABILITIES.get(action_type)
+    if spec is None:
+        # Not a response proposal — hand to the core.ir tool path untouched.
+        from soctalk.core.ir.runtime import _handle_execute_proposal
+
+        return await _handle_execute_proposal(db, outbox_row)
+
+    proposal_id = UUID(str(payload["proposal_id"]))
+    row = (
+        await db.execute(
+            text(
+                "SELECT tenant_id, investigation_id, params, status "
+                "FROM proposals WHERE id = :id"
+            ),
+            {"id": str(proposal_id)},
+        )
+    ).mappings().first()
+    if row is None:
+        raise RuntimeError(f"proposal {proposal_id} vanished before execution")
+    tenant_id = UUID(str(row["tenant_id"]))
+    response_payload = dict(row["params"] or {})
+    envelope = response_payload.get("envelope") or {}
+
+    async with tenant_context(db, tenant_id):
+        # Re-verify the stored payload still agrees with the proposal's own
+        # tenant/investigation before any side effect — the approval happened
+        # earlier and elsewhere; do not trust the payload blindly at execute.
+        if str(envelope.get("tenant_id")) != str(tenant_id) or str(
+            envelope.get("investigation_id")
+        ) != str(row["investigation_id"]):
+            await _write_execution_log(
+                db, tenant_id=tenant_id, payload=response_payload,
+                status="rejected", external_ref=None,
+                error="approved proposal payload does not match proposal scope",
+            )
+            raise ValueError("execute_proposal payload/proposal scope mismatch")
+
+        await db.execute(
+            text("UPDATE proposals SET status = 'executing', updated_at = now() "
+                 "WHERE id = :id"),
+            {"id": str(proposal_id)},
+        )
+        try:
+            async with db.begin_nested():
+                external_ref = await spec.handler(db, tenant_id, response_payload)
+        except Exception as exc:  # noqa: BLE001 — ledger + proposal both, then re-raise
+            await db.execute(
+                text("UPDATE proposals SET status = 'failed', updated_at = now() "
+                     "WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+            await _write_execution_log(
+                db, tenant_id=tenant_id, payload=response_payload,
+                status="failed", external_ref=None, error=str(exc),
+            )
+            await _emit_proposal_event(
+                db, tenant_id, envelope, proposal_id, action_type,
+                kind="failed", detail={"error": str(exc)[:500]},
+            )
+            raise
+        await db.execute(
+            text("UPDATE proposals SET status = 'executed', updated_at = now() "
+                 "WHERE id = :id"),
+            {"id": str(proposal_id)},
+        )
+        await _write_execution_log(
+            db, tenant_id=tenant_id, payload=response_payload,
+            status="executed", external_ref=external_ref, error=None,
+        )
+        await _emit_proposal_event(
+            db, tenant_id, envelope, proposal_id, action_type,
+            kind="executed", detail={"external_ref": external_ref},
+        )
+        return external_ref
+
+
+async def _emit_proposal_event(
+    db: AsyncSession, tenant_id: UUID, envelope: dict[str, Any],
+    proposal_id: UUID, action_type: str, *, kind: str, detail: dict[str, Any],
+) -> None:
+    """Append proposal_executed/proposal_failed so the reducer + UI see the
+    completion, mirroring the core.ir tool-proposal path. Best-effort: an event
+    failure must not roll back the recorded execution outcome."""
+    from soctalk.core.ir.events import EventKind, append_event
+
+    inv = envelope.get("investigation_id")
+    if not inv:
+        return
+    ek = EventKind.PROPOSAL_EXECUTED if kind == "executed" else EventKind.PROPOSAL_FAILED
+    try:
+        async with db.begin_nested():
+            await append_event(
+                db, tenant_id=tenant_id, investigation_id=UUID(str(inv)),
+                run_id=None, kind=ek,
+                payload={"proposal_id": str(proposal_id),
+                         "action_type": action_type, **detail},
+                producer="executor",
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning("response_proposal_event_failed", proposal_id=str(proposal_id))
+
+
+# The L1 executor drains response actions AND approved-proposal executions. The
+# execute_proposal handler self-routes non-response proposals to the core.ir
+# path, so claiming the shared kind never strands a triage tool proposal.
+RESPONSE_KINDS: tuple[str, ...] = (RESPONSE_OUTBOX_KIND, EXECUTE_PROPOSAL_KIND)
 
 
 def response_handlers() -> dict[str, Any]:
-    """The executor's kind → handler map — response_action ONLY. Claims are
-    scoped to RESPONSE_KINDS (Codex #49 High-2): this loop must never claim
-    (and terminally fail) rows owned by other executors, present or future."""
-    return {RESPONSE_OUTBOX_KIND: handle_response_action}
+    """The executor's kind → handler map. ``response_action`` fires vetted
+    capabilities / routes gated ones to approval; ``execute_proposal`` drains
+    approved-proposal executions (response ones via the response handler, others
+    delegated to core.ir). Claims are scoped to RESPONSE_KINDS."""
+    return {
+        RESPONSE_OUTBOX_KIND: handle_response_action,
+        EXECUTE_PROPOSAL_KIND: handle_execute_proposal,
+    }
 
 
 class ResponseExecutor:
