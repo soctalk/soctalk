@@ -72,6 +72,10 @@ spec:
             {{- if $tp }}
             - name: SOCTALK_TRIAGE_POLICY_DIR
               value: /etc/soctalk/triage-policies
+            # Deprecated alias, set for one release so an old worker image rolled
+            # with this chart (reads only SOCTALK_PLAYBOOK_DIR) still finds its dir.
+            - name: SOCTALK_PLAYBOOK_DIR
+              value: /etc/soctalk/triage-policies
             {{- end }}
             {{- /*
                 ``llm.provider`` accepts ``openai-compatible`` (the

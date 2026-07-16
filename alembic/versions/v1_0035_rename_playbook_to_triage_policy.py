@@ -47,9 +47,27 @@ def upgrade() -> None:
         "ON authored_triage_policy_revisions "
         "RENAME TO authored_triage_policy_revisions_tenant_isolation"
     )
+    # One-release rolling-deploy compat: an OLD API pod still serving /playbooks issues
+    # SQL against authored_playbook_revisions / playbook_id. Expose the renamed table
+    # under the old name+column as an auto-updatable, RLS-preserving view so those pods
+    # keep working until they roll. security_invoker=true (PG15+) enforces the base
+    # table's row-level security as the querying role, not the view owner. Drop next
+    # release alongside the /playbooks routes.
+    op.execute(
+        """
+        CREATE VIEW authored_playbook_revisions
+            WITH (security_invoker = true) AS
+            SELECT id, tenant_id, triage_policy_id AS playbook_id, revision, status,
+                   definition, created_by, created_at
+            FROM authored_triage_policy_revisions
+        """
+    )
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON authored_playbook_revisions TO soctalk_app;")
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON authored_playbook_revisions TO soctalk_mssp;")
 
 
 def downgrade() -> None:
+    op.execute("DROP VIEW IF EXISTS authored_playbook_revisions")
     op.execute(
         "ALTER POLICY authored_triage_policy_revisions_tenant_isolation "
         "ON authored_triage_policy_revisions "

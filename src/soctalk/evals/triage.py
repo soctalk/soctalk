@@ -156,7 +156,7 @@ def score_triage_policy(case: GoldenCase) -> TrialResult:
         str(r)
         for r in (case.expect.get("triage_policy_route") or case.expect["playbook_route"])
     ]
-    expected_id = case.expect.get("triage_policy_id")
+    expected_id = case.expect.get("triage_policy_id") or case.expect.get("playbook_id")
     matched_id = triage_policy.id if triage_policy else None
     passed = route in expected and (expected_id is None or matched_id == expected_id)
     detail = ""
