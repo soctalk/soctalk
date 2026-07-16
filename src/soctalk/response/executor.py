@@ -112,10 +112,13 @@ async def handle_response_action(
 ) -> str | None:
     """Outbox handler for ``kind='response_action'``.
 
-    Fail closed on an unknown capability; enforce the approval gate (phase 1
-    registers AUTONOMOUS tier-0 only — anything else must not execute here
-    until the proposal-approval plane is wired to this path). Raise to let the
-    outbox retry per its budget; the execution_log row records both outcomes.
+    Fail closed on an unknown capability. An AUTONOMOUS (tier-0) capability
+    executes here directly; a gated (non-autonomous) capability is ROUTED to
+    the approval plane as a proposal (#49 phase 2) — routed, not refused, and
+    the outbox row succeeds so the drain never retries into duplicate
+    proposals. Raise only on genuine failure so the outbox retries per its
+    budget; the execution_log row records every outcome (routed/executed/
+    failed/rejected).
     """
     payload = dict(outbox_row.get("payload") or {})
     tenant_id = UUID(str(outbox_row["tenant_id"]))
@@ -158,14 +161,20 @@ async def handle_response_action(
             )
             raise ValueError(f"capability {name!r} is not in the vetted allowlist")
         if spec.approval is not ApprovalPolicy.AUTONOMOUS:
+            # A gated capability is ROUTED to the approval plane, not executed
+            # and not refused (#49 phase 2). We create a proposal a human must
+            # approve; approval later enqueues the real execution. The routing
+            # must SUCCEED at the outbox (return, never raise) — raising would
+            # retry the drain and create a duplicate proposal each attempt.
+            proposal_id = await _route_to_proposal(
+                db, tenant_id=tenant_id, payload=payload, spec=spec
+            )
+            external_ref = f"proposal:{proposal_id}"
             await _write_execution_log(
                 db, tenant_id=tenant_id, payload=payload,
-                status="rejected", external_ref=None,
-                error=f"capability {name!r} requires approval ({spec.approval.value})",
+                status="routed", external_ref=external_ref, error=None,
             )
-            raise ValueError(
-                f"capability {name!r} is not autonomous — approval plane not wired"
-            )
+            return external_ref
         try:
             # SAVEPOINT around the capability: a SQL error inside a handler
             # must roll back its partial writes WITHOUT aborting the outer
@@ -185,6 +194,52 @@ async def handle_response_action(
             status="executed", external_ref=external_ref, error=None,
         )
         return external_ref
+
+
+async def _route_to_proposal(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    payload: dict[str, Any],
+    spec: Any,
+) -> UUID:
+    """Create a human-approval proposal for a gated response action (#49 ph2).
+
+    Reuses the core.ir proposal plane. Two invariants make this safe on a
+    response-origin action:
+
+    - ``run_id=None`` — the originating run is already TERMINAL (complete_run
+      marked it before dispatch), so it must never be flipped to
+      ``waiting_on_gate``. ``create_proposal`` only transitions when run_id is
+      set.
+    - the response ``delivery`` key rides in ``params`` — ``create_proposal``
+      keys idempotency on (investigation_id, action_type, canonical(params)),
+      so a re-drained outbox row resolves to the SAME proposal instead of
+      spawning duplicates, and two distinct actions of the same capability do
+      not collapse into one.
+
+    ``action_type`` is the response capability name, which is self-identifying:
+    the approved-proposal executor (#49 ph2 increment 2) routes it back to the
+    response capability handler by looking it up in RESPONSE_CAPABILITIES rather
+    than the core.ir tool registry.
+    """
+    from soctalk.core.ir.runtime import create_proposal
+
+    envelope = payload.get("envelope") or {}
+    playbook = payload.get("playbook") or {}
+    return await create_proposal(
+        db,
+        tenant_id=tenant_id,
+        investigation_id=UUID(str(envelope["investigation_id"])),
+        run_id=None,
+        action_type=str(payload.get("capability") or ""),
+        params=payload,
+        rationale=(
+            f"response playbook {playbook.get('id')}@v{playbook.get('version')} "
+            f"on {envelope.get('disposition')}"
+        )[:512],
+        capability_class=spec.capability_class.value,
+    )
 
 
 RESPONSE_KINDS: tuple[str, ...] = (RESPONSE_OUTBOX_KIND,)
