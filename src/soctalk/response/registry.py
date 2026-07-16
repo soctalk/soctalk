@@ -118,6 +118,21 @@ def _matches(
     return bool(match.rule_ids) and bool(rule_ids.intersection(match.rule_ids))
 
 
+def playbook_matches(
+    pb: ResponsePlaybook,
+    *,
+    rule_groups: set[str],
+    rule_ids: set[str],
+    tenant_identifiers: frozenset[str],
+) -> bool:
+    """Public single-playbook match — same pure predicate the file registry uses,
+    so DB-authored playbooks (#49 phase 2) are matched identically."""
+    return _matches(
+        pb, rule_groups=rule_groups, rule_ids=rule_ids,
+        tenant_identifiers=tenant_identifiers,
+    )
+
+
 def match_response_playbooks(
     *,
     rule_groups: set[str],

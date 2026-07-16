@@ -26,12 +26,43 @@ from soctalk.core.ir.events import canonical_json
 from soctalk.core.observability.audit import log_audit
 from soctalk.response.envelope import build_envelope, condition_context
 from soctalk.response.models import ResponsePlaybook
-from soctalk.response.registry import match_response_playbooks
+from soctalk.response.registry import match_response_playbooks, playbook_matches
 from soctalk.triage_policy.conditions import evaluate_condition
 
 logger = structlog.get_logger()
 
 RESPONSE_OUTBOX_KIND = "response_action"
+
+
+async def _matched(
+    db: AsyncSession,
+    tenant_id: UUID,
+    *,
+    rule_groups: set[str],
+    rule_ids: set[str],
+    identifiers: frozenset[str],
+    status: str,
+) -> list[ResponsePlaybook]:
+    """Matching playbooks of a governing status — file registry PLUS DB-authored
+    rows (#49 phase 2), deduped by id (an authored row overrides a file row of the
+    same id) and priority-sorted. DB-authored playbooks let a tenant activate a
+    response playbook live, since the dispatcher runs on L1 with DB access."""
+    from soctalk.response.authoring import load_dispatchable
+
+    by_id: dict[str, ResponsePlaybook] = {
+        pb.id: pb
+        for pb in match_response_playbooks(
+            rule_groups=rule_groups, rule_ids=rule_ids,
+            tenant_identifiers=identifiers, status=status,
+        )
+    }
+    for pb in await load_dispatchable(db, tenant_id=tenant_id, status=status):
+        if playbook_matches(
+            pb, rule_groups=rule_groups, rule_ids=rule_ids,
+            tenant_identifiers=identifiers,
+        ):
+            by_id[pb.id] = pb
+    return sorted(by_id.values(), key=lambda p: p.priority)
 
 SHADOW_AUDIT_ACTION = "ir.response_playbook.shadow"
 DISPATCH_AUDIT_ACTION = "ir.response_playbook.dispatched"
@@ -111,9 +142,9 @@ async def dispatch_for_completed_run(
 
     # Shadow first, and regardless of the kill switch: the audit trail of what
     # WOULD have fired is exactly what an operator reads before activating.
-    for pb in match_response_playbooks(
-        rule_groups=rule_groups, rule_ids=rule_ids,
-        tenant_identifiers=identifiers, status="shadow",
+    for pb in await _matched(
+        db, tenant_id, rule_groups=rule_groups, rule_ids=rule_ids,
+        identifiers=identifiers, status="shadow",
     ):
         selected = _selected_actions(pb, effective_disposition, ctx)
         if not selected:
@@ -136,9 +167,9 @@ async def dispatch_for_completed_run(
             )[:4096],
         )
 
-    active = match_response_playbooks(
-        rule_groups=rule_groups, rule_ids=rule_ids,
-        tenant_identifiers=identifiers, status="active",
+    active = await _matched(
+        db, tenant_id, rule_groups=rule_groups, rule_ids=rule_ids,
+        identifiers=identifiers, status="active",
     )
     if not active:
         return 0

@@ -40,6 +40,16 @@ from soctalk.core.tenancy.permissions import (
     Permission,
     has_permission,
 )
+from soctalk.response.authoring import (
+    ResponsePlaybookConflictError,
+    ResponsePlaybookValidationError,
+)
+from soctalk.response.authoring import get_authored as get_authored_response
+from soctalk.response.authoring import list_authored as list_authored_response
+from soctalk.response.authoring import retire_authored as retire_authored_response
+from soctalk.response.authoring import set_authored_status as set_authored_status_response
+from soctalk.response.authoring import to_yaml as to_yaml_response
+from soctalk.response.authoring import upsert_authored as upsert_authored_response
 from soctalk.triage_policy.authoring import (
     TriagePolicyConflictError,
     TriagePolicyValidationError,
@@ -65,6 +75,9 @@ triage_policies_router = APIRouter(
     prefix="/api/mssp/triage-policies", tags=["ir-triage-policies"]
 )
 authored_playbooks_router = APIRouter(prefix="/api/mssp/tenants", tags=["ir-playbooks"])
+authored_response_playbooks_router = APIRouter(
+    prefix="/api/mssp/tenants", tags=["ir-response-playbooks"]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1515,9 +1528,232 @@ async def export_authored_triage_policy_route(
     }
 
 
+# ---------------------------------------------------------------------------
+# Authored response playbooks (DB-backed, live activation) — #49 phase 2
+#
+# Unlike triage policies (which export to YAML for a worker rollout), an authored
+# response playbook activates LIVE: the response dispatcher runs on L1 with DB
+# access, so 'active' rows govern immediately with no reconcile/rollout.
+# ---------------------------------------------------------------------------
+
+
+class AuthoredResponsePlaybookRequest(BaseModel):
+    definition: dict[str, Any]
+    status: str = "shadow"  # draft | shadow (create/edit lifecycle; activate via route)
+
+
+class AuthoredResponsePlaybookDTO(BaseModel):
+    response_playbook_id: str
+    revision: int
+    status: str
+    definition: dict[str, Any]
+
+
+def _authored_response_dto(row: dict[str, Any]) -> AuthoredResponsePlaybookDTO:
+    return AuthoredResponsePlaybookDTO(
+        response_playbook_id=row["response_playbook_id"],
+        revision=row["revision"],
+        status=row["status"],
+        definition=dict(row["definition"]),
+    )
+
+
+@authored_response_playbooks_router.get(
+    "/{tenant_id}/response-playbooks",
+    response_model=list[AuthoredResponsePlaybookDTO],
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
+)
+async def list_authored_response_playbooks_route(
+    tenant_id: UUID, request: Request
+) -> list[AuthoredResponsePlaybookDTO]:
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        rows = await list_authored_response(db, tenant_id=tenant_id)
+    return [_authored_response_dto(r) for r in rows]
+
+
+@authored_response_playbooks_router.post(
+    "/{tenant_id}/response-playbooks",
+    response_model=AuthoredResponsePlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def create_authored_response_playbook_route(
+    tenant_id: UUID, payload: AuthoredResponsePlaybookRequest, request: Request
+) -> AuthoredResponsePlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        pid = str(payload.definition.get("id") or "")
+        if pid and await get_authored_response(
+            db, tenant_id=tenant_id, response_playbook_id=pid
+        ) is not None:
+            raise HTTPException(409, f"response playbook '{pid}' already exists — use PUT")
+        try:
+            result = await upsert_authored_response(
+                db, tenant_id=tenant_id, definition=payload.definition,
+                status=payload.status, created_by=identity.user_id,
+            )
+        except ResponsePlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except ResponsePlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        await log_audit(
+            db, action="ir.response_playbook.authored_created",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="response_playbook",
+            resource_id=result["response_playbook_id"],
+        )
+    return _authored_response_dto(result)
+
+
+@authored_response_playbooks_router.put(
+    "/{tenant_id}/response-playbooks/{response_playbook_id}",
+    response_model=AuthoredResponsePlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def update_authored_response_playbook_route(
+    tenant_id: UUID, response_playbook_id: str,
+    payload: AuthoredResponsePlaybookRequest, request: Request,
+) -> AuthoredResponsePlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    if str(payload.definition.get("id") or "") != response_playbook_id:
+        raise HTTPException(400, "definition.id must match the id in the path")
+    async with tenant_context(db, tenant_id):
+        prior = await get_authored_response(
+            db, tenant_id=tenant_id, response_playbook_id=response_playbook_id
+        )
+        if prior is None:
+            raise HTTPException(404, "response playbook not found")
+        try:
+            result = await upsert_authored_response(
+                db, tenant_id=tenant_id, definition=payload.definition,
+                status=payload.status, created_by=identity.user_id,
+            )
+            # Editing an ACTIVE playbook keeps it governing on the new definition
+            # (it re-validates on the activate call) — no silent drop to shadow.
+            if prior["status"] == "active":
+                result = await set_authored_status_response(
+                    db, tenant_id=tenant_id, response_playbook_id=response_playbook_id,
+                    status="active", created_by=identity.user_id,
+                )
+        except ResponsePlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except ResponsePlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        await log_audit(
+            db, action="ir.response_playbook.authored_updated",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="response_playbook",
+            resource_id=response_playbook_id, notes=f"revision {result['revision']}",
+        )
+    return _authored_response_dto(result)
+
+
+@authored_response_playbooks_router.delete(
+    "/{tenant_id}/response-playbooks/{response_playbook_id}",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def retire_authored_response_playbook_route(
+    tenant_id: UUID, response_playbook_id: str, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        ok = await retire_authored_response(
+            db, tenant_id=tenant_id, response_playbook_id=response_playbook_id,
+            retired_by=identity.user_id,
+        )
+        if not ok:
+            raise HTTPException(404, "response playbook not found or already retired")
+        await log_audit(
+            db, action="ir.response_playbook.authored_retired",
+            actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="response_playbook",
+            resource_id=response_playbook_id,
+        )
+    return {"ok": "retired"}
+
+
+async def _set_response_status(
+    tenant_id: UUID, response_playbook_id: str, status: str, request: Request, action: str
+) -> AuthoredResponsePlaybookDTO:
+    db = _db(request)
+    identity = current_identity(request)
+    async with tenant_context(db, tenant_id):
+        try:
+            result = await set_authored_status_response(
+                db, tenant_id=tenant_id, response_playbook_id=response_playbook_id,
+                status=status, created_by=identity.user_id,
+            )
+        except ResponsePlaybookValidationError as exc:
+            raise HTTPException(400, str(exc))
+        except ResponsePlaybookConflictError as exc:
+            raise HTTPException(409, str(exc))
+        if result is None:
+            raise HTTPException(404, "response playbook not found or retired")
+        await log_audit(
+            db, action=action, actor_principal="analyst", actor_id=str(identity.user_id),
+            tenant_id=tenant_id, resource_type="response_playbook",
+            resource_id=response_playbook_id,
+        )
+    return _authored_response_dto(result)
+
+
+@authored_response_playbooks_router.post(
+    "/{tenant_id}/response-playbooks/{response_playbook_id}/activate",
+    response_model=AuthoredResponsePlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def activate_authored_response_playbook_route(
+    tenant_id: UUID, response_playbook_id: str, request: Request
+) -> AuthoredResponsePlaybookDTO:
+    """Activate so it governs response dispatch LIVE (no rollout — L1 reads the DB)."""
+    return await _set_response_status(
+        tenant_id, response_playbook_id, "active", request,
+        "ir.response_playbook.authored_activated",
+    )
+
+
+@authored_response_playbooks_router.post(
+    "/{tenant_id}/response-playbooks/{response_playbook_id}/deactivate",
+    response_model=AuthoredResponsePlaybookDTO,
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))],
+)
+async def deactivate_authored_response_playbook_route(
+    tenant_id: UUID, response_playbook_id: str, request: Request
+) -> AuthoredResponsePlaybookDTO:
+    """Deactivate back to shadow — stops dispatching immediately (audited only)."""
+    return await _set_response_status(
+        tenant_id, response_playbook_id, "shadow", request,
+        "ir.response_playbook.authored_deactivated",
+    )
+
+
+@authored_response_playbooks_router.get(
+    "/{tenant_id}/response-playbooks/{response_playbook_id}/export",
+    dependencies=[Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN, Role.MSSP_MANAGER, Role.ANALYST))],
+)
+async def export_authored_response_playbook_route(
+    tenant_id: UUID, response_playbook_id: str, request: Request
+) -> dict[str, str]:
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        row = await get_authored_response(
+            db, tenant_id=tenant_id, response_playbook_id=response_playbook_id
+        )
+    if row is None:
+        raise HTTPException(404, "response playbook not found")
+    return {
+        "response_playbook_id": response_playbook_id,
+        "yaml": to_yaml_response(dict(row["definition"])),
+    }
+
+
 __all__ = [
     "alerts_router",
     "authored_playbooks_router",
+    "authored_response_playbooks_router",
     "engagements_router",
     "integrations_router",
     "mssp_investigations_router",

@@ -50,7 +50,10 @@ async def _write_execution_log(
     # investigation_id/run_id carry FKs; the ledger must stay writable for a
     # MALFORMED payload too (that is exactly when it matters most), so scrub
     # dangling references to NULL via subselects instead of aborting the
-    # transaction on an FK violation.
+    # transaction on an FK violation. The subselects are TENANT-SCOPED (Codex ph2
+    # Medium-3): a rejected cross-tenant payload must not cross-link this tenant's
+    # ledger row to another tenant's investigation/run — a foreign id resolves to
+    # NULL, not a real FK.
     await db.execute(
         text(
             """
@@ -60,9 +63,9 @@ async def _write_execution_log(
             VALUES
               (:id, :t,
                (SELECT id FROM investigations
-                 WHERE id = CAST(NULLIF(:c, '') AS UUID)),
+                 WHERE id = CAST(NULLIF(:c, '') AS UUID) AND tenant_id = :t),
                (SELECT id FROM investigation_runs
-                 WHERE id = CAST(NULLIF(:r, '') AS UUID)),
+                 WHERE id = CAST(NULLIF(:r, '') AS UUID) AND tenant_id = :t),
                'executor', 'response_executor',
                :k, 'response_action', :sid, CAST(:after AS JSONB),
                CAST(:versions AS JSONB))
@@ -270,43 +273,78 @@ async def handle_execute_proposal(
         return await _handle_execute_proposal(db, outbox_row)
 
     proposal_id = UUID(str(payload["proposal_id"]))
-    row = (
-        await db.execute(
-            text(
-                "SELECT tenant_id, investigation_id, params, status "
-                "FROM proposals WHERE id = :id"
-            ),
-            {"id": str(proposal_id)},
-        )
-    ).mappings().first()
-    if row is None:
-        raise RuntimeError(f"proposal {proposal_id} vanished before execution")
-    tenant_id = UUID(str(row["tenant_id"]))
-    response_payload = dict(row["params"] or {})
-    envelope = response_payload.get("envelope") or {}
+    row_tenant = UUID(str(outbox_row["tenant_id"]))
 
-    async with tenant_context(db, tenant_id):
-        # Re-verify the stored payload still agrees with the proposal's own
-        # tenant/investigation before any side effect — the approval happened
-        # earlier and elsewhere; do not trust the payload blindly at execute.
-        if str(envelope.get("tenant_id")) != str(tenant_id) or str(
-            envelope.get("investigation_id")
-        ) != str(row["investigation_id"]):
+    async with tenant_context(db, row_tenant):
+        # ATOMIC CLAIM (Codex ph2 High-1): transition approved -> executing in one
+        # guarded UPDATE. This is the SINGLE point that authorizes execution and it
+        # simultaneously enforces every guard the payload cannot be trusted for:
+        #   - status='approved'      — a non-approved (proposed/rejected/failed) or
+        #                              already-executed/executing proposal claims
+        #                              nothing (redelivery after success is a no-op,
+        #                              never a second POST);
+        #   - tenant_id=:row_tenant  — the BYPASSRLS executor must not run tenant B's
+        #                              proposal off tenant A's outbox row;
+        #   - action_type=:at        — the outbox payload's action must match the
+        #                              proposal's own stored action.
+        claimed = (
+            await db.execute(
+                text(
+                    "UPDATE proposals SET status = 'executing', updated_at = now() "
+                    "WHERE id = :id AND tenant_id = :t AND action_type = :at "
+                    "  AND status = 'approved' "
+                    "RETURNING investigation_id, params"
+                ),
+                {"id": str(proposal_id), "t": str(row_tenant), "at": action_type},
+            )
+        ).mappings().first()
+        if claimed is None:
+            # Not claimable: already executed (a benign re-drain), or a
+            # non-approved / cross-tenant / action-mismatched row. Never execute,
+            # never retry — succeed the outbox so it stops, and ledger why.
+            cur = (
+                await db.execute(
+                    text("SELECT status FROM proposals WHERE id = :id AND tenant_id = :t"),
+                    {"id": str(proposal_id), "t": str(row_tenant)},
+                )
+            ).scalar_one_or_none()
             await _write_execution_log(
-                db, tenant_id=tenant_id, payload=response_payload,
+                db, tenant_id=row_tenant, payload=payload,
+                status="skipped", external_ref=None,
+                error=f"proposal not claimable (status={cur!r})",
+            )
+            return f"noop:{cur or 'missing'}"
+
+        investigation_id = claimed["investigation_id"]
+        response_payload = dict(claimed["params"] or {})
+        envelope = response_payload.get("envelope") or {}
+        # Belt-and-suspenders: the stored payload's envelope must still agree with
+        # the proposal's own tenant/investigation before any side effect.
+        if str(envelope.get("tenant_id")) != str(row_tenant) or str(
+            envelope.get("investigation_id")
+        ) != str(investigation_id):
+            await db.execute(
+                text("UPDATE proposals SET status = 'failed', updated_at = now() "
+                     "WHERE id = :id"),
+                {"id": str(proposal_id)},
+            )
+            await _write_execution_log(
+                db, tenant_id=row_tenant, payload=response_payload,
                 status="rejected", external_ref=None,
                 error="approved proposal payload does not match proposal scope",
             )
             raise ValueError("execute_proposal payload/proposal scope mismatch")
 
-        await db.execute(
-            text("UPDATE proposals SET status = 'executing', updated_at = now() "
-                 "WHERE id = :id"),
-            {"id": str(proposal_id)},
-        )
+        # NOTE (Codex ph2 High-2): the external POST + this transaction commit are
+        # not one atomic unit — a process death after the endpoint accepted the
+        # action but before commit rolls the proposal back to 'executing' and the
+        # outbox row stays claimable, so the action may be re-delivered. This is
+        # at-least-once: external endpoints MUST dedupe on the X-SocTalk-Delivery
+        # header (the stable per-action key). The atomic claim above still
+        # guarantees a committed 'executed' proposal is never re-POSTed.
         try:
             async with db.begin_nested():
-                external_ref = await spec.handler(db, tenant_id, response_payload)
+                external_ref = await spec.handler(db, row_tenant, response_payload)
         except Exception as exc:  # noqa: BLE001 — ledger + proposal both, then re-raise
             await db.execute(
                 text("UPDATE proposals SET status = 'failed', updated_at = now() "
@@ -314,11 +352,11 @@ async def handle_execute_proposal(
                 {"id": str(proposal_id)},
             )
             await _write_execution_log(
-                db, tenant_id=tenant_id, payload=response_payload,
+                db, tenant_id=row_tenant, payload=response_payload,
                 status="failed", external_ref=None, error=str(exc),
             )
             await _emit_proposal_event(
-                db, tenant_id, envelope, proposal_id, action_type,
+                db, row_tenant, envelope, proposal_id, action_type,
                 kind="failed", detail={"error": str(exc)[:500]},
             )
             raise
@@ -328,11 +366,11 @@ async def handle_execute_proposal(
             {"id": str(proposal_id)},
         )
         await _write_execution_log(
-            db, tenant_id=tenant_id, payload=response_payload,
+            db, tenant_id=row_tenant, payload=response_payload,
             status="executed", external_ref=external_ref, error=None,
         )
         await _emit_proposal_event(
-            db, tenant_id, envelope, proposal_id, action_type,
+            db, row_tenant, envelope, proposal_id, action_type,
             kind="executed", detail={"external_ref": external_ref},
         )
         return external_ref
