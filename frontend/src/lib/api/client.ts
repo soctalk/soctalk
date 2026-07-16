@@ -825,6 +825,12 @@ export const api = {
 			request<{ revoked: string }>(
 				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/revoke`,
 				{ method: 'POST', body: JSON.stringify({ reason }) }
+			),
+		// Promote (approve) / refuse (reject) a pending tenant-asserted fact.
+		review: (tenantId: string, factId: string, decision: 'approve' | 'reject', reason?: string) =>
+			request<{ reviewed: string; status: string }>(
+				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/review`,
+				{ method: 'POST', body: JSON.stringify({ decision, reason: reason ?? null }) }
 			)
 	},
 	// Tenant self-service engagements — the caller's own tenant (from the token). Declaring a
@@ -875,6 +881,8 @@ export interface AuthorizationFact {
 	track: 'account' | 'fim';
 	source_type: string;
 	trust: number;
+	/** review lifecycle for tenant-asserted facts: pending | approved | rejected */
+	review_status?: string;
 	scope?: { subject?: string; target?: string; action?: string };
 	valid_from?: string | null;
 	valid_until?: string | null;

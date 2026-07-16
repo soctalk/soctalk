@@ -239,6 +239,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     app.include_router(adapter_routes.router)
     app.include_router(authorization_routes.router)
     app.include_router(authorization_routes.mssp_router)
+    app.include_router(authorization_routes.tenant_authz_router)
     app.include_router(worker_runs_routes.router)
     # Slug-driven tenant landing: /api/public/tenant-by-slug/{slug} —
     # no auth, returns identity + branding so the canonical UI can

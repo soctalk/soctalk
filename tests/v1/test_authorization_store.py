@@ -178,3 +178,58 @@ async def test_resubmit_upserts_and_unrevokes(mssp_session: AsyncSession, seed_t
     await store_fact(mssp_session, tenant_id=a.tenant_id, fact=fact)
     await mssp_session.commit()
     assert "G1" in {f.id for f in await list_current_facts(mssp_session, tenant_id=a.tenant_id)}
+
+
+@integration
+async def test_review_gate_hides_pending_tenant_facts(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """The load-bearing safety gate (Phase 2b): a tenant-asserted fact lands 'pending' and is
+    INVISIBLE to the engine's read (list_current_facts) until an MSSP analyst approves it; a
+    rejected one never becomes visible."""
+    from soctalk.core.ir.authorization_store import list_facts_with_status, set_review_status
+    from soctalk.models.authorization import AuthorizationSourceType, TRUST_TIER
+
+    a, _ = seed_two_tenants
+
+    def _tenant_grant(fid: str, target: str) -> GrantFact:
+        g = GrantFact(
+            id=fid, track=AuthorizationTrack.ACCOUNT, grant_class=GrantClass.STANDING_BASELINE,
+            scope=FactScope(subject="svc", target=target, action="sudo-exec"),
+        )
+        g.source_type = AuthorizationSourceType.TENANT_ASSERTED
+        g.trust = TRUST_TIER[g.source_type]
+        return g
+
+    # pending: invisible to the engine, visible to the review queue
+    await store_fact(
+        mssp_session, tenant_id=a.tenant_id, fact=_tenant_grant("ta:x", "db-01"),
+        review_status="pending",
+    )
+    await mssp_session.commit()
+    assert await list_current_facts(mssp_session, tenant_id=a.tenant_id) == []
+    pending = await list_facts_with_status(
+        mssp_session, tenant_id=a.tenant_id, statuses=("pending",)
+    )
+    assert len(pending) == 1 and pending[0]["review_status"] == "pending"
+    assert pending[0]["source_type"] == "tenant_asserted" and pending[0]["trust"] == 20
+
+    # reject -> still invisible to the engine
+    assert await set_review_status(
+        mssp_session, tenant_id=a.tenant_id, fact_id="ta:x", status="rejected", reviewed_by=None
+    )
+    await mssp_session.commit()
+    assert await list_current_facts(mssp_session, tenant_id=a.tenant_id) == []
+
+    # a second pending fact, approved -> now live to the engine
+    await store_fact(
+        mssp_session, tenant_id=a.tenant_id, fact=_tenant_grant("ta:y", "db-02"),
+        review_status="pending",
+    )
+    await mssp_session.commit()
+    assert await set_review_status(
+        mssp_session, tenant_id=a.tenant_id, fact_id="ta:y", status="approved", reviewed_by=None
+    )
+    await mssp_session.commit()
+    live = await list_current_facts(mssp_session, tenant_id=a.tenant_id)
+    assert [f.id for f in live] == ["ta:y"]

@@ -41,8 +41,14 @@ class AuthorizationTrack(str, Enum):
 
 
 class AuthorizationSourceType(str, Enum):
-    """Who asserted a fact. Trust ordering: connector > system > analyst > telemetry."""
+    """Who asserted a fact. Trust ordering: connector > system > analyst > telemetry > tenant.
 
+    ``tenant_asserted`` is the lowest tier: a customer asserting authorization about their own
+    environment. It is NOT trusted to influence triage until an MSSP analyst reviews it — that
+    gate is enforced by the store's ``review_status`` column, not by trust alone.
+    """
+
+    TENANT_ASSERTED = "tenant_asserted"
     TELEMETRY_ROUTINE = "telemetry_routine"
     ANALYST_ASSERTED = "analyst_asserted"
     SYSTEM_ASSERTED = "system_asserted"
@@ -96,6 +102,7 @@ class CompromiseStatus(str, Enum):
 # Default trust per source tier. Only the ordering is load-bearing; entity facts sourced
 # from an inventory/CMDB record carry that record's own reliability instead.
 TRUST_TIER: dict[AuthorizationSourceType, int] = {
+    AuthorizationSourceType.TENANT_ASSERTED: 20,
     AuthorizationSourceType.TELEMETRY_ROUTINE: 40,
     AuthorizationSourceType.ANALYST_ASSERTED: 60,
     AuthorizationSourceType.SYSTEM_ASSERTED: 80,

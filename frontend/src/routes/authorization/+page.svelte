@@ -84,6 +84,16 @@
 			error = e instanceof Error ? e.message : 'Revoke failed';
 		}
 	}
+
+	async function review(f: AuthorizationFact, decision: 'approve' | 'reject') {
+		if (!tenantId) return;
+		try {
+			await api.authorizationFacts.review(tenantId, f.id, decision);
+			await load(tenantId);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Review failed';
+		}
+	}
 </script>
 
 <div class="p-6">
@@ -125,6 +135,7 @@
 						<th class="px-3 py-2">Scope</th>
 						<th class="px-3 py-2">Source</th>
 						<th class="px-3 py-2">Trust</th>
+						<th class="px-3 py-2">Review</th>
 						<th class="px-3 py-2">Valid until</th>
 						<th class="px-3 py-2">Provenance</th>
 						<th class="px-3 py-2"></th>
@@ -139,12 +150,30 @@
 							<td class="px-3 py-2">{scopeText(f)}</td>
 							<td class="px-3 py-2">{f.source_type}</td>
 							<td class="px-3 py-2">{f.trust}</td>
+							<td class="px-3 py-2">
+								{#if f.review_status === 'pending'}
+									<span class="text-xs px-2 py-0.5 rounded bg-amber-200 text-amber-900"
+										>awaiting review</span
+									>
+								{:else if f.review_status === 'rejected'}
+									<span class="text-xs px-2 py-0.5 rounded bg-red-200 text-red-900">rejected</span>
+								{:else}
+									<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">approved</span>
+								{/if}
+							</td>
 							<td class="px-3 py-2">{f.valid_until ?? '—'}</td>
 							<td class="px-3 py-2 text-gray-500">
 								{f.provenance?.api_caller ?? f.created_by ?? '—'}
 							</td>
-							<td class="px-3 py-2 text-right">
-								{#if $canManageAuthorization}
+							<td class="px-3 py-2 text-right whitespace-nowrap">
+								{#if $canManageAuthorization && f.review_status === 'pending'}
+									<button class="text-green-700 hover:underline mr-2" on:click={() => review(f, 'approve')}>
+										Approve
+									</button>
+									<button class="text-red-600 hover:underline" on:click={() => review(f, 'reject')}>
+										Reject
+									</button>
+								{:else if $canManageAuthorization}
 									<button class="text-red-600 hover:underline" on:click={() => revoke(f)}>
 										Revoke
 									</button>

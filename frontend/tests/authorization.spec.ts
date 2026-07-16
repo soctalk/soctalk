@@ -90,6 +90,42 @@ test.describe('Authorization facts page', () => {
 		await expect(page.getByText('No authorization facts for this tenant yet.')).toBeVisible();
 	});
 
+	test('manager reviews (approves) a pending tenant-asserted fact', async ({ page }) => {
+		let status = 'pending';
+		await page.route('**/api/mssp/tenants/*/authorization/facts/*/review', async (route) => {
+			status = 'approved';
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ reviewed: 'TA-1', status: 'approved' })
+			});
+		});
+		await page.route('**/api/mssp/tenants/*/authorization/facts', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					facts: [
+						{
+							id: 'TA-1',
+							kind: 'grant',
+							track: 'account',
+							source_type: 'tenant_asserted',
+							trust: 20,
+							review_status: status,
+							scope: { subject: 'svc', target: 'db-01', action: 'sudo' }
+						}
+					]
+				})
+			});
+		});
+		await page.goto('/authorization');
+		await expect(page.getByText('awaiting review')).toBeVisible();
+		await page.getByRole('button', { name: 'Approve' }).click();
+		await expect(page.getByText('approved')).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+	});
+
 	test('a view-only role sees the facts but no write controls (RBAC)', async ({ page }) => {
 		// override the identity: an operator who can VIEW but lacks manage_authorization_facts
 		await page.route('**/auth/me', (r) =>

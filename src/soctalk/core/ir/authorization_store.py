@@ -43,11 +43,19 @@ def _columns(fact: AuthorizationFact) -> dict[str, Any]:
     }
 
 
-async def store_fact(db: AsyncSession, *, tenant_id: UUID, fact: AuthorizationFact) -> None:
+async def store_fact(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    fact: AuthorizationFact,
+    review_status: str = "approved",
+) -> None:
     """Insert a typed fact, or replace an existing one with the same (tenant, fact_id).
 
     A re-submit un-revokes the row (the latest assertion wins) — revocation is a distinct,
-    explicit action via ``revoke_fact``.
+    explicit action via ``revoke_fact``. ``review_status`` defaults to ``approved`` so every
+    connector/analyst/adapter writer is unchanged; only the tenant-assert path passes
+    ``pending`` (and must use a server-generated id so it cannot collide with an existing fact).
     """
     c = _columns(fact)
     await db.execute(
@@ -56,11 +64,11 @@ async def store_fact(db: AsyncSession, *, tenant_id: UUID, fact: AuthorizationFa
             INSERT INTO authorization_facts
               (id, tenant_id, fact_id, kind, track, source_type, trust,
                subject, target, action, entity_name, valid_from, valid_until,
-               superseded_by, created_by, body)
+               superseded_by, created_by, body, review_status)
             VALUES
               (:id, :t, :fid, :kind, :track, :st, :trust,
                :subject, :target, :action, :entity, :vf, :vu,
-               :sup, :cby, CAST(:body AS jsonb))
+               :sup, :cby, CAST(:body AS jsonb), :rs)
             ON CONFLICT (tenant_id, fact_id) DO UPDATE SET
                 kind = EXCLUDED.kind,
                 track = EXCLUDED.track,
@@ -74,6 +82,7 @@ async def store_fact(db: AsyncSession, *, tenant_id: UUID, fact: AuthorizationFa
                 valid_until = EXCLUDED.valid_until,
                 superseded_by = EXCLUDED.superseded_by,
                 body = EXCLUDED.body,
+                review_status = EXCLUDED.review_status,
                 revoked_at = NULL,
                 revoked_by = NULL,
                 revoke_reason = NULL
@@ -96,22 +105,73 @@ async def store_fact(db: AsyncSession, *, tenant_id: UUID, fact: AuthorizationFa
             "sup": c["superseded_by"],
             "cby": c["created_by"],
             "body": json.dumps(c["body"]),
+            "rs": review_status,
         },
     )
 
 
 async def list_current_facts(db: AsyncSession, *, tenant_id: UUID) -> list[AuthorizationFact]:
-    """All non-revoked, non-superseded facts for the tenant, as typed facts."""
+    """The facts the reasoning engine may use: non-revoked, non-superseded, AND approved.
+
+    This is the load-bearing safety gate for tenant-asserted facts — a ``pending`` (unreviewed)
+    or ``rejected`` tenant assertion is stored and visible to the tenant + the analyst review
+    queue, but NEVER reaches the engine here, so it cannot influence triage or a close until an
+    MSSP analyst approves it.
+    """
     rows = (
         await db.execute(
             text(
                 "SELECT body FROM authorization_facts "
-                "WHERE tenant_id = :t AND revoked_at IS NULL AND superseded_by IS NULL"
+                "WHERE tenant_id = :t AND revoked_at IS NULL AND superseded_by IS NULL "
+                "  AND review_status = 'approved'"
             ),
             {"t": str(tenant_id)},
         )
     ).mappings().all()
     return [AUTHORIZATION_FACT_ADAPTER.validate_python(r["body"]) for r in rows]
+
+
+async def list_facts_with_status(
+    db: AsyncSession, *, tenant_id: UUID, statuses: tuple[str, ...] | None = None
+) -> list[dict[str, Any]]:
+    """Facts with their review lifecycle, for the tenant's own view + the MSSP review queue.
+    ``statuses=None`` returns all live facts; pass e.g. ``('pending',)`` for the review queue."""
+    q = (
+        "SELECT fact_id, kind, track, source_type, trust, review_status, created_by, "
+        "       created_at, body "
+        "FROM authorization_facts "
+        "WHERE tenant_id = :t AND revoked_at IS NULL AND superseded_by IS NULL"
+    )
+    params: dict[str, Any] = {"t": str(tenant_id)}
+    if statuses:
+        q += " AND review_status = ANY(:statuses)"
+        params["statuses"] = list(statuses)
+    rows = (await db.execute(text(q), params)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def set_review_status(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    fact_id: str,
+    status: str,
+    reviewed_by: UUID | None,
+) -> bool:
+    """MSSP analyst promotes/rejects a tenant-asserted fact. Only a currently-pending fact can
+    be reviewed (approve/reject); returns True if one was updated. Approving makes it live to
+    the engine; rejecting keeps it invisible."""
+    if status not in ("approved", "rejected"):
+        raise ValueError("review status must be 'approved' or 'rejected'")
+    res = await db.execute(
+        text(
+            "UPDATE authorization_facts SET review_status = :s "
+            "WHERE tenant_id = :t AND fact_id = :f AND review_status = 'pending' "
+            "  AND revoked_at IS NULL"
+        ),
+        {"t": str(tenant_id), "f": fact_id, "s": status},
+    )
+    return (res.rowcount or 0) > 0
 
 
 async def get_fact(db: AsyncSession, *, tenant_id: UUID, fact_id: str) -> dict[str, Any] | None:

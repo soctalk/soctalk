@@ -88,3 +88,66 @@ async def test_revoke_missing_is_404(mssp_session: AsyncSession, seed_two_tenant
     with pytest.raises(HTTPException) as exc:
         await mssp_revoke_fact(a.tenant_id, "nope", RevokeRequest(reason=None), req)
     assert exc.value.status_code == 404
+
+
+def _tenant_req(session, tenant_id, user_id, role="tenant_manager"):
+    from soctalk.core.tenancy.models import UserType
+
+    identity = {
+        "user_id": str(user_id), "email": f"{role}@acme.example",
+        "user_type": UserType.TENANT.value, "role": role,
+        "tenant_id": str(tenant_id), "current_tenant": None,
+    }
+
+    class _R:
+        class state:  # noqa: N801
+            user_identity = identity
+            db = session
+
+    return _R()
+
+
+async def test_tenant_assert_is_pending_until_mssp_approves(
+    mssp_session: AsyncSession, seed_two_tenants
+):
+    """End-to-end review gate: a tenant asserts a fact → it lands 'pending', server-stamped
+    (tenant_asserted, trust 20, server-namespaced id) and INVISIBLE to the engine read, until an
+    MSSP analyst approves it — then it becomes live."""
+    from soctalk.core.api.authorization import (
+        FactCreateRequest,
+        ReviewRequest,
+        mssp_review_fact,
+        tenant_assert_fact,
+    )
+    from soctalk.core.ir.authorization_store import list_current_facts
+
+    a, _ = seed_two_tenants
+    treq = _tenant_req(mssp_session, a.tenant_id, a.admin_user_id)
+
+    # tenant asserts (client id is ignored; server namespaces + stamps)
+    out = await tenant_assert_fact(
+        FactCreateRequest(fact={**_GRANT, "id": "CHG-1"}), treq
+    )
+    await mssp_session.commit()
+    fid = out["stored"]
+    assert out["review_status"] == "pending"
+    assert fid.startswith("tenant:")  # server-namespaced — cannot collide with an existing fact
+
+    # invisible to the engine while pending
+    assert await list_current_facts(mssp_session, tenant_id=a.tenant_id) == []
+
+    # MSSP analyst approves → now live to the engine
+    mreq = _req(mssp_session, a.admin_user_id)
+    res = await mssp_review_fact(a.tenant_id, fid, ReviewRequest(decision="approve"), mreq)
+    await mssp_session.commit()
+    assert res["status"] == "approved"
+    live = await list_current_facts(mssp_session, tenant_id=a.tenant_id)
+    assert [f.id for f in live] == [fid]
+
+    # a second pending assertion that gets rejected never goes live
+    out2 = await tenant_assert_fact(FactCreateRequest(fact={**_GRANT, "id": "CHG-2"}), treq)
+    await mssp_session.commit()
+    await mssp_review_fact(a.tenant_id, out2["stored"], ReviewRequest(decision="reject"), mreq)
+    await mssp_session.commit()
+    live_ids = {f.id for f in await list_current_facts(mssp_session, tenant_id=a.tenant_id)}
+    assert out2["stored"] not in live_ids

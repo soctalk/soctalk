@@ -58,6 +58,8 @@ class Permission(str, Enum):
     TENANT_MANAGE_LLM = "tenant_manage_llm"
     TENANT_VIEW_ENGAGEMENTS = "tenant_view_engagements"
     TENANT_AUTHORIZE_ENGAGEMENT = "tenant_authorize_engagement"  # declare/revoke own engagements
+    TENANT_VIEW_AUTHORIZATION_FACTS = "tenant_view_authorization_facts"
+    TENANT_ASSERT_AUTHORIZATION_FACTS = "tenant_assert_authorization_facts"  # assert (→ pending review)
 
 
 # ---------------------------------------------------------------------------
@@ -106,10 +108,15 @@ _TENANT_VIEWER: frozenset[Permission] = frozenset(
         Permission.TENANT_VIEW_INVESTIGATIONS,
         Permission.TENANT_VIEW_BRANDING,
         Permission.TENANT_VIEW_ENGAGEMENTS,
+        Permission.TENANT_VIEW_AUTHORIZATION_FACTS,
     }
 )
-# tenant SOC manager authorizes their own risk (e.g. declares an authorized pentest engagement)
-_TENANT_MANAGER: frozenset[Permission] = _TENANT_VIEWER | {Permission.TENANT_AUTHORIZE_ENGAGEMENT}
+# tenant SOC manager authorizes their own risk: declares pentest engagements and asserts
+# authorization facts (which land 'pending' for MSSP review before they can influence triage).
+_TENANT_MANAGER: frozenset[Permission] = _TENANT_VIEWER | {
+    Permission.TENANT_AUTHORIZE_ENGAGEMENT,
+    Permission.TENANT_ASSERT_AUTHORIZATION_FACTS,
+}
 # tenant admin adds self-service config
 _TENANT_ADMIN: frozenset[Permission] = _TENANT_MANAGER | {Permission.TENANT_MANAGE_LLM}
 

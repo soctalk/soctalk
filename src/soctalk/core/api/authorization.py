@@ -13,7 +13,7 @@ to CONNECTOR_VERIFIED (trust 100) instead of SYSTEM_ASSERTED (trust 80).
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.ir.authorization_store import (
     list_current_facts,
+    list_facts_with_status,
     revoke_fact,
+    set_review_status,
     store_fact,
 )
 from soctalk.core.tenancy.auth import current_identity
@@ -155,10 +157,13 @@ class FactCreateRequest(BaseModel):
     dependencies=[Depends(require_permission(Permission.VIEW_AUTHORIZATION_FACTS, audience="mssp"))],
 )
 async def mssp_list_facts(tenant_id: UUID, request: Request) -> dict:
+    """All live facts for the tenant with their review lifecycle, so an analyst can see (and
+    approve/reject) tenant-asserted facts that are still ``pending`` and not yet influencing
+    triage."""
     db = _db(request)
     async with tenant_context(db, tenant_id):
-        facts = await list_current_facts(db, tenant_id=tenant_id)
-    return {"facts": [AUTHORIZATION_FACT_ADAPTER.dump_python(f, mode="json") for f in facts]}
+        rows = await list_facts_with_status(db, tenant_id=tenant_id)
+    return {"facts": [{**r["body"], "review_status": r["review_status"]} for r in rows]}
 
 
 @mssp_router.post(
@@ -201,3 +206,98 @@ async def mssp_revoke_fact(
         raise HTTPException(404, "no live fact with that id")
     logger.info("authorization_fact_revoked", tenant_id=str(tenant_id), fact_id=fact_id)
     return {"revoked": fact_id}
+
+
+class ReviewRequest(BaseModel):
+    decision: str  # approve | reject
+    reason: str | None = None
+
+
+@mssp_router.post(
+    "/{tenant_id}/authorization/facts/{fact_id}/review",
+    dependencies=[Depends(require_permission(Permission.MANAGE_AUTHORIZATION_FACTS, audience="mssp"))],
+)
+async def mssp_review_fact(
+    tenant_id: UUID, fact_id: str, payload: ReviewRequest, request: Request
+) -> dict:
+    """Analyst promotes (approve) or refuses (reject) a pending tenant-asserted fact. Approving
+    makes it live to the reasoning engine; rejecting keeps it invisible."""
+    if payload.decision not in ("approve", "reject"):
+        raise HTTPException(400, "decision must be 'approve' or 'reject'")
+    status = "approved" if payload.decision == "approve" else "rejected"
+    identity = current_identity(request)
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        ok = await set_review_status(
+            db, tenant_id=tenant_id, fact_id=fact_id, status=status,
+            reviewed_by=identity.user_id,
+        )
+    if not ok:
+        raise HTTPException(404, "no pending fact with that id")
+    logger.info(
+        "authorization_fact_reviewed", tenant_id=str(tenant_id), fact_id=fact_id, status=status
+    )
+    return {"reviewed": fact_id, "status": status}
+
+
+# ---------------------------------------------------------------------------
+# Tenant self-service authorization facts — a tenant asserts facts about ITS OWN org. They
+# land 'pending' at the lowest trust and are invisible to triage until an MSSP analyst approves
+# them (the review gate above). tenant_id + source_type + trust + review_status + id are all
+# stamped server-side; nothing sensitive is trusted from the payload. The id is server-generated
+# and namespaced so a tenant can never collide with (and overwrite) an existing fact.
+# ---------------------------------------------------------------------------
+
+tenant_authz_router = APIRouter(prefix="/api/tenant/authorization", tags=["tenant-authz-facts"])
+
+
+def _caller_tenant(request: Request) -> UUID:
+    identity = current_identity(request)
+    tid = identity.tenant_id
+    if not tid:
+        raise HTTPException(400, "tenant_id missing from token")
+    return tid if isinstance(tid, UUID) else UUID(str(tid))
+
+
+@tenant_authz_router.get(
+    "/facts",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_VIEW_AUTHORIZATION_FACTS, audience="tenant"))
+    ],
+)
+async def tenant_list_own_facts(request: Request) -> dict:
+    """The tenant's own facts, each with its review status (so they see what's pending)."""
+    tid = _caller_tenant(request)
+    db = _db(request)
+    async with tenant_context(db, tid):
+        rows = await list_facts_with_status(db, tenant_id=tid)
+    return {"facts": [{**r["body"], "review_status": r["review_status"]} for r in rows]}
+
+
+@tenant_authz_router.post(
+    "/facts",
+    dependencies=[
+        Depends(require_permission(Permission.TENANT_ASSERT_AUTHORIZATION_FACTS, audience="tenant"))
+    ],
+)
+async def tenant_assert_fact(payload: FactCreateRequest, request: Request) -> dict:
+    """A tenant asserts a fact about its own environment. It lands 'pending' (invisible to
+    triage) until an MSSP analyst approves it. All trust-bearing fields are stamped here."""
+    tid = _caller_tenant(request)
+    identity = current_identity(request)
+    try:
+        fact = AUTHORIZATION_FACT_ADAPTER.validate_python(payload.fact)
+    except ValidationError as exc:
+        raise HTTPException(422, exc.errors()[0].get("msg", "invalid fact")) from exc
+    # Server-stamp everything — never trust the payload for these. The id is server-generated
+    # and namespaced so a tenant assertion can never collide with / overwrite an existing fact.
+    fact.id = f"tenant:{tid}:{uuid4()}"
+    fact.source_type = AuthorizationSourceType.TENANT_ASSERTED
+    fact.trust = TRUST_TIER[fact.source_type]
+    fact.tenant = str(tid)
+    fact.created_by = str(identity.user_id)
+    db = _db(request)
+    async with tenant_context(db, tid):
+        await store_fact(db, tenant_id=tid, fact=fact, review_status="pending")
+    logger.info("authorization_fact_tenant_asserted", tenant_id=str(tid), fact_id=fact.id)
+    return {"stored": fact.id, "review_status": "pending"}
