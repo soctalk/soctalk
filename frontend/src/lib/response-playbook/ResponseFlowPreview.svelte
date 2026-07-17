@@ -192,12 +192,23 @@
 <style>
 	.rp-flow :global(.svelte-flow) {
 		background: transparent;
+		/* Edge labels default to a white background (only darkened under a
+		   dark-mode class we don't set); pin the vars to theme surfaces so the
+		   "approve" label reads on the dark canvas instead of a white box. */
+		--xy-edge-label-background-color-default: rgb(var(--color-surface-700) / 1);
+		--xy-edge-label-color-default: rgb(var(--color-surface-100) / 1);
 	}
+	.rp-flow :global(.svelte-flow__edge-label) {
+		background: rgb(var(--color-surface-700) / 1);
+		color: rgb(var(--color-surface-100) / 1);
+		font-size: 9px;
+	}
+	/* Legacy SVG edge-label path, in case a build renders it that way. */
 	.rp-flow :global(.svelte-flow__edge-textbg) {
-		fill: rgb(var(--color-surface-800) / 1);
+		fill: rgb(var(--color-surface-700) / 1);
 	}
 	.rp-flow :global(.svelte-flow__edge-text) {
-		fill: rgb(var(--color-surface-200) / 1);
+		fill: rgb(var(--color-surface-100) / 1);
 		font-size: 9px;
 	}
 	.rp-flow :global(.svelte-flow__attribution) {
