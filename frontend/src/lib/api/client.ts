@@ -915,8 +915,26 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ email, role, display_name })
 			}),
+		update: (userId: string, patch: { role?: string; active?: boolean; display_name?: string }) =>
+			request<TenantUser>(`/tenant/users/${userId}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			}),
 		deactivate: (userId: string) =>
 			request<{ deactivated: string }>(`/tenant/users/${userId}/deactivate`, { method: 'POST' })
+	},
+	// MSSP-side staff user management (mssp_admin / platform_admin, MANAGE_USERS).
+	msspUsers: {
+		list: () => request<TenantUser[]>('/mssp/users'),
+		create: (email: string, role: string, display_name?: string) =>
+			request<TenantUserCreated>('/mssp/users', {
+				method: 'POST',
+				body: JSON.stringify({ email, role, display_name })
+			}),
+		update: (userId: string, patch: { role?: string; active?: boolean; display_name?: string }) =>
+			request<TenantUser>(`/mssp/users/${userId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+		deactivate: (userId: string) =>
+			request<{ deactivated: string }>(`/mssp/users/${userId}/deactivate`, { method: 'POST' })
 	}
 	};
 

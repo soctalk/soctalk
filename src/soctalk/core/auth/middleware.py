@@ -100,6 +100,13 @@ async def internal_session_middleware(
         response = await call_next(request)
         response.delete_cookie(SESSION_COOKIE_NAME)
         return response
+    if not user.active:
+        # Deactivated after the session was minted. The role is reloaded from the row every
+        # request, but ``active`` must be enforced here too: deactivation revokes sessions, and
+        # this check closes the race where a session is created concurrently with a deactivate.
+        response = await call_next(request)
+        response.delete_cookie(SESSION_COOKIE_NAME)
+        return response
 
     # For tenant users, current_tenant defaults to their home tenant.
     # For MSSP users, current_tenant is whatever was captured at login
