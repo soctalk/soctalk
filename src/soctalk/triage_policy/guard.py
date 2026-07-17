@@ -24,7 +24,8 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from soctalk.authorization.engine import (
-    evaluate_authorization,
+    AuthzClass,
+    derive_authz_class,
     resolved_entity,
     select_facts,
 )
@@ -33,10 +34,7 @@ from soctalk.models.authorization import (
     AuthorizationContext,
     AuthorizationEntityKind,
     AuthorizationTrack,
-    GrantFact,
 )
-
-AuthzClass = Literal["covered", "contradicted", "absent"]
 
 GUARDRAIL_AUTHZ_CONTRADICTED = "authorization_contradicted_close"
 GUARDRAIL_IOC_OVER_CLOSE = "ioc_over_close"
@@ -75,37 +73,6 @@ class GuardResult(BaseModel):
     @property
     def overridden(self) -> bool:
         return any(o.effect == "override" for o in self.overrides)
-
-
-def derive_authz_class(
-    context: AuthorizationContext | None,
-) -> tuple[AuthzClass, AuthorizationComponents | None]:
-    """Classify the engine components into the guard vocabulary (issue #43):
-
-    - ``covered``: ``in_scope`` and ``policy_allowed`` hold — a single record fully
-      covers the activity and no prohibition forbids it.
-    - ``contradicted``: records are present but do not cover (grants exist, none
-      covers) OR a high-priority prohibition forbids the action.
-    - ``absent``: no record of the right kind exists — never treated as approval,
-      but also not the guard's edge to force.
-
-    "Records present" is judged over the facts the ENGINE would select (same track,
-    same tenant, not superseded) — a wrong-track, foreign-tenant, or revoked grant is
-    not a record on file for this activity and must not manufacture a contradiction.
-    """
-    if context is None:
-        return "absent", None
-    selected = select_facts(context.facts, context.activity.track, context.tenant)
-    if not selected:
-        return "absent", None
-    components = evaluate_authorization(context.activity, context.facts, context.tenant)
-    if not components.policy_allowed:
-        return "contradicted", components
-    if components.in_scope:
-        return "covered", components
-    if any(isinstance(f, GrantFact) for f in selected):
-        return "contradicted", components
-    return "absent", components
 
 
 def asset_data_classification(context: AuthorizationContext | None) -> str | None:

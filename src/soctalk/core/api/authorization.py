@@ -13,6 +13,7 @@ to CONNECTOR_VERIFIED (trust 100) instead of SYSTEM_ASSERTED (trust 80).
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID, uuid4
 
 import structlog
@@ -20,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.authorization.question import grant_from_activity
 from soctalk.core.ir.authorization_store import (
     list_current_facts,
     list_facts_with_status,
@@ -34,6 +36,7 @@ from soctalk.core.tenancy.permissions import Permission
 from soctalk.models.authorization import (
     AUTHORIZATION_FACT_ADAPTER,
     TRUST_TIER,
+    AuthorizationActivity,
     AuthorizationSourceType,
 )
 
@@ -238,6 +241,96 @@ async def mssp_review_fact(
         "authorization_fact_reviewed", tenant_id=str(tenant_id), fact_id=fact_id, status=status
     )
     return {"reviewed": fact_id, "status": status}
+
+
+class AnswerRequest(BaseModel):
+    review_id: UUID
+    investigation_id: UUID
+    valid_until: datetime
+    reason: str | None = None
+
+
+@mssp_router.post(
+    "/{tenant_id}/authorization/answer",
+    dependencies=[Depends(require_permission(Permission.MANAGE_AUTHORIZATION_FACTS, audience="mssp"))],
+)
+async def mssp_answer_authorization(
+    tenant_id: UUID, payload: AnswerRequest, request: Request
+) -> dict:
+    """Answer an ASK_AUTHORIZATION question affirmatively (epic M3): mint a durable
+    ``analyst_asserted`` grant covering the asked activity — the explicit "save reusable
+    authorization" action — and resolve the originating review as a benign close.
+
+    The answer is bound to a GENUINE pending question: the review must exist within the caller's
+    tenant scope, still be ``pending``, match the given investigation, and actually carry an
+    ``authorization_question`` in its enrichments. The grant's scope is taken from that question,
+    never from the client, so a caller can neither mint an arbitrary grant nor widen the scope.
+
+    This is the ONLY path that mints a fact from the review surface (guardrail §4: memory is never
+    auto-learned from a plain close/reject). A negative answer is the existing review
+    approve/escalate action and mints nothing. The grant is a ``change_ticket`` so ``valid_until``
+    (the mandatory expiry) is enforced by the model; the floor still vetoes any future IOC or
+    active incident, so a saved authorization can never suppress a malicious recurrence.
+    """
+    from soctalk.core.api.legacy_stubs import _resolve_pending_review
+
+    identity = current_identity(request)
+    # Bind to a real pending authorization question before minting anything (HIGH-1/HIGH-2).
+    review = await _resolve_pending_review(str(payload.review_id), identity)
+    if review["status"] != "pending":
+        raise HTTPException(409, f"review already {review['status']}")
+    if review.get("tenant_id") and str(review["tenant_id"]) != str(tenant_id):
+        raise HTTPException(403, "review belongs to a different tenant")
+    if str(review["investigation_id"]) != str(payload.investigation_id):
+        raise HTTPException(400, "investigation_id does not match the review")
+    q = (review.get("enrichments") or {}).get("authorization_question")
+    if not q or not isinstance(q, dict):
+        raise HTTPException(400, "review carries no authorization question")
+    try:
+        activity = AuthorizationActivity.model_validate(q["activity"])
+    except (ValidationError, KeyError, TypeError) as exc:
+        raise HTTPException(400, "malformed authorization question") from exc
+    # Expiry must be usefully in the future relative to the activity (MED-4).
+    if payload.valid_until <= activity.time:
+        raise HTTPException(400, "valid_until must be after the activity time")
+
+    # Scope comes from the question, not the client — exact activity tuple only (MED-3).
+    fact = grant_from_activity(
+        activity, valid_until=payload.valid_until, created_by=str(identity.user_id)
+    )
+    fact.tenant = str(tenant_id)
+    fact.provenance.review_id = str(payload.review_id)
+    fact.provenance.investigation_id = str(payload.investigation_id)
+    db = _db(request)
+    async with tenant_context(db, tenant_id):
+        await store_fact(db, tenant_id=tenant_id, fact=fact)
+    logger.info(
+        "authorization_answered",
+        tenant_id=str(tenant_id),
+        fact_id=fact.id,
+        review_id=str(payload.review_id),
+    )
+
+    # Resolve the (pre-validated, pending) review as a benign close in the review machinery's
+    # own session pool. Fact-minting above is the M3 side effect; this only flips the row.
+    from soctalk.core.ir.review_events import record_human_decision_received
+    from soctalk.core.tenancy.db import get_mssp_sessionmaker
+
+    sm = get_mssp_sessionmaker()
+    async with sm() as s:
+        await record_human_decision_received(
+            s,
+            review_id=payload.review_id,
+            investigation_id=payload.investigation_id,
+            tenant_id=tenant_id,
+            decision="reject",  # authorized => benign => close as false positive
+            feedback=payload.reason or "authorized — reusable authorization saved",
+            reviewer=identity.email,
+        )
+        await s.commit()
+    review_resolved = True
+
+    return {"stored": fact.id, "review_resolved": review_resolved}
 
 
 # ---------------------------------------------------------------------------

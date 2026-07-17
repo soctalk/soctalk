@@ -239,6 +239,7 @@ export interface HourlyMetricsResponse {
 export interface PendingReview {
 	id: string;
 	investigation_id: string;
+	tenant_id: string | null;
 	status: string;
 	title: string;
 	description: string;
@@ -877,6 +878,22 @@ export const api = {
 			request<{ reviewed: string; status: string }>(
 				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/review`,
 				{ method: 'POST', body: JSON.stringify({ decision, reason: reason ?? null }) }
+			),
+		// Answer an ASK_AUTHORIZATION question affirmatively (epic M3): the answer is bound to a
+		// genuine pending review; the server takes the activity/scope from the question, not the
+		// client, mints a durable analyst_asserted grant, and resolves the review as benign.
+		answer: (
+			tenantId: string,
+			body: {
+				review_id: string;
+				investigation_id: string;
+				valid_until: string;
+				reason?: string | null;
+			}
+		) =>
+			request<{ stored: string; review_resolved: boolean }>(
+				`/mssp/tenants/${tenantId}/authorization/answer`,
+				{ method: 'POST', body: JSON.stringify(body) }
 			)
 	},
 	// Tenant self-service engagements — the caller's own tenant (from the token). Declaring a

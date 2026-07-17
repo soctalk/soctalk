@@ -402,9 +402,10 @@ async def authorization_context_for_alert(
     host = _first_value(scope, "host")
     if not host:
         return None
+    # A tenant with no facts yields an empty-facts context (true absence): the engine reports
+    # ``absent`` so the M3 ASK_AUTHORIZATION detector can fire on the bootstrap case. Only a
+    # missing host (no extractable activity) falls back to the fixture/claim path.
     facts = await list_current_facts(db, tenant_id=tenant_id)
-    if not facts:
-        return None
     activity = AuthorizationActivity(
         track=AuthorizationTrack.ACCOUNT,
         host=host,
