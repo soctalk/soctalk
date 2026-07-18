@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import signal
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -215,8 +216,8 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
     ``signature``, ``asset_ids``, ``initial_iocs``); we project that into
     the dict shape the supervisor's prompt-builder expects.
     """
-    from datetime import datetime, timezone
     import re as _re
+    from datetime import datetime
 
     def _project(alert: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
         rule = alert.get("rule") or {}
@@ -253,7 +254,7 @@ def _build_state(claim: dict[str, Any]) -> dict[str, Any]:
                 "rule_groups": alert.get("rule_groups") or [],
                 "entities": alert.get("entities") or [],
                 "source": {"agent_id": asset_name, "agent_name": asset_name},
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "raw_data": alert,
                 "observables": obs,
             },
@@ -497,7 +498,7 @@ async def _heartbeat_loop(
                 stop.wait(), timeout=HEARTBEAT_INTERVAL_SECONDS
             )
             return
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         try:
             await client.post(
@@ -621,6 +622,24 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
             "to": "escalate",
         }
 
+    # ASK_AUTHORIZATION (epic M3): when the verdict is needs_more_info specifically because
+    # authorization is absent (not contradicted, not malicious), attach a typed question so the
+    # review UI can offer the analyst a one-click "save reusable authorization" answer. Keyed on
+    # the RAW verdict decision (needs_more_info), not the effective escalate disposition. Rides
+    # the same enrichments blob into pending_reviews; the detector reuses the canonical
+    # derive_authz_class so it can never disagree with the floor about absent vs contradicted.
+    if status == "completed":
+        from soctalk.authorization.question import authorization_question_for
+
+        _v = final.get("verdict") or {}
+        _raw_decision = _v.get("decision")
+        _raw_decision = str(getattr(_raw_decision, "value", _raw_decision) or "").lower()
+        _question = authorization_question_for(
+            final.get("investigation") or {}, disposition=_raw_decision
+        )
+        if _question is not None:
+            enrichments_payload["authorization_question"] = _question.model_dump(mode="json")
+
     complete_payload = {
         "lease_id": lease_id,
         "status": status,
@@ -724,7 +743,7 @@ async def main() -> int:
             if claim is None:
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=idle_sleep)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 continue
 

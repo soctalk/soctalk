@@ -15,6 +15,7 @@
 		isMsspUser,
 		canChat,
 		canManageTenantUsers,
+		canManageUsers,
 		canViewTenantAuthorization,
 		tenantContext,
 		detectSlugFromHostname
@@ -37,6 +38,7 @@
 	// time) — never evaluate messages at module scope (#52: the locale is set
 	// by the layout load, after this module initializes).
 	const navItems = [
+
 		{ href: '/', label: m.nav_dashboard, icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
 		{ href: '/tenants', label: m.nav_tenants, icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4', mssp: true },
 		{ href: '/investigations', label: m.nav_investigations, icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
@@ -47,9 +49,11 @@
 		{ href: '/triage-policies', label: m.nav_triage_policies, icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253', msspUser: true },
 		{ href: '/response-playbooks', label: m.nav_response_playbooks, icon: 'M13 10V3L4 14h7v7l9-11h-7z', msspUser: true },
 		{ href: '/authorization', label: m.nav_authorization, icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', msspUser: true },
+		{ href: '/mssp-users', label: m.nav_staff_users, icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', manageUsers: true },
 		{ href: '/my-authorization', label: m.nav_authorization, icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', tenantAuthz: true },
 		{ href: '/tenant-users', label: m.nav_users, icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', tenantUsers: true },
 		{ href: '/settings', label: m.nav_settings, icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' }
+
 	];
 
 	// All path comparisons run on the locale-STRIPPED pathname (#52): the URL
@@ -159,6 +163,7 @@
 		// the capability; MSSP operators don't get the tenant nav item.
 		if (item.tenantAuthz && !$canViewTenantAuthorization) return false;
 		if (item.tenantUsers && !$canManageTenantUsers) return false;
+		if (item.manageUsers && !$canManageUsers) return false;
 		return true;
 	});
 </script>

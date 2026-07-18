@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TenantUser, type TenantUserCreated } from '$lib/api/client';
-	import { canManageTenantUsers } from '$lib/stores';
+	import { canManageUsers } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
 
 	let users: TenantUser[] = [];
@@ -11,30 +11,33 @@
 	let saving = false;
 
 	let email = '';
-	let role = 'tenant_analyst';
+	let role = 'analyst';
 	let displayName = '';
 	let justCreated: TenantUserCreated | null = null;
 
-	// `label`/`short` hold message FUNCTIONS (called at render time) — never
-	// evaluate messages at module scope (#52).
+	// Codes only; short label + full description resolve via messages at call time (#52).
 	const ROLES = [
-		{ value: 'tenant_analyst', label: m.adm_role_analyst_full, short: m.adm_role_analyst },
-		{ value: 'tenant_manager', label: m.adm_role_manager_full, short: m.adm_role_manager },
-		{ value: 'customer_viewer', label: m.adm_role_viewer_full, short: m.adm_role_viewer },
-		{ value: 'tenant_admin', label: m.adm_role_admin_full, short: m.adm_role_admin }
-	];
+		{ value: 'analyst', label: m.su_role_analyst, desc: m.su_role_analyst_desc },
+		{ value: 'mssp_manager', label: m.su_role_manager, desc: m.su_role_manager_desc },
+		{ value: 'mssp_admin', label: m.su_role_admin, desc: m.su_role_admin_desc },
+		{ value: 'platform_admin', label: m.su_role_platform, desc: m.su_role_platform_desc }
+	] as const;
 
 	function roleLabel(v: string): string {
-		return ROLES.find((r) => r.value === v)?.short() ?? v;
+		return ROLES.find((r) => r.value === v)?.label() ?? v;
+	}
+	function roleOption(v: string): string {
+		const r = ROLES.find((x) => x.value === v);
+		return r ? `${r.label()} — ${r.desc()}` : v;
 	}
 
 	async function load() {
 		loading = true;
 		error = null;
 		try {
-			users = await api.tenantUsers.list();
+			users = await api.msspUsers.list();
 		} catch (e) {
-			error = e instanceof Error ? e.message : m.adm_users_load_failed();
+			error = e instanceof Error ? e.message : m.su_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -42,7 +45,7 @@
 
 	function openForm() {
 		email = '';
-		role = 'tenant_analyst';
+		role = 'analyst';
 		displayName = '';
 		justCreated = null;
 		formOpen = true;
@@ -52,24 +55,13 @@
 		saving = true;
 		error = null;
 		try {
-			justCreated = await api.tenantUsers.create(email, role, displayName || undefined);
+			justCreated = await api.msspUsers.create(email, role, displayName || undefined);
 			formOpen = false;
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : m.adm_user_create_failed();
+			error = e instanceof Error ? e.message : m.su_create_failed();
 		} finally {
 			saving = false;
-		}
-	}
-
-	async function deactivate(u: TenantUser) {
-		if (!confirm(m.adm_deactivate_confirm({ email: u.email }))) return;
-		error = null;
-		try {
-			await api.tenantUsers.deactivate(u.id);
-			await load();
-		} catch (e) {
-			error = e instanceof Error ? e.message : m.adm_deactivate_failed();
 		}
 	}
 
@@ -77,21 +69,25 @@
 		if (newRole === u.role) return;
 		error = null;
 		try {
-			await api.tenantUsers.update(u.id, { role: newRole });
+			await api.msspUsers.update(u.id, { role: newRole });
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to change role';
-			await load();
+			error = e instanceof Error ? e.message : m.su_role_change_failed();
+			await load(); // reset the select
 		}
 	}
 
-	async function reactivate(u: TenantUser) {
+	async function setActive(u: TenantUser, active: boolean) {
 		error = null;
 		try {
-			await api.tenantUsers.update(u.id, { active: true });
+			if (active) await api.msspUsers.update(u.id, { active: true });
+			else {
+				if (!confirm(m.su_confirm_deactivate({ email: u.email }))) return;
+				await api.msspUsers.deactivate(u.id);
+			}
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to reactivate';
+			error = e instanceof Error ? e.message : m.su_update_failed();
 		}
 	}
 
@@ -101,17 +97,15 @@
 <div class="max-w-4xl mx-auto p-4 space-y-4">
 	<div class="flex items-start justify-between gap-4">
 		<div>
-			<h1 class="text-2xl font-semibold">{m.nav_users()}</h1>
-			<p class="text-sm opacity-70 mt-1 max-w-2xl">
-				{m.adm_users_intro()}
-			</p>
+			<h1 class="text-2xl font-semibold">{m.su_title()}</h1>
+			<p class="text-sm opacity-70 mt-1 max-w-2xl">{m.su_intro()}</p>
 		</div>
-		{#if $canManageTenantUsers}
+		{#if $canManageUsers}
 			<button
 				class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 shrink-0"
 				on:click={openForm}
 			>
-				{m.adm_add_user()}
+				{m.su_add_user()}
 			</button>
 		{/if}
 	</div>
@@ -123,41 +117,35 @@
 	{#if justCreated}
 		<div class="rounded border border-green-300 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-sm space-y-1">
 			<p class="font-medium text-green-800 dark:text-green-300">
-				{m.adm_user_created({ email: justCreated.email, role: roleLabel(justCreated.role) })}
+				{m.su_created({ email: justCreated.email, role: roleLabel(justCreated.role) })}
 			</p>
-			<p>
-				{m.adm_temp_password_hint()}
-			</p>
+			<p>{m.su_temp_password_hint()}</p>
 			<code class="block bg-white dark:bg-gray-800 border rounded px-2 py-1 font-mono">{justCreated.temporary_password}</code>
 		</div>
 	{/if}
 
-	{#if formOpen && $canManageTenantUsers}
+	{#if formOpen && $canManageUsers}
 		<div class="card p-4 rounded border space-y-3">
 			<label class="block text-sm">
-				<span class="opacity-70">{m.adm_field_email()}</span>
-				<input class="w-full border rounded p-2 mt-1" type="email" bind:value={email} placeholder="analyst@your-org.com" />
+				<span class="opacity-70">{m.su_email()}</span>
+				<input class="w-full border rounded p-2 mt-1" type="email" bind:value={email} placeholder="analyst@your-mssp.example" />
 			</label>
 			<label class="block text-sm">
-				<span class="opacity-70">{m.adm_field_display_name()}</span>
-				<input class="w-full border rounded p-2 mt-1" bind:value={displayName} placeholder="Jordan Rivera" />
+				<span class="opacity-70">{m.su_display_name()}</span>
+				<input class="w-full border rounded p-2 mt-1" bind:value={displayName} />
 			</label>
 			<label class="block text-sm">
-				<span class="opacity-70">{m.adm_field_role()}</span>
+				<span class="opacity-70">{m.su_role()}</span>
 				<select class="w-full border rounded p-2 mt-1" bind:value={role}>
 					{#each ROLES as r (r.value)}
-						<option value={r.value}>{r.label()}</option>
+						<option value={r.value}>{roleOption(r.value)}</option>
 					{/each}
 				</select>
 			</label>
 			<div class="flex justify-end gap-2">
 				<button class="px-3 py-2 text-sm" on:click={() => (formOpen = false)}>{m.common_cancel()}</button>
-				<button
-					class="px-3 py-2 rounded bg-blue-600 text-white text-sm"
-					on:click={create}
-					disabled={saving || !email}
-				>
-					{saving ? m.adm_creating() : m.adm_create_user()}
+				<button class="px-3 py-2 rounded bg-blue-600 text-white text-sm" on:click={create} disabled={saving || !email}>
+					{saving ? m.su_creating() : m.su_create_user()}
 				</button>
 			</div>
 		</div>
@@ -166,16 +154,16 @@
 	{#if loading}
 		<div class="opacity-60 text-sm">{m.common_loading()}</div>
 	{:else if users.length === 0}
-		<div class="opacity-60 text-sm">{m.adm_users_empty()}</div>
+		<div class="opacity-60 text-sm">{m.su_empty()}</div>
 	{:else}
 		<div class="overflow-x-auto border rounded">
 			<table class="min-w-full text-sm">
 				<thead class="bg-gray-50 dark:bg-gray-800 text-left text-gray-600 dark:text-gray-300">
 					<tr>
-						<th class="px-3 py-2">{m.adm_field_email()}</th>
-						<th class="px-3 py-2">{m.adm_field_name()}</th>
-						<th class="px-3 py-2">{m.adm_field_role()}</th>
-						<th class="px-3 py-2">{m.adm_th_status()}</th>
+						<th class="px-3 py-2">{m.su_email()}</th>
+						<th class="px-3 py-2">{m.su_name()}</th>
+						<th class="px-3 py-2">{m.su_role()}</th>
+						<th class="px-3 py-2">{m.su_status()}</th>
 						<th class="px-3 py-2"></th>
 					</tr>
 				</thead>
@@ -185,7 +173,7 @@
 							<td class="px-3 py-2 font-mono">{u.email}</td>
 							<td class="px-3 py-2">{u.display_name ?? '—'}</td>
 							<td class="px-3 py-2">
-								{#if $canManageTenantUsers && u.active}
+								{#if $canManageUsers && u.active}
 									<select class="border rounded p-1 text-xs" value={u.role} on:change={(e) => changeRole(u, e.currentTarget.value)}>
 										{#each ROLES as r (r.value)}
 											<option value={r.value}>{roleLabel(r.value)}</option>
@@ -197,21 +185,17 @@
 							</td>
 							<td class="px-3 py-2">
 								{#if u.active}
-									<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">{m.adm_status_active()}</span>
+									<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">{m.su_active()}</span>
 								{:else}
-									<span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700">{m.adm_status_deactivated()}</span>
+									<span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700">{m.su_deactivated()}</span>
 								{/if}
 							</td>
 							<td class="px-3 py-2 text-right">
-								{#if $canManageTenantUsers}
+								{#if $canManageUsers}
 									{#if u.active}
-										<button class="text-xs text-red-700 hover:underline" on:click={() => deactivate(u)}>
-											{m.adm_deactivate()}
-										</button>
+										<button class="text-xs text-red-700 hover:underline" on:click={() => setActive(u, false)}>{m.adm_deactivate()}</button>
 									{:else}
-										<button class="text-xs text-blue-700 hover:underline" on:click={() => reactivate(u)}>
-											{m.adm_reactivate()}
-										</button>
+										<button class="text-xs text-blue-700 hover:underline" on:click={() => setActive(u, true)}>{m.adm_reactivate()}</button>
 									{/if}
 								{/if}
 							</td>

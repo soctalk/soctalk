@@ -27,11 +27,13 @@ from collections.abc import Sequence
 from datetime import datetime, time
 from enum import Enum
 from fnmatch import fnmatch
+from typing import Literal
 
 from soctalk.models.authorization import (
     AccountKind,
     AuthorizationActivity,
     AuthorizationComponents,
+    AuthorizationContext,
     AuthorizationEntityKind,
     AuthorizationFact,
     AuthorizationTrack,
@@ -558,3 +560,41 @@ def find_covering_grants(
         or _acct_baseline_covers(g, activity)
         or _acct_routine(g, activity)
     ]
+
+
+AuthzClass = Literal["covered", "contradicted", "absent"]
+
+
+def derive_authz_class(
+    context: AuthorizationContext | None,
+) -> tuple[AuthzClass, AuthorizationComponents | None]:
+    """Classify the engine components into the guard vocabulary (issue #43):
+
+    - ``covered``: ``in_scope`` and ``policy_allowed`` hold — a single record fully
+      covers the activity and no prohibition forbids it.
+    - ``contradicted``: records are present but do not cover (grants exist, none
+      covers) OR a high-priority prohibition forbids the action.
+    - ``absent``: no record of the right kind exists — never treated as approval,
+      but also not the guard's edge to force.
+
+    "Records present" is judged over the facts the ENGINE would select (same track,
+    same tenant, not superseded) — a wrong-track, foreign-tenant, or revoked grant is
+    not a record on file for this activity and must not manufacture a contradiction.
+
+    Single canonical classifier: the safety floor, the triage-policy guard, and the M3
+    ASK_AUTHORIZATION detector all read it, so they can never disagree about whether
+    authorization is absent (ask/needs-info) or contradicted (escalate).
+    """
+    if context is None:
+        return "absent", None
+    selected = select_facts(context.facts, context.activity.track, context.tenant)
+    if not selected:
+        return "absent", None
+    components = evaluate_authorization(context.activity, context.facts, context.tenant)
+    if not components.policy_allowed:
+        return "contradicted", components
+    if components.in_scope:
+        return "covered", components
+    if any(isinstance(f, GrantFact) for f in selected):
+        return "contradicted", components
+    return "absent", components

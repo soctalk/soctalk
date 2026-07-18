@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, computed_field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.api.user_admin import assert_target_not_protected
 from soctalk.core.auth.rate_limit import default_limiter
 from soctalk.core.auth.service import (
     AccountLocked,
@@ -29,8 +30,9 @@ from soctalk.core.tenancy.auth import (
     SESSION_COOKIE_NAME,
     current_identity,
 )
-from soctalk.core.tenancy.decorators import require_role
-from soctalk.core.tenancy.models import Role, User
+from soctalk.core.tenancy.decorators import require_permission
+from soctalk.core.tenancy.models import User
+from soctalk.core.tenancy.permissions import Permission
 
 logger = structlog.get_logger()
 
@@ -422,9 +424,7 @@ async def password_change(
 @auth_admin_router.post(
     "/{user_id}/password/reset",
     response_model=AdminResetResponse,
-    dependencies=[
-        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
-    ],
+    dependencies=[Depends(require_permission(Permission.MANAGE_USERS, audience="mssp"))],
 )
 async def admin_reset(
     user_id: UUID, request: Request
@@ -432,8 +432,17 @@ async def admin_reset(
     identity = current_identity(request)
     db = _db(request)
 
-    # Load the acting user row to pass into the service.
     from sqlalchemy import select
+
+    # This MSSP endpoint resets MSSP staff passwords only; tenant users are managed on the tenant
+    # side. Restrict the target explicitly (defence over the BYPASSRLS session), and protect an
+    # existing platform_admin from being reset by a non-platform_admin.
+    target = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if target is None or target.user_type != "mssp" or target.tenant_id is not None:
+        raise HTTPException(404, "user not found")
+    assert_target_not_protected(identity, target.role)
 
     actor = (
         await db.execute(select(User).where(User.id == identity.user_id))

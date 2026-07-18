@@ -239,6 +239,7 @@ export interface HourlyMetricsResponse {
 export interface PendingReview {
 	id: string;
 	investigation_id: string;
+	tenant_id: string | null;
 	status: string;
 	title: string;
 	description: string;
@@ -877,6 +878,22 @@ export const api = {
 			request<{ reviewed: string; status: string }>(
 				`/mssp/tenants/${tenantId}/authorization/facts/${encodeURIComponent(factId)}/review`,
 				{ method: 'POST', body: JSON.stringify({ decision, reason: reason ?? null }) }
+			),
+		// Answer an ASK_AUTHORIZATION question affirmatively (epic M3): the answer is bound to a
+		// genuine pending review; the server takes the activity/scope from the question, not the
+		// client, mints a durable analyst_asserted grant, and resolves the review as benign.
+		answer: (
+			tenantId: string,
+			body: {
+				review_id: string;
+				investigation_id: string;
+				valid_until: string;
+				reason?: string | null;
+			}
+		) =>
+			request<{ stored: string; review_resolved: boolean }>(
+				`/mssp/tenants/${tenantId}/authorization/answer`,
+				{ method: 'POST', body: JSON.stringify(body) }
 			)
 	},
 	// Tenant self-service engagements — the caller's own tenant (from the token). Declaring a
@@ -915,8 +932,26 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ email, role, display_name })
 			}),
+		update: (userId: string, patch: { role?: string; active?: boolean; display_name?: string }) =>
+			request<TenantUser>(`/tenant/users/${userId}`, {
+				method: 'PATCH',
+				body: JSON.stringify(patch)
+			}),
 		deactivate: (userId: string) =>
 			request<{ deactivated: string }>(`/tenant/users/${userId}/deactivate`, { method: 'POST' })
+	},
+	// MSSP-side staff user management (mssp_admin / platform_admin, MANAGE_USERS).
+	msspUsers: {
+		list: () => request<TenantUser[]>('/mssp/users'),
+		create: (email: string, role: string, display_name?: string) =>
+			request<TenantUserCreated>('/mssp/users', {
+				method: 'POST',
+				body: JSON.stringify({ email, role, display_name })
+			}),
+		update: (userId: string, patch: { role?: string; active?: boolean; display_name?: string }) =>
+			request<TenantUser>(`/mssp/users/${userId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+		deactivate: (userId: string) =>
+			request<{ deactivated: string }>(`/mssp/users/${userId}/deactivate`, { method: 'POST' })
 	}
 	};
 

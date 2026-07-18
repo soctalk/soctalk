@@ -97,6 +97,7 @@ class AuditAction(str, Enum):
     TENANT_CONFIG_UPDATE = "tenant.config.update"
     TENANT_BRANDING_UPDATE = "tenant.branding.update"
     USER_CREATE = "user.create"
+    USER_UPDATE = "user.update"
     USER_DELETE = "user.delete"
     USER_IMPERSONATE = "user.impersonate"
     SETTINGS_UPDATE = "settings.update"

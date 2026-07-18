@@ -114,6 +114,7 @@ async def events_stream(request: Request) -> StreamingResponse:
 class _PendingReviewItem(BaseModel):
     id: str
     investigation_id: str
+    tenant_id: str | None = None
     status: str
     title: str
     description: str
@@ -174,7 +175,7 @@ async def review_pending(
     )
     list_sql = text(
         """
-        SELECT id::text, investigation_id::text, status, title, description,
+        SELECT id::text, investigation_id::text, tenant_id::text, status, title, description,
                max_severity, alert_count, malicious_count, suspicious_count,
                clean_count, findings, enrichments, misp_context, ai_decision,
                ai_confidence, ai_assessment, ai_recommendation,
@@ -243,6 +244,7 @@ def _pending_review_item(r: "Any") -> _PendingReviewItem:
     return _PendingReviewItem(
         id=r["id"],
         investigation_id=r["investigation_id"],
+        tenant_id=r["tenant_id"],
         status=r["status"],
         title=r["title"],
         description=r["description"],
@@ -268,7 +270,7 @@ def _pending_review_item(r: "Any") -> _PendingReviewItem:
 
 # Full-row projection used by both the list and single-fetch endpoints.
 _REVIEW_COLUMNS = """
-    id::text, investigation_id::text, status, title, description,
+    id::text, investigation_id::text, tenant_id::text, status, title, description,
     max_severity, alert_count, malicious_count, suspicious_count,
     clean_count, findings, enrichments, misp_context, ai_decision,
     ai_confidence, ai_assessment, ai_recommendation,
@@ -352,7 +354,7 @@ async def _resolve_pending_review(
     )
 
     sql = (
-        "SELECT id::text, investigation_id::text, tenant_id::text, status "
+        "SELECT id::text, investigation_id::text, tenant_id::text, status, enrichments "
         "FROM pending_reviews WHERE id = :rid"
     )
     if identity.role in _MSSP_LEVEL_ROLES:

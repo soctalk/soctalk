@@ -15,6 +15,48 @@
 	let processing = false;
 	let showRequestInfoModal = false;
 	let requestInfoQuestions: string[] = [''];
+	let authzExpiryDays = 90;
+
+	interface AuthorizationQuestion {
+		track: string;
+		activity: Record<string, unknown>;
+		proposed_scope: Record<string, unknown>;
+		prompt: string;
+	}
+
+	function authzQuestion(review: PendingReview): AuthorizationQuestion | null {
+		const q = review.enrichments?.authorization_question;
+		return q ? (q as unknown as AuthorizationQuestion) : null;
+	}
+
+	async function answerAuthorized(review: PendingReview) {
+		if (!review.tenant_id) {
+			addToast({ type: 'warning', title: 'No tenant', message: 'This review has no tenant to scope the authorization to.' });
+			return;
+		}
+		const q = authzQuestion(review);
+		if (!q) return;
+		processing = true;
+		try {
+			const validUntil = new Date(Date.now() + authzExpiryDays * 86400000).toISOString();
+			const res = await api.authorizationFacts.answer(review.tenant_id, {
+				review_id: review.id,
+				investigation_id: review.investigation_id,
+				valid_until: validUntil
+			});
+			addToast({
+				type: 'success',
+				title: 'Authorization saved',
+				message: `Reusable authorization saved (${res.stored}). Matching activity will not be asked again until it expires.`
+			});
+			selectedReview = null;
+			await loadReviews();
+		} catch (e) {
+			handleReviewError(e, 'answer authorization');
+		} finally {
+			processing = false;
+		}
+	}
 
 	function toggleExpand(reviewId: string) {
 		if (expandedReviews.has(reviewId)) {
@@ -383,6 +425,44 @@
 									<pre class="text-xs whitespace-pre-wrap">{JSON.stringify(review.misp_context, null, 2)}</pre>
 								</div>
 							</details>
+						{/if}
+
+						<!-- ASK_AUTHORIZATION (epic M3): a typed authorization question the analyst can
+						     answer by saving a reusable authorization, distinct from approve/reject. -->
+						{#if authzQuestion(review)}
+							{@const q = authzQuestion(review)}
+							<div class="alert variant-ghost-warning mb-4">
+								<div class="alert-message">
+									<h4 class="font-bold text-sm flex items-center gap-2">
+										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+										</svg>
+										Authorization question
+									</h4>
+									<p class="text-sm">{q?.prompt}</p>
+									<p class="text-xs opacity-70">
+										No authorization record covers this activity. If it was authorized, save a reusable
+										authorization so future matching alerts close without asking again. If not, escalate as usual.
+										A malicious signal still overrides a saved authorization.
+									</p>
+								</div>
+								{#if $canReview}
+									<div class="alert-actions items-center gap-2">
+										<label class="text-xs flex items-center gap-1">
+											Expires in
+											<input type="number" min="1" max="3650" class="input w-20 text-xs" bind:value={authzExpiryDays} />
+											days
+										</label>
+										<button
+											class="btn btn-sm variant-filled-success"
+											on:click={() => answerAuthorized(review)}
+											disabled={processing || !review.tenant_id}
+										>
+											Confirm authorized — save reusable authorization
+										</button>
+									</div>
+								{/if}
+							</div>
 						{/if}
 
 						<!-- Action Area — the entire decide surface (Take Action → controls) is
