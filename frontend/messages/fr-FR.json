@@ -270,7 +270,7 @@
 	"cap_annotate_label": "Annoter l'investigation",
 	"cap_external_desc": "Envoie (POST) une action nommée vers un endpoint configuré par l'opérateur. Approbation humaine requise.",
 	"cap_external_label": "Action externe (contrôlée)",
-	"cap_notify_desc": "Envoie (POST) l'envelope signée au connecteur webhook du tenant (niveau 0).",
+	"cap_notify_desc": "Envoie (POST) l'enveloppe signée au connecteur webhook du tenant (niveau 0).",
 	"cap_notify_label": "Notifier le webhook",
 	"chat_case_badge": "cas : {id}",
 	"chat_conversations": "Conversations",
