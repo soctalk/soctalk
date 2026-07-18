@@ -153,7 +153,7 @@
 </script>
 
 <svelte:head>
-	<title>Response Playbooks - SocTalk</title>
+	<title>{m.rp_title()} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-2">

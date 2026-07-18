@@ -9,6 +9,7 @@
 		canAssertTenantAuthorization,
 		canDeclareTenantEngagement
 	} from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
 
 	// Two kinds of authorization for your environment: standing FACTS (an approved change, a
 	// service account's routine work) and time-boxed ENGAGEMENTS (an authorized pentest/red-team
@@ -45,7 +46,7 @@
 		try {
 			facts = (await api.tenantAuthzFacts.list()).facts;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load facts';
+			error = e instanceof Error ? e.message : m.adm_my_facts_load_failed();
 		} finally {
 			factsLoading = false;
 		}
@@ -61,7 +62,7 @@
 		try {
 			parsed = JSON.parse(factText);
 		} catch {
-			error = 'Invalid JSON.';
+			error = m.adm_invalid_json();
 			return;
 		}
 		savingFact = true;
@@ -71,7 +72,7 @@
 			factFormOpen = false;
 			await loadFacts();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Assertion failed';
+			error = e instanceof Error ? e.message : m.adm_assert_failed();
 		} finally {
 			savingFact = false;
 		}
@@ -109,7 +110,7 @@
 		try {
 			engagements = await api.tenantEngagements.list(true);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load engagements';
+			error = e instanceof Error ? e.message : m.adm_eng_load_failed();
 		} finally {
 			engLoading = false;
 		}
@@ -134,20 +135,20 @@
 			hosts = '';
 			await loadEngagements();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to declare engagement';
+			error = e instanceof Error ? e.message : m.adm_eng_declare_failed();
 		} finally {
 			savingEng = false;
 		}
 	}
 
 	async function revoke(e: TenantEngagement) {
-		const reason = window.prompt(`Revoke engagement "${e.name}"? Optional reason:`, '');
+		const reason = window.prompt(m.adm_revoke_engagement_prompt({ name: e.name }), '');
 		if (reason === null) return;
 		try {
 			await api.tenantEngagements.revoke(e.id, reason || null);
 			await loadEngagements();
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Revoke failed';
+			error = err instanceof Error ? err.message : m.adm_revoke_failed();
 		}
 	}
 
@@ -159,13 +160,11 @@
 
 <div class="max-w-4xl mx-auto p-4 space-y-4">
 	<div>
-		<h1 class="text-2xl font-semibold">Authorization</h1>
+		<h1 class="text-2xl font-semibold">{m.nav_authorization()}</h1>
 		<p class="text-sm opacity-70 mt-1 max-w-2xl">
-			Tell the SOC what activity in your environment is authorized. Authorization comes in two
-			forms: standing <span class="font-medium">facts</span> (an approved change, a service
-			account's routine work) and time-boxed <span class="font-medium">engagements</span> (an
-			authorized pentest or red-team window). An engagement is simply a bounded authorization of
-			attack-shaped activity.
+			{m.adm_authz_intro_1()} <span class="font-medium">{m.adm_authz_intro_facts()}</span>
+			{m.adm_authz_intro_2()} <span class="font-medium">{m.adm_authz_intro_engagements()}</span>
+			{m.adm_authz_intro_3()}
 		</p>
 	</div>
 
@@ -176,7 +175,7 @@
 				: 'border-transparent opacity-70'}"
 			on:click={() => (tab = 'facts')}
 		>
-			Authorization facts
+			{m.adm_facts_title()}
 		</button>
 		<button
 			class="px-3 py-2 -mb-px border-b-2 {tab === 'engagements'
@@ -184,7 +183,7 @@
 				: 'border-transparent opacity-70'}"
 			on:click={() => (tab = 'engagements')}
 		>
-			Engagements
+			{m.adm_engagements_tab()}
 		</button>
 	</div>
 
@@ -195,15 +194,14 @@
 	{#if tab === 'facts'}
 		<div class="flex items-start justify-between gap-4">
 			<p class="text-sm opacity-70 max-w-2xl">
-				Anything you assert is reviewed by an analyst before it can affect triage, and it can never
-				close an alert that carries a threat indicator.
+				{m.adm_my_facts_intro()}
 			</p>
 			{#if $canAssertTenantAuthorization}
 				<button
 					class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 shrink-0"
 					on:click={openFactForm}
 				>
-					+ Assert fact
+					{m.adm_assert_fact()}
 				</button>
 			{/if}
 		</div>
@@ -211,33 +209,34 @@
 		{#if factFormOpen && $canAssertTenantAuthorization}
 			<div class="card p-4 rounded border space-y-2">
 				<p class="text-sm opacity-70">
-					Paste an authorization fact (JSON). It's submitted at low trust and lands
-					<span class="font-medium">awaiting review</span> until an analyst approves it.
+					{m.adm_fact_form_hint_1()}
+					<span class="font-medium">{m.adm_status_awaiting_review()}</span>
+					{m.adm_fact_form_hint_2()}
 				</p>
 				<textarea class="w-full border rounded p-2 font-mono text-xs h-56" bind:value={factText}></textarea>
 				<div class="flex justify-end gap-2">
-					<button class="px-3 py-2 text-sm" on:click={() => (factFormOpen = false)}>Cancel</button>
+					<button class="px-3 py-2 text-sm" on:click={() => (factFormOpen = false)}>{m.common_cancel()}</button>
 					<button class="px-3 py-2 rounded bg-blue-600 text-white text-sm" on:click={assertFact} disabled={savingFact}>
-						{savingFact ? 'Submitting…' : 'Submit for review'}
+						{savingFact ? m.adm_submitting() : m.adm_submit_for_review()}
 					</button>
 				</div>
 			</div>
 		{/if}
 
 		{#if factsLoading}
-			<div class="opacity-60 text-sm">Loading…</div>
+			<div class="opacity-60 text-sm">{m.common_loading()}</div>
 		{:else if facts.length === 0}
-			<div class="opacity-60 text-sm">No authorization facts for your organization yet.</div>
+			<div class="opacity-60 text-sm">{m.adm_my_facts_empty()}</div>
 		{:else}
 			<div class="overflow-x-auto border rounded">
 				<table class="min-w-full text-sm">
 					<thead class="bg-gray-50 dark:bg-gray-800 text-left text-gray-600 dark:text-gray-300">
 						<tr>
-							<th class="px-3 py-2">ID</th>
-							<th class="px-3 py-2">Kind</th>
-							<th class="px-3 py-2">Scope</th>
-							<th class="px-3 py-2">Source</th>
-							<th class="px-3 py-2">Status</th>
+							<th class="px-3 py-2">{m.adm_th_id()}</th>
+							<th class="px-3 py-2">{m.adm_th_kind()}</th>
+							<th class="px-3 py-2">{m.adm_th_scope()}</th>
+							<th class="px-3 py-2">{m.adm_th_source()}</th>
+							<th class="px-3 py-2">{m.adm_th_status()}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -249,11 +248,11 @@
 								<td class="px-3 py-2">{f.source_type}</td>
 								<td class="px-3 py-2">
 									{#if f.review_status === 'pending'}
-										<span class="text-xs px-2 py-0.5 rounded bg-amber-200 text-amber-900">awaiting review</span>
+										<span class="text-xs px-2 py-0.5 rounded bg-amber-200 text-amber-900">{m.adm_status_awaiting_review()}</span>
 									{:else if f.review_status === 'rejected'}
-										<span class="text-xs px-2 py-0.5 rounded bg-red-200 text-red-900">rejected</span>
+										<span class="text-xs px-2 py-0.5 rounded bg-red-200 text-red-900">{m.adm_status_rejected()}</span>
 									{:else}
-										<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">approved</span>
+										<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">{m.adm_status_approved()}</span>
 									{/if}
 								</td>
 							</tr>
@@ -265,16 +264,14 @@
 	{:else}
 		<div class="flex items-start justify-between gap-4">
 			<p class="text-sm opacity-70 max-w-2xl">
-				Declare authorized offensive activity against your own environment — a pentest or red-team
-				window and its scope — so the SOC deconflicts it. A declared engagement adds context; it
-				never suppresses detections, and activity outside its scope still escalates.
+				{m.adm_eng_intro()}
 			</p>
 			{#if $canDeclareTenantEngagement}
 				<button
 					class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 shrink-0"
 					on:click={() => (engFormOpen = !engFormOpen)}
 				>
-					+ Declare engagement
+					{m.adm_declare_engagement()}
 				</button>
 			{/if}
 		</div>
@@ -283,11 +280,11 @@
 			<form class="card p-4 rounded border space-y-3" on:submit|preventDefault={declare}>
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">Name</span>
-						<input class="border rounded px-2 py-1" bind:value={name} required placeholder="Q3 external pentest" />
+						<span class="opacity-70">{m.adm_field_name()}</span>
+						<input class="border rounded px-2 py-1" bind:value={name} required placeholder={m.adm_placeholder_engagement_name()} />
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">Kind</span>
+						<span class="opacity-70">{m.adm_field_kind()}</span>
 						<select class="border rounded px-2 py-1" bind:value={kind}>
 							<option value="pentest">pentest</option>
 							<option value="red_team">red_team</option>
@@ -295,35 +292,35 @@
 						</select>
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">Starts</span>
+						<span class="opacity-70">{m.adm_field_starts()}</span>
 						<input class="border rounded px-2 py-1" type="datetime-local" bind:value={startsAt} required />
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">Ends</span>
+						<span class="opacity-70">{m.adm_field_ends()}</span>
 						<input class="border rounded px-2 py-1" type="datetime-local" bind:value={endsAt} required />
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">Source IPs / CIDRs (comma-separated)</span>
+						<span class="opacity-70">{m.adm_field_source_ips()}</span>
 						<input class="border rounded px-2 py-1 font-mono" bind:value={sourceIps} placeholder="203.0.113.0/24" />
 					</label>
 					<label class="flex flex-col gap-1">
-						<span class="opacity-70">In-scope hosts (comma-separated)</span>
+						<span class="opacity-70">{m.adm_field_hosts()}</span>
 						<input class="border rounded px-2 py-1 font-mono" bind:value={hosts} placeholder="web-01, db-01" />
 					</label>
 				</div>
 				<div class="flex justify-end gap-2">
-					<button type="button" class="px-3 py-2 text-sm" on:click={() => (engFormOpen = false)}>Cancel</button>
+					<button type="button" class="px-3 py-2 text-sm" on:click={() => (engFormOpen = false)}>{m.common_cancel()}</button>
 					<button type="submit" class="px-3 py-2 rounded bg-blue-600 text-white text-sm" disabled={savingEng}>
-						{savingEng ? 'Declaring…' : 'Declare'}
+						{savingEng ? m.adm_declaring() : m.adm_declare()}
 					</button>
 				</div>
 			</form>
 		{/if}
 
 		{#if engLoading}
-			<div class="opacity-60 text-sm">Loading…</div>
+			<div class="opacity-60 text-sm">{m.common_loading()}</div>
 		{:else if engagements.length === 0}
-			<div class="opacity-60 text-sm">No engagements declared for this tenant yet.</div>
+			<div class="opacity-60 text-sm">{m.adm_eng_empty()}</div>
 		{:else}
 			<div class="space-y-2">
 				{#each engagements as e (e.id)}
@@ -345,7 +342,7 @@
 						</div>
 						{#if $canDeclareTenantEngagement && e.status !== 'revoked'}
 							<button class="text-red-600 hover:underline text-sm shrink-0" on:click={() => revoke(e)}>
-								Revoke
+								{m.adm_revoke()}
 							</button>
 						{/if}
 					</div>

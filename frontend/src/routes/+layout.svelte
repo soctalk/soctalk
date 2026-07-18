@@ -221,7 +221,7 @@
 							{/if}
 						</div>
 					</svelte:fragment>
-					<span class="text-xs block text-center whitespace-normal break-words [hyphens:auto] leading-tight"
+					<span class="text-xs block text-center whitespace-normal [overflow-wrap:anywhere] [hyphens:auto] leading-tight"
 					>{item.label()}</span
 				>
 				</AppRailAnchor>

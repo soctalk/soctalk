@@ -4,6 +4,8 @@
 	import { api, type Settings, type SettingsUpdate } from '$lib/api/client';
 	import { canEditSettings } from '$lib/stores';
 	import { SlideToggle } from '@skeletonlabs/skeleton';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 
 	let loading = true;
 	let saving = false;
@@ -120,8 +122,8 @@
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Load Failed',
-				message: e instanceof Error ? e.message : 'Failed to load settings from server.'
+				title: m.adm_toast_load_failed_title(),
+				message: e instanceof Error ? e.message : m.adm_toast_load_failed_msg()
 			});
 		} finally {
 			loading = false;
@@ -185,14 +187,14 @@
 
 			addToast({
 				type: 'success',
-				title: 'Settings Saved',
-				message: 'Integration settings have been saved.'
+				title: m.adm_toast_saved_title(),
+				message: m.adm_toast_saved_msg()
 			});
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Save Failed',
-				message: e instanceof Error ? e.message : 'Failed to save settings. Please try again.'
+				title: m.adm_toast_save_failed_title(),
+				message: e instanceof Error ? e.message : m.adm_toast_save_failed_msg()
 			});
 		} finally {
 			saving = false;
@@ -209,14 +211,14 @@
 
 			addToast({
 				type: 'info',
-				title: 'Settings Reset',
-				message: 'Settings have been reset to defaults.'
+				title: m.adm_toast_reset_title(),
+				message: m.adm_toast_reset_msg()
 			});
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Reset Failed',
-				message: e instanceof Error ? e.message : 'Failed to reset settings.'
+				title: m.adm_toast_reset_failed_title(),
+				message: e instanceof Error ? e.message : m.adm_toast_reset_failed_msg()
 			});
 		} finally {
 			syncing = false;
@@ -227,19 +229,19 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div class="flex items-center gap-3">
-			<h1 class="h2">Settings</h1>
+			<h1 class="h2">{m.nav_settings()}</h1>
 			{#if readonly}
-				<span class="badge variant-soft text-xs">Read-only</span>
+				<span class="badge variant-soft text-xs">{m.adm_readonly()}</span>
 			{:else if !$canEditSettings}
-				<span class="badge variant-soft text-xs">View-only</span>
+				<span class="badge variant-soft text-xs">{m.adm_viewonly()}</span>
 			{/if}
 		</div>
 		<div class="flex items-center gap-3">
 			<a
-				href="/settings/llm"
+				href={localizeHref('/settings/llm')}
 				class="anchor text-sm"
-				title="Bring your own LLM API key — investigations bill to you instead of your MSSP"
-				>Bring your own LLM key →</a
+				title={m.adm_byo_llm_title()}
+				>{m.adm_byo_llm_link()}</a
 			>
 			<div class="flex gap-2">
 			<button
@@ -251,7 +253,7 @@
 					{#if syncing}
 						<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 					{/if}
-					Reset to Defaults
+					{m.adm_reset_to_defaults()}
 				</button>
 			<button
 				type="button"
@@ -262,7 +264,7 @@
 					{#if saving}
 						<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 					{/if}
-					Save Changes
+					{m.adm_save_changes()}
 				</button>
 			</div>
 		</div>
@@ -270,7 +272,7 @@
 
 	{#if loading}
 		<div class="card p-8 text-center">
-			<p class="opacity-60">Loading settings...</p>
+			<p class="opacity-60">{m.adm_loading_settings()}</p>
 		</div>
 	{:else}
 		<!-- LLM Settings -->
@@ -278,41 +280,41 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">LLM</h3>
+						<h3 class="h4">{m.adm_section_llm()}</h3>
 						{#if getIntegrationSource('llm_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('llm_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Provider and model preferences (API keys stay in env)</p>
+					<p class="text-sm opacity-60">{m.adm_llm_section_hint()}</p>
 				</div>
 			</div>
 
 			<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 				<div>
 					<label class="label">
-						<span class="font-medium">Provider</span>
+						<span class="font-medium">{m.adm_field_provider()}</span>
 						<select class="select" bind:value={llm_provider} disabled={readonly || !$canEditSettings}>
-							<option value="anthropic">Anthropic</option>
-							<option value="openai">OpenAI-compatible</option>
+							<option value="anthropic">{m.adm_provider_anthropic()}</option>
+							<option value="openai">{m.adm_provider_openai_compatible()}</option>
 						</select>
 					</label>
 				</div>
 
 				<div class="md:col-span-2 text-sm opacity-70">
 					{#if llm_keys_conflict}
-						<span class="text-error-500">Both API keys are set (choose exactly one).</span>
+						<span class="text-error-500">{m.adm_llm_keys_conflict()}</span>
 					{:else if llm_provider === 'anthropic'}
-						API key: {anthropic_api_key_configured ? 'configured via environment' : 'missing (set ANTHROPIC_API_KEY)'}
+						{anthropic_api_key_configured ? m.adm_api_key_configured() : m.adm_api_key_missing({ env: 'ANTHROPIC_API_KEY' })}
 					{:else}
-						API key: {openai_api_key_configured ? 'configured via environment' : 'missing (set OPENAI_API_KEY)'}
+						{openai_api_key_configured ? m.adm_api_key_configured() : m.adm_api_key_missing({ env: 'OPENAI_API_KEY' })}
 					{/if}
 				</div>
 
 				<div>
 					<label class="label">
-						<span class="font-medium">Fast Model</span>
+						<span class="font-medium">{m.adm_field_fast_model()}</span>
 						<input
 							type="text"
 							class="input"
@@ -324,7 +326,7 @@
 				</div>
 				<div>
 					<label class="label">
-						<span class="font-medium">Reasoning Model</span>
+						<span class="font-medium">{m.adm_field_reasoning_model()}</span>
 						<input
 							type="text"
 							class="input"
@@ -336,7 +338,7 @@
 				</div>
 				<div>
 					<label class="label">
-						<span class="font-medium">Temperature</span>
+						<span class="font-medium">{m.adm_field_temperature()}</span>
 						<input
 							type="number"
 							class="input"
@@ -350,7 +352,7 @@
 				</div>
 				<div>
 					<label class="label">
-						<span class="font-medium">Max Tokens</span>
+						<span class="font-medium">{m.adm_field_max_tokens()}</span>
 						<input
 							type="number"
 							class="input"
@@ -365,7 +367,7 @@
 				{#if llm_provider === 'anthropic'}
 					<div class="md:col-span-2">
 						<label class="label">
-							<span class="font-medium">Anthropic Base URL (Optional)</span>
+							<span class="font-medium">{m.adm_field_anthropic_base_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -378,7 +380,7 @@
 				{:else}
 					<div>
 						<label class="label">
-							<span class="font-medium">OpenAI Base URL (Optional)</span>
+							<span class="font-medium">{m.adm_field_openai_base_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -390,7 +392,7 @@
 					</div>
 					<div>
 						<label class="label">
-							<span class="font-medium">Organization (Optional)</span>
+							<span class="font-medium">{m.adm_field_organization()}</span>
 							<input
 								type="text"
 								class="input"
@@ -403,7 +405,7 @@
 				{/if}
 
 				<div class="md:col-span-2 text-sm opacity-60">
-					Changes apply when the orchestrator (re)starts. Provider selection requires the matching API key in the environment.
+					{m.adm_llm_restart_hint()}
 				</div>
 			</div>
 		</div>
@@ -413,14 +415,14 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">Wazuh SIEM</h3>
+						<h3 class="h4">{m.adm_section_wazuh()}</h3>
 						{#if getIntegrationSource('wazuh_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('wazuh_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Security Information and Event Management</p>
+					<p class="text-sm opacity-60">{m.adm_wazuh_desc()}</p>
 				</div>
 				<SlideToggle name="wazuh_enabled" bind:checked={wazuh_enabled} disabled={readonly || !$canEditSettings} />
 			</div>
@@ -429,7 +431,7 @@
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<div>
 						<label class="label">
-							<span class="font-medium">API URL</span>
+							<span class="font-medium">{m.adm_field_api_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -440,11 +442,11 @@
 						</label>
 					</div>
 					<div class="md:col-span-2 text-sm opacity-70">
-						Credentials: {wazuh_credentials_configured ? 'configured via environment' : 'missing (set WAZUH_API_USER/WAZUH_API_PASSWORD)'}
+						{wazuh_credentials_configured ? m.adm_credentials_configured() : m.adm_credentials_missing()}
 					</div>
 					<div class="flex items-center">
 						<SlideToggle name="wazuh_verify_ssl" bind:checked={wazuh_verify_ssl} disabled={readonly || !$canEditSettings}>
-							Verify SSL Certificate
+							{m.adm_verify_ssl()}
 						</SlideToggle>
 					</div>
 				</div>
@@ -456,14 +458,14 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">Cortex</h3>
+						<h3 class="h4">{m.adm_section_cortex()}</h3>
 						{#if getIntegrationSource('cortex_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('cortex_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Observable Analysis and Enrichment</p>
+					<p class="text-sm opacity-60">{m.adm_cortex_desc()}</p>
 				</div>
 				<SlideToggle name="cortex_enabled" bind:checked={cortex_enabled} disabled={readonly || !$canEditSettings} />
 			</div>
@@ -472,7 +474,7 @@
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<div>
 						<label class="label">
-							<span class="font-medium">API URL</span>
+							<span class="font-medium">{m.adm_field_api_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -483,11 +485,11 @@
 						</label>
 					</div>
 					<div class="md:col-span-2 text-sm opacity-70">
-						API key: {cortex_api_key_configured ? 'configured via environment' : 'missing (set CORTEX_API_KEY)'}
+						{cortex_api_key_configured ? m.adm_api_key_configured() : m.adm_api_key_missing({ env: 'CORTEX_API_KEY' })}
 					</div>
 					<div class="flex items-center">
 						<SlideToggle name="cortex_verify_ssl" bind:checked={cortex_verify_ssl} disabled={readonly || !$canEditSettings}>
-							Verify SSL Certificate
+							{m.adm_verify_ssl()}
 						</SlideToggle>
 					</div>
 				</div>
@@ -499,14 +501,14 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">TheHive</h3>
+						<h3 class="h4">{m.adm_section_thehive()}</h3>
 						{#if getIntegrationSource('thehive_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('thehive_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Incident Response Platform</p>
+					<p class="text-sm opacity-60">{m.adm_thehive_desc()}</p>
 				</div>
 				<SlideToggle name="thehive_enabled" bind:checked={thehive_enabled} disabled={readonly || !$canEditSettings} />
 			</div>
@@ -515,7 +517,7 @@
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<div>
 						<label class="label">
-							<span class="font-medium">API URL</span>
+							<span class="font-medium">{m.adm_field_api_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -527,7 +529,7 @@
 					</div>
 					<div>
 						<label class="label">
-							<span class="font-medium">Organisation</span>
+							<span class="font-medium">{m.adm_field_organisation()}</span>
 							<input
 								type="text"
 								class="input"
@@ -538,11 +540,11 @@
 						</label>
 					</div>
 					<div class="md:col-span-2 text-sm opacity-70">
-						API key: {thehive_api_key_configured ? 'configured via environment' : 'missing (set THEHIVE_API_KEY or THEHIVE_API_TOKEN)'}
+						{thehive_api_key_configured ? m.adm_api_key_configured() : m.adm_api_key_missing_thehive()}
 					</div>
 					<div class="flex items-center">
 						<SlideToggle name="thehive_verify_ssl" bind:checked={thehive_verify_ssl} disabled={readonly || !$canEditSettings}>
-							Verify SSL Certificate
+							{m.adm_verify_ssl()}
 						</SlideToggle>
 					</div>
 				</div>
@@ -554,14 +556,14 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">MISP</h3>
+						<h3 class="h4">{m.adm_section_misp()}</h3>
 						{#if getIntegrationSource('misp_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('misp_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Threat Intelligence Platform</p>
+					<p class="text-sm opacity-60">{m.adm_misp_desc()}</p>
 				</div>
 				<SlideToggle name="misp_enabled" bind:checked={misp_enabled} disabled={readonly || !$canEditSettings} />
 			</div>
@@ -570,7 +572,7 @@
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<div>
 						<label class="label">
-							<span class="font-medium">API URL</span>
+							<span class="font-medium">{m.adm_field_api_url()}</span>
 							<input
 								type="url"
 								class="input"
@@ -581,11 +583,11 @@
 						</label>
 					</div>
 					<div class="md:col-span-2 text-sm opacity-70">
-						API key: {misp_api_key_configured ? 'configured via environment' : 'missing (set MISP_API_KEY)'}
+						{misp_api_key_configured ? m.adm_api_key_configured() : m.adm_api_key_missing({ env: 'MISP_API_KEY' })}
 					</div>
 					<div class="flex items-center">
 						<SlideToggle name="misp_verify_ssl" bind:checked={misp_verify_ssl} disabled={readonly || !$canEditSettings}>
-							Verify SSL Certificate
+							{m.adm_verify_ssl()}
 						</SlideToggle>
 					</div>
 				</div>
@@ -597,14 +599,14 @@
 			<div class="flex items-center justify-between border-b border-surface-500/30 pb-2">
 				<div>
 					<div class="flex items-center gap-2">
-						<h3 class="h4">Slack</h3>
+						<h3 class="h4">{m.adm_section_slack()}</h3>
 						{#if getIntegrationSource('slack_') === 'env'}
-							<span class="badge variant-soft text-xs">Env</span>
+							<span class="badge variant-soft text-xs">{m.adm_badge_env()}</span>
 						{:else if getIntegrationSource('slack_') === 'db'}
-							<span class="badge variant-filled-warning text-xs">Override</span>
+							<span class="badge variant-filled-warning text-xs">{m.adm_badge_override()}</span>
 						{/if}
 					</div>
-					<p class="text-sm opacity-60">Team Notifications</p>
+					<p class="text-sm opacity-60">{m.adm_slack_desc()}</p>
 				</div>
 				<SlideToggle name="slack_enabled" bind:checked={slack_enabled} disabled={readonly || !$canEditSettings} />
 			</div>
@@ -613,7 +615,7 @@
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<div>
 						<label class="label">
-							<span class="font-medium">Channel</span>
+							<span class="font-medium">{m.adm_field_channel()}</span>
 							<input
 								type="text"
 								class="input"
@@ -624,14 +626,14 @@
 						</label>
 					</div>
 					<div class="md:col-span-2 text-sm opacity-70">
-						Webhook: {slack_webhook_configured ? 'configured via environment' : 'missing (set SLACK_WEBHOOK_URL)'}
+						{slack_webhook_configured ? m.adm_webhook_configured() : m.adm_webhook_missing()}
 					</div>
 					<div class="space-y-2">
 						<SlideToggle name="slack_notify_on_escalation" bind:checked={slack_notify_on_escalation} disabled={readonly || !$canEditSettings}>
-							Notify on Escalation
+							{m.adm_notify_on_escalation()}
 						</SlideToggle>
 						<SlideToggle name="slack_notify_on_verdict" bind:checked={slack_notify_on_verdict} disabled={readonly || !$canEditSettings}>
-							Notify on Verdict
+							{m.adm_notify_on_verdict()}
 						</SlideToggle>
 					</div>
 				</div>

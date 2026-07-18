@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
+	import { localizedGoto } from '$lib/i18n';
 	import {
 		tenantsApi,
 		tenantStateBadge,
@@ -10,6 +10,7 @@
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
 	import ExternalSiemPanel from '$lib/components/tenants/ExternalSiemPanel.svelte';
 	import LlmConfigPanel from '$lib/components/tenants/LlmConfigPanel.svelte';
+	import { m } from '$lib/paraglide/messages';
 
 	let tenant: Tenant | null = null;
 	let events: LifecycleEvent[] = [];
@@ -26,7 +27,7 @@
 
 	$: if ($authSession.user && id) {
 		if (!$isMsspScope) {
-			goto('/');
+			localizedGoto('/');
 		} else if (loadedFor !== id) {
 			loadedFor = id;
 			void load();
@@ -42,21 +43,23 @@
 				tenantsApi.events(id, 50)
 			]);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load tenant';
+			error = e instanceof Error ? e.message : m.ten_load_one_failed();
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function act(fn: () => Promise<unknown>, label: string) {
+	// ``label`` is a message-function REF (called at toast time) — never
+	// evaluate messages at module scope (#52).
+	async function act(fn: () => Promise<unknown>, label: () => string) {
 		try {
 			await fn();
-			addToast({ type: 'success', title: 'Tenant', message: `${label} ok` });
+			addToast({ type: 'success', title: m.scope_tenant(), message: m.ten_action_ok({ action: label() }) });
 			await load();
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: label,
+				title: label(),
 				message: e instanceof Error ? e.message : String(e)
 			});
 		}
@@ -73,15 +76,15 @@
 
 <div class="space-y-4">
 	<div class="flex items-center gap-3">
-		<button class="btn btn-sm variant-ghost-surface" on:click={() => goto('/tenants')}>
-			← Tenants
+		<button class="btn btn-sm variant-ghost-surface" on:click={() => localizedGoto('/tenants')}>
+			{m.ten_back_to_tenants()}
 		</button>
 	</div>
 
 	{#if loading}
 		<div class="card p-6 flex items-center gap-3">
 			<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"></span>
-			<span>Loading…</span>
+			<span>{m.common_loading()}</span>
 		</div>
 	{:else if error}
 		<div class="card p-6 text-error-500">{error}</div>
@@ -96,57 +99,57 @@
 
 		<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 			<div class="card p-4">
-				<h3 class="h4 mb-4">Identity</h3>
+				<h3 class="h4 mb-4">{m.ten_identity()}</h3>
 				<dl class="space-y-2 text-sm">
 					<div class="flex justify-between">
-						<dt class="opacity-60">ID</dt>
+						<dt class="opacity-60">{m.ten_id_label()}</dt>
 						<dd class="font-mono text-xs">{tenant.id}</dd>
 					</div>
 					<div class="flex justify-between">
-						<dt class="opacity-60">Profile</dt>
+						<dt class="opacity-60">{m.ten_profile()}</dt>
 						<dd>{tenant.profile ?? '—'}</dd>
 					</div>
 					<div class="flex justify-between">
-						<dt class="opacity-60">Created</dt>
+						<dt class="opacity-60">{m.ten_created()}</dt>
 						<dd>{fmtDate(tenant.created_at)}</dd>
 					</div>
 					<div class="flex justify-between">
-						<dt class="opacity-60">State changed</dt>
+						<dt class="opacity-60">{m.ten_state_changed()}</dt>
 						<dd>{fmtDate(tenant.state_changed_at)}</dd>
 					</div>
 				</dl>
 			</div>
 
 			<div class="card p-4 lg:col-span-2">
-				<h3 class="h4 mb-4">Actions</h3>
+				<h3 class="h4 mb-4">{m.ten_actions()}</h3>
 				<div class="flex flex-wrap gap-2">
 					<button
 						class="btn btn-sm variant-filled-warning"
 						disabled={tenant.state !== 'active'}
-						on:click={() => act(() => tenantsApi.suspend(id), 'suspend')}
+						on:click={() => act(() => tenantsApi.suspend(id), m.ten_action_suspend)}
 					>
-						Suspend
+						{m.ten_suspend()}
 					</button>
 					<button
 						class="btn btn-sm variant-filled-success"
 						disabled={tenant.state !== 'suspended'}
-						on:click={() => act(() => tenantsApi.resume(id), 'resume')}
+						on:click={() => act(() => tenantsApi.resume(id), m.ten_action_resume)}
 					>
-						Resume
+						{m.ten_resume()}
 					</button>
 					<button
 						class="btn btn-sm variant-filled-secondary"
 						disabled={!['pending', 'degraded'].includes(tenant.state)}
-						on:click={() => act(() => tenantsApi.retry(id), 'retry provisioning')}
+						on:click={() => act(() => tenantsApi.retry(id), m.ten_action_retry_provisioning)}
 					>
-						Retry Provisioning
+						{m.ten_retry_provisioning()}
 					</button>
 					<button
 						class="btn btn-sm variant-filled-error"
 						disabled={['decommissioning', 'archived', 'purged'].includes(tenant.state)}
-						on:click={() => act(() => tenantsApi.decommission(id), 'decommission')}
+						on:click={() => act(() => tenantsApi.decommission(id), m.ten_action_decommission)}
 					>
-						Decommission
+						{m.ten_decommission()}
 					</button>
 				</div>
 			</div>
@@ -167,17 +170,17 @@
 		{/key}
 
 		<div class="card p-4">
-			<h3 class="h4 mb-4">Lifecycle Events</h3>
+			<h3 class="h4 mb-4">{m.ten_lifecycle_events()}</h3>
 			{#if events.length === 0}
-				<p class="opacity-70 text-sm">No events yet.</p>
+				<p class="opacity-70 text-sm">{m.ten_no_events()}</p>
 			{:else}
 				<table class="table table-compact">
 					<thead>
 						<tr>
-							<th>Time</th>
-							<th>Event</th>
-							<th>From</th>
-							<th>To</th>
+							<th>{m.ten_th_time()}</th>
+							<th>{m.ten_th_event()}</th>
+							<th>{m.ten_th_from()}</th>
+							<th>{m.ten_th_to()}</th>
 						</tr>
 					</thead>
 					<tbody>

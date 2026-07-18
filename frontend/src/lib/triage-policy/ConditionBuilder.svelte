@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import { m } from '$lib/paraglide/messages';
 	import {
 		STATE_CONTRACT,
-		OPERATOR_LABELS,
 		contractField,
 		emptyGroup,
 		emptyRule,
+		operatorLabel,
 		type RuleGroup,
 		type RuleRow
 	} from './schema';
@@ -127,9 +128,9 @@
 					changed();
 				}}
 				type="button"
-				title="Every row below must hold"
+				title={m.tp_condition_builder_all_title()}
 			>
-				ALL
+				{m.tp_condition_builder_all()}
 			</button>
 			<button
 				class:variant-filled-primary={group.op === 'or'}
@@ -138,12 +139,12 @@
 					changed();
 				}}
 				type="button"
-				title="At least one row below must hold"
+				title={m.tp_condition_builder_any_title()}
 			>
-				ANY
+				{m.tp_condition_builder_any()}
 			</button>
 		</div>
-		<span class="text-xs opacity-50">of the following must hold</span>
+		<span class="text-xs opacity-50">{m.tp_condition_builder_suffix()}</span>
 	</div>
 
 	{#each group.children as child, i}
@@ -162,7 +163,7 @@
 						on:change={(e) => setField(rule, e.currentTarget.value)}
 					>
 						{#each STATE_CONTRACT as f}
-							<option value={f.path}>{f.label}</option>
+							<option value={f.path}>{f.label()}</option>
 						{/each}
 					</select>
 
@@ -172,8 +173,8 @@
 							value={rule.value === true ? 'true' : 'false'}
 							on:change={(e) => setBoolValue(rule, e.currentTarget.value)}
 						>
-							<option value="true">is true</option>
-							<option value="false">is false</option>
+							<option value="true">{m.tp_operator_is_true()}</option>
+							<option value="false">{m.tp_operator_is_false()}</option>
 						</select>
 					{:else}
 						<select
@@ -182,14 +183,14 @@
 							on:change={(e) => setOp(rule, e.currentTarget.value)}
 						>
 							{#each opsFor(rule.field) as op}
-								<option value={op}>{OPERATOR_LABELS[op] ?? op}</option>
+								<option value={op}>{operatorLabel(op)}</option>
 							{/each}
 						</select>
 
 						{#if rule.op === 'in'}
 							<input
 								class="input !py-1 text-xs w-56"
-								placeholder="value, value, …"
+								placeholder={m.tp_condition_value_list_placeholder()}
 								value={listValue(rule)}
 								on:change={(e) => setListValue(rule, e.currentTarget.value)}
 							/>
@@ -228,7 +229,7 @@
 						{/if}
 					{/if}
 					{#if field}
-						<span class="text-xs opacity-40 hidden xl:inline" title={field.help}>ⓘ</span>
+						<span class="text-xs opacity-40 hidden xl:inline" title={field.help()}>ⓘ</span>
 					{/if}
 				</div>
 			{/if}
@@ -236,7 +237,7 @@
 				class="btn-icon btn-icon-sm variant-soft-error flex-shrink-0"
 				on:click={() => remove(i)}
 				type="button"
-				title="Remove"
+				title={m.tp_remove()}
 			>
 				✕
 			</button>
@@ -245,11 +246,11 @@
 
 	<div class="flex gap-2">
 		<button class="btn btn-sm variant-soft !py-0.5 text-xs" on:click={addRule} type="button">
-			+ condition
+			{m.tp_add_condition()}
 		</button>
 		{#if depth < 3}
 			<button class="btn btn-sm variant-soft !py-0.5 text-xs" on:click={addGroup} type="button">
-				+ group
+				{m.tp_add_group()}
 			</button>
 		{/if}
 	</div>

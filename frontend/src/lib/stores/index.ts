@@ -4,6 +4,10 @@
 
 import { writable, derived, type Readable } from 'svelte/store';
 import type { AuthSession, PublicScope } from '$lib/api/client';
+// Message functions are only ever CALLED inside event handlers (toast-creation
+// time) — never at module scope, where the locale isn't set yet (#52).
+import { m } from '$lib/paraglide/messages';
+import { formatDecision } from '$lib/utils/formatters';
 
 // Slug-driven landing — works for both ``<slug>.mssp.<base>`` and
 // ``<slug>.customer.<base>``. The store carries a unified
@@ -227,7 +231,7 @@ eventSource.onopen = () => {
 eventSource.onerror = (err) => {
 	if (import.meta.env.DEV) console.error('[SSE] Error:', err);
 	sseConnected.set(false);
-	sseError.set('Connection lost. Reconnecting...');
+	sseError.set(m.sse_connection_lost());
 
 		// EventSource will auto-reconnect
 	};
@@ -308,14 +312,18 @@ function handleEventToast(event: SSEEvent): void {
 	if (eventType === 'investigation.created') {
 		addToast({
 			type: 'info',
-			title: 'New Investigation',
-			message: `Investigation started: ${event.data.title || 'Untitled'}`
+			title: m.sse_new_investigation_title(),
+			message: m.sse_investigation_started_msg({
+				title: String(event.data.title || m.sse_untitled())
+			})
 		});
 	} else if (eventType === 'investigation.closed') {
 		addToast({
 			type: 'success',
-			title: 'Investigation Closed',
-			message: `Investigation closed with verdict: ${event.data.verdict || 'unknown'}`
+			title: m.sse_investigation_closed_title(),
+			message: m.sse_investigation_closed_msg({
+				verdict: String(event.data.verdict || 'unknown')
+			})
 		});
 	}
 
@@ -323,8 +331,8 @@ function handleEventToast(event: SSEEvent): void {
 	else if (eventType === 'human.review_requested') {
 		addToast({
 			type: 'warning',
-			title: 'Review Required',
-			message: 'A new investigation requires human review',
+			title: m.sse_review_required_title(),
+			message: m.sse_review_required_msg(),
 			duration: 10000
 		});
 		// Update pending count
@@ -332,8 +340,10 @@ function handleEventToast(event: SSEEvent): void {
 	} else if (eventType === 'human.decision_received') {
 		addToast({
 			type: 'success',
-			title: 'Review Complete',
-			message: `Review decision: ${event.data.decision}`
+			title: m.sse_review_complete_title(),
+			message: m.sse_review_decision_msg({
+				decision: formatDecision(event.data.decision as string | undefined)
+			})
 		});
 		pendingReviewsCount.update((n) => Math.max(0, n - 1));
 	}
@@ -345,8 +355,11 @@ function handleEventToast(event: SSEEvent): void {
 		                   verdict === 'suspicious' ? 'warning' : 'info';
 		addToast({
 			type: toastType,
-			title: 'Verdict Rendered',
-			message: `AI verdict: ${verdict} (confidence: ${Math.round((event.data.confidence as number || 0) * 100)}%)`
+			title: m.sse_verdict_title(),
+			message: m.sse_verdict_msg({
+				verdict: String(verdict),
+				pct: Math.round((event.data.confidence as number || 0) * 100)
+			})
 		});
 	}
 
@@ -354,8 +367,8 @@ function handleEventToast(event: SSEEvent): void {
 	else if (eventType === 'thehive.case_created') {
 		addToast({
 			type: 'success',
-			title: 'Case Created',
-			message: `TheHive case created: ${event.data.case_id}`
+			title: m.sse_case_created_title(),
+			message: m.sse_case_created_msg({ caseId: String(event.data.case_id) })
 		});
 	}
 }

@@ -6,6 +6,8 @@
 		type ExternalSiemOnboard
 	} from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
+	import { localizedGoto } from '$lib/i18n';
 
 	// Onboarding wizard. Four steps for poc/persistent — identity → profile →
 	// branding → review — and a conditional FIFTH "External SIEM" step that
@@ -81,7 +83,7 @@
 	// is non-MSSP. Otherwise the page would race the layout and
 	// redirect every fresh load.
 	$: if ($authSession.user && !$isMsspScope) {
-		goto('/');
+		localizedGoto('/');
 	}
 
 	let form: WizardForm = {
@@ -105,10 +107,19 @@
 	// Reactive step list — the conditional 'External SIEM' step is spliced in
 	// only for the 'provided' profile. Everything downstream (indicator,
 	// content switch, Next/Create) keys off this.
-	$: steps =
-		form.profile === 'provided'
-			? ['Identity', 'Profile', 'External SIEM', 'Branding', 'Review']
-			: ['Identity', 'Profile', 'Branding', 'Review'];
+	// Step CODES drive the logic; display labels resolve via stepLabel() at
+	// render time (i18n #52 — labels were previously logic discriminators).
+	type StepCode = 'identity' | 'profile' | 'siem' | 'branding' | 'review';
+	const STEP_LABELS: Record<StepCode, () => string> = {
+		identity: m.tnew_step_identity,
+		profile: m.tnew_step_profile,
+		siem: m.tnew_step_siem,
+		branding: m.tnew_step_branding,
+		review: m.tnew_step_review
+	};
+	$: steps = (form.profile === 'provided'
+		? ['identity', 'profile', 'siem', 'branding', 'review']
+		: ['identity', 'profile', 'branding', 'review']) as StepCode[];
 	$: currentLabel = steps[step - 1];
 	// If the list shrinks (provided → poc) while we're parked on a now-missing
 	// step, clamp back into range. Profile is only editable on step 2, so this
@@ -158,9 +169,9 @@
 	// Validity of the *current* step gates the Next button. Profile/Branding
 	// have no required input so they are always advanceable.
 	$: stepValid =
-		currentLabel === 'Identity'
+		currentLabel === 'identity'
 			? identityValid
-			: currentLabel === 'External SIEM'
+			: currentLabel === 'siem'
 				? siemValid && llmKeyValid
 				: true;
 
@@ -229,14 +240,14 @@
 			const tenant = await tenantsApi.onboard(toOnboard());
 			addToast({
 				type: 'success',
-				title: 'Tenant created',
-				message: `Provisioning ${tenant.display_name} (${tenant.slug})…`
+				title: m.tnew_created_title(),
+				message: m.tnew_created_msg({ name: tenant.display_name, slug: tenant.slug })
 			});
-			await goto(`/tenants/${tenant.id}`);
+			await localizedGoto(`/tenants/${tenant.id}`);
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Onboard failed',
+				title: m.tnew_onboard_failed(),
 				message: e instanceof Error ? e.message : String(e)
 			});
 		} finally {
@@ -247,11 +258,11 @@
 
 <div class="space-y-4 max-w-2xl mx-auto">
 	<div class="flex items-center gap-3">
-		<button class="btn btn-sm variant-ghost-surface" on:click={() => goto('/tenants')}>
-			← Tenants
+		<button class="btn btn-sm variant-ghost-surface" on:click={() => localizedGoto('/tenants')}>
+			{m.tnew_back_to_tenants()}
 		</button>
 	</div>
-	<h1 class="h2">Create customer</h1>
+	<h1 class="h2">{m.tnew_title()}</h1>
 
 	<!-- Step indicator -->
 	<ol class="flex gap-2 text-sm opacity-70">
@@ -261,26 +272,26 @@
 				class:font-bold={step === i + 1}
 				class:opacity-100={step === i + 1}
 			>
-				{i + 1}. {label}
+				{i + 1}. {STEP_LABELS[label]()}
 			</li>
 			{#if i < steps.length - 1}<li class="opacity-30">→</li>{/if}
 		{/each}
 	</ol>
 
 	<div class="card p-6 space-y-4">
-		{#if currentLabel === 'Identity'}
-			<h3 class="h3">Identity</h3>
+		{#if currentLabel === 'identity'}
+			<h3 class="h3">{m.tnew_step_identity()}</h3>
 			<label class="label">
-				<span class="font-medium">Display name</span>
+				<span class="font-medium">{m.tnew_display_name()}</span>
 				<input name="display_name" class="input" bind:value={form.display_name} placeholder="Acme Corp" />
 			</label>
 			<label class="label">
-				<span class="font-medium">Slug</span>
+				<span class="font-medium">{m.tnew_slug()}</span>
 				<input name="slug" class="input" bind:value={form.slug} placeholder="acme" />
-				<small class="opacity-60">3–32 chars, lowercase letters/digits/hyphens. Used in URLs and namespace.</small>
+				<small class="opacity-60">{m.tnew_slug_hint()}</small>
 			</label>
 			<label class="label">
-				<span class="font-medium">Contact email</span>
+				<span class="font-medium">{m.tnew_contact_email()}</span>
 				<input
 					name="contact_email"
 					type="email"
@@ -289,78 +300,66 @@
 					placeholder="ops@acme.example"
 				/>
 			</label>
-		{:else if currentLabel === 'Profile'}
-			<h3 class="h3">Profile</h3>
+		{:else if currentLabel === 'profile'}
+			<h3 class="h3">{m.tnew_step_profile()}</h3>
 			<label class="flex items-start gap-3 p-3 rounded border border-surface-500/30 hover:border-primary-500 cursor-pointer">
 				<input type="radio" class="radio" bind:group={form.profile} value="poc" />
 				<div>
-					<div class="font-medium">PoC</div>
-					<div class="text-sm opacity-70">
-						Ephemeral, single-node, node-local storage, no ingress, tight resource quotas. Right for demo tenants.
-					</div>
+					<div class="font-medium">{m.tnew_poc()}</div>
+					<div class="text-sm opacity-70">{m.tnew_poc_desc()}</div>
 				</div>
 			</label>
 			<label class="flex items-start gap-3 p-3 rounded border border-surface-500/30 hover:border-primary-500 cursor-pointer">
 				<input type="radio" class="radio" bind:group={form.profile} value="persistent" />
 				<div>
-					<div class="font-medium">Persistent</div>
-					<div class="text-sm opacity-70">
-						Single-node but durable. PVC-backed indexer + manager. No HA (deferred).
-					</div>
+					<div class="font-medium">{m.tnew_persistent()}</div>
+					<div class="text-sm opacity-70">{m.tnew_persistent_desc()}</div>
 				</div>
 			</label>
 			<label class="flex items-start gap-3 p-3 rounded border border-surface-500/30 hover:border-primary-500 cursor-pointer">
 				<input type="radio" class="radio" bind:group={form.profile} value="provided" />
 				<div>
-					<div class="font-medium">Provided (bring your own Wazuh)</div>
-					<div class="text-sm opacity-70">
-						The tenant already runs Wazuh. SocTalk deploys only the adapter + runs-worker
-						and points them at your external indexer + API. You'll enter the credentials
-						in the next step.
-					</div>
+					<div class="font-medium">{m.tnew_provided()}</div>
+					<div class="text-sm opacity-70">{m.tnew_provided_desc()}</div>
 				</div>
 			</label>
 
 			<details class="card p-3 bg-surface-500/10">
-				<summary class="cursor-pointer text-sm opacity-80">LLM (advanced)</summary>
+				<summary class="cursor-pointer text-sm opacity-80">{m.tnew_llm_advanced()}</summary>
 				<div class="mt-3 space-y-2">
 					<label class="label">
-						<span class="text-sm">Base URL</span>
+						<span class="text-sm">{m.tnew_base_url()}</span>
 						<input class="input" bind:value={form.llm_base_url} />
 					</label>
 					<label class="label">
-						<span class="text-sm">Model</span>
+						<span class="text-sm">{m.tnew_model()}</span>
 						<input class="input" bind:value={form.llm_model} />
 					</label>
 					<label class="label">
-						<span class="text-sm">Fast model</span>
+						<span class="text-sm">{m.tnew_fast_model()}</span>
 						<input name="llm_fast_model" class="input" bind:value={form.llm_fast_model} />
-						<small class="opacity-60">leave blank to use the primary model</small>
+						<small class="opacity-60">{m.tnew_blank_primary_hint()}</small>
 					</label>
 					<label class="label">
-						<span class="text-sm">Thinking model</span>
+						<span class="text-sm">{m.tnew_thinking_model()}</span>
 						<input
 							name="llm_reasoning_model"
 							class="input"
 							bind:value={form.llm_reasoning_model}
 						/>
-						<small class="opacity-60">leave blank to use the primary model</small>
+						<small class="opacity-60">{m.tnew_blank_primary_hint()}</small>
 					</label>
 					<label class="label">
-						<span class="text-sm">Provider</span>
+						<span class="text-sm">{m.tnew_provider()}</span>
 						<select name="llm_provider" class="select" bind:value={form.llm_provider}>
-							<option value="">Use install default</option>
+							<option value="">{m.tnew_use_install_default()}</option>
 							<option value="openai-compatible">openai-compatible</option>
 							<option value="anthropic">anthropic</option>
 						</select>
-						<small class="opacity-60"
-							>leave on "install default" to inherit the MSSP's provider, model and
-							shared key — the Base URL / Model above only apply once you pick a
-							provider</small
-						>
+						<small class="opacity-60">{m.tnew_provider_hint()}</small>
 					</label>
 					<label class="label">
-						<span class="text-sm">API key</span>
+						<span class="text-sm">{m.tnew_api_key()}</span>
 						<input
 							name="llm_api_key"
 							type="password"
@@ -369,25 +368,22 @@
 							bind:value={form.llm_api_key}
 						/>
 						{#if form.profile === 'provided'}
-							<small class="opacity-60">Required for provided tenants — you'll confirm it on the External SIEM step.</small>
+							<small class="opacity-60">{m.tnew_key_required_hint()}</small>
 						{:else}
-							<small class="opacity-60">leave blank to use the MSSP shared install key</small>
+							<small class="opacity-60">{m.tnew_key_blank_hint()}</small>
 						{/if}
 					</label>
 				</div>
 			</details>
-		{:else if currentLabel === 'External SIEM'}
-			<h3 class="h3">External SIEM</h3>
-			<p class="text-sm opacity-70">
-				SocTalk connects to your existing Wazuh. The Indexer (OpenSearch) and the API
-				(manager) authenticate with separate credentials.
-			</p>
+		{:else if currentLabel === 'siem'}
+			<h3 class="h3">{m.tnew_step_siem()}</h3>
+			<p class="text-sm opacity-70">{m.tnew_siem_intro()}</p>
 			{#if form.external_siem}
 				<div class="card p-4 space-y-4 bg-surface-500/10">
 					<div class="space-y-2">
-						<div class="text-sm font-medium">Wazuh Indexer (OpenSearch)</div>
+						<div class="text-sm font-medium">{m.tnew_indexer_section()}</div>
 						<label class="label">
-							<span class="text-sm">Indexer URL</span>
+							<span class="text-sm">{m.tnew_indexer_url()}</span>
 							<input
 								name="indexer_url"
 								class="input"
@@ -397,7 +393,7 @@
 						</label>
 						<div class="grid grid-cols-2 gap-3">
 							<label class="label">
-								<span class="text-sm">Indexer username</span>
+								<span class="text-sm">{m.tnew_indexer_username()}</span>
 								<input
 									name="indexer_username"
 									class="input"
@@ -406,7 +402,7 @@
 								/>
 							</label>
 							<label class="label">
-								<span class="text-sm">Indexer password</span>
+								<span class="text-sm">{m.tnew_indexer_password()}</span>
 								<input
 									name="indexer_password"
 									type="password"
@@ -417,9 +413,9 @@
 						</div>
 					</div>
 					<div class="space-y-2">
-						<div class="text-sm font-medium">Wazuh API (manager)</div>
+						<div class="text-sm font-medium">{m.tnew_api_section()}</div>
 						<label class="label">
-							<span class="text-sm">API URL</span>
+							<span class="text-sm">{m.tnew_api_url()}</span>
 							<input
 								name="api_url"
 								class="input"
@@ -429,7 +425,7 @@
 						</label>
 						<div class="grid grid-cols-2 gap-3">
 							<label class="label">
-								<span class="text-sm">API username</span>
+								<span class="text-sm">{m.tnew_api_username()}</span>
 								<input
 									name="api_username"
 									class="input"
@@ -438,7 +434,7 @@
 								/>
 							</label>
 							<label class="label">
-								<span class="text-sm">API password</span>
+								<span class="text-sm">{m.tnew_api_password()}</span>
 								<input
 									name="api_password"
 									type="password"
@@ -448,14 +444,14 @@
 							</label>
 						</div>
 						<label class="label">
-							<span class="text-sm">API token (optional)</span>
+							<span class="text-sm">{m.tnew_api_token()}</span>
 							<input
 								name="api_token"
 								type="password"
 								class="input"
 								bind:value={form.external_siem.api_token}
 							/>
-							<small class="opacity-60">Optional pre-minted manager token; overrides password auth.</small>
+							<small class="opacity-60">{m.tnew_api_token_hint()}</small>
 						</label>
 					</div>
 					<label class="flex items-center gap-2">
@@ -465,7 +461,7 @@
 							class="checkbox"
 							bind:checked={form.external_siem.verify_ssl}
 						/>
-						<span class="text-sm">Verify TLS certificates (uncheck for self-signed)</span>
+						<span class="text-sm">{m.tnew_verify_tls()}</span>
 					</label>
 				</div>
 			{/if}
@@ -473,21 +469,18 @@
 			     backend 422s without it), bound to the same form fields as the
 			     'LLM (advanced)' disclosure on the Profile step. -->
 			<div class="card p-4 space-y-2 bg-surface-500/10" data-testid="wizard-llm-credentials">
-				<div class="text-sm font-medium">LLM credentials (required)</div>
-				<p class="text-sm opacity-70">
-					Provided tenants use their own LLM API key — the MSSP shared install key
-					does not apply to this profile.
-				</p>
+				<div class="text-sm font-medium">{m.tnew_llm_required()}</div>
+				<p class="text-sm opacity-70">{m.tnew_llm_required_hint()}</p>
 				<label class="label">
-					<span class="text-sm">Provider</span>
+					<span class="text-sm">{m.tnew_provider()}</span>
 					<select name="llm_provider" class="select" bind:value={form.llm_provider}>
-						<option value="">Use install default (inferred from key)</option>
+						<option value="">{m.tnew_use_install_default_inferred()}</option>
 						<option value="openai-compatible">openai-compatible</option>
 						<option value="anthropic">anthropic</option>
 					</select>
 				</label>
 				<label class="label">
-					<span class="text-sm">API key</span>
+					<span class="text-sm">{m.tnew_api_key()}</span>
 					<input
 						name="llm_api_key"
 						type="password"
@@ -497,10 +490,10 @@
 					/>
 				</label>
 			</div>
-		{:else if currentLabel === 'Branding'}
-			<h3 class="h3">Branding</h3>
+		{:else if currentLabel === 'branding'}
+			<h3 class="h3">{m.tnew_step_branding()}</h3>
 			<label class="label">
-				<span class="font-medium">App name</span>
+				<span class="font-medium">{m.tnew_app_name()}</span>
 				<input
 					name="branding_app_name"
 					class="input"
@@ -509,53 +502,51 @@
 				/>
 			</label>
 			<label class="label">
-				<span class="font-medium">Logo URL</span>
+				<span class="font-medium">{m.tnew_logo_url()}</span>
 				<input name="branding_logo_url" class="input" bind:value={form.branding_logo_url} placeholder="https://…/logo.svg" />
 			</label>
 			<div class="grid grid-cols-2 gap-3">
 				<label class="label">
-					<span class="font-medium">Primary color</span>
+					<span class="font-medium">{m.tnew_primary_color()}</span>
 					<input type="color" class="input h-10" bind:value={form.branding_primary_color} />
 				</label>
 				<label class="label">
-					<span class="font-medium">Secondary color</span>
+					<span class="font-medium">{m.tnew_secondary_color()}</span>
 					<input type="color" class="input h-10" bind:value={form.branding_secondary_color} />
 				</label>
 			</div>
-		{:else if currentLabel === 'Review'}
-			<h3 class="h3">Review</h3>
+		{:else if currentLabel === 'review'}
+			<h3 class="h3">{m.tnew_step_review()}</h3>
 			<dl class="space-y-1 text-sm">
-				<div class="flex justify-between"><dt class="opacity-60">Display name</dt><dd>{form.display_name}</dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">Slug</dt><dd><code class="text-xs">{form.slug}</code></dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">Profile</dt><dd>{form.profile}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_display_name()}</dt><dd>{form.display_name}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_slug()}</dt><dd><code class="text-xs">{form.slug}</code></dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_step_profile()}</dt><dd>{form.profile}</dd></div>
 				{#if form.profile === 'provided' && form.external_siem}
-					<div class="flex justify-between"><dt class="opacity-60">Indexer URL</dt><dd><code class="text-xs">{form.external_siem.indexer_url || '—'}</code></dd></div>
-					<div class="flex justify-between"><dt class="opacity-60">Indexer user</dt><dd>{form.external_siem.indexer_username || '—'}</dd></div>
-					<div class="flex justify-between"><dt class="opacity-60">API URL</dt><dd><code class="text-xs">{form.external_siem.api_url || '—'}</code></dd></div>
-					<div class="flex justify-between"><dt class="opacity-60">API user</dt><dd>{form.external_siem.api_username || '—'}</dd></div>
-					<div class="flex justify-between"><dt class="opacity-60">Verify TLS</dt><dd>{form.external_siem.verify_ssl ? 'yes' : 'no'}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_indexer_url()}</dt><dd><code class="text-xs">{form.external_siem.indexer_url || '—'}</code></dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_indexer_user()}</dt><dd>{form.external_siem.indexer_username || '—'}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_api_url()}</dt><dd><code class="text-xs">{form.external_siem.api_url || '—'}</code></dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_api_user()}</dt><dd>{form.external_siem.api_username || '—'}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_verify_tls_short()}</dt><dd>{form.external_siem.verify_ssl ? m.tnew_yes() : m.tnew_no()}</dd></div>
 				{/if}
-				<div class="flex justify-between"><dt class="opacity-60">Contact</dt><dd>{form.contact_email || '—'}</dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">App name</dt><dd>{form.branding_app_name || form.display_name}</dd></div>
-				<div class="flex justify-between"><dt class="opacity-60">Primary</dt><dd>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_contact()}</dt><dd>{form.contact_email || '—'}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_app_name()}</dt><dd>{form.branding_app_name || form.display_name}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_primary_short()}</dt><dd>
 					<span class="inline-block w-4 h-4 rounded align-middle mr-2" style="background:{form.branding_primary_color}"></span>
 					<code class="text-xs">{form.branding_primary_color}</code>
 				</dd></div>
 				<!-- Per-role override fragments only render when non-blank — a
 				     blank override never shows up as an empty literal. -->
-				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider.trim() ? `${form.llm_provider} · ${form.llm_model}` : 'install default'}{form.llm_fast_model.trim() ? ` · fast: ${form.llm_fast_model.trim()}` : ''}{form.llm_reasoning_model.trim() ? ` · thinking: ${form.llm_reasoning_model.trim()}` : ''}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">LLM</dt><dd data-testid="review-llm">{form.llm_provider.trim() ? `${form.llm_provider} · ${form.llm_model}` : m.tnew_install_default()}{form.llm_fast_model.trim() ? ` · fast: ${form.llm_fast_model.trim()}` : ''}{form.llm_reasoning_model.trim() ? ` · thinking: ${form.llm_reasoning_model.trim()}` : ''}</dd></div>
 				<!-- Key is NEVER rendered in full — set/not-set plus a last-4 mask only. -->
-				<div class="flex justify-between"><dt class="opacity-60">LLM API key</dt><dd data-testid="review-llm-key">{form.llm_api_key.trim() ? `set (…${form.llm_api_key.trim().slice(-4)})` : 'not set'}</dd></div>
+				<div class="flex justify-between"><dt class="opacity-60">LLM API key</dt><dd data-testid="review-llm-key">{form.llm_api_key.trim() ? m.tnew_key_set({ last4: form.llm_api_key.trim().slice(-4) }) : m.tnew_key_not_set()}</dd></div>
 			</dl>
-			<p class="text-xs opacity-60">
-				Submitting kicks off namespace + chart provisioning. The tenant will land in <code>pending → provisioning → active</code>.
-			</p>
+			<p class="text-xs opacity-60">{m.tnew_submit_hint()} <code>pending → provisioning → active</code>.</p>
 		{/if}
 	</div>
 
 	<div class="flex justify-between">
 		<button class="btn variant-ghost-surface" on:click={prev} disabled={step === 1}>
-			Back
+			{m.tnew_back()}
 		</button>
 		{#if step < steps.length}
 			<button
@@ -563,7 +554,7 @@
 				on:click={next}
 				disabled={!stepValid || submitting}
 			>
-				Next
+				{m.tnew_next()}
 			</button>
 		{:else}
 			<button
@@ -575,7 +566,7 @@
 				{#if submitting}
 					<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 				{/if}
-				Create
+				{m.tnew_create()}
 			</button>
 		{/if}
 	</div>

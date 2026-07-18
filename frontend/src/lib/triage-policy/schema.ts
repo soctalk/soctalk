@@ -8,96 +8,97 @@
  * server's fail-closed validation still rejects, so drift degrades to a worse
  * error message, never to an unsafe accept.
  */
+import { m } from '$lib/paraglide/messages';
 
 // ---------------------------------------------------------------- vocabularies
 
 /** conditions.STATE_CONTRACT — the only fields a guardrail condition may read. */
 export interface ContractField {
 	path: string;
-	label: string;
+	label: () => string;
 	type: 'enum' | 'boolean' | 'number' | 'string';
 	/** Closed set for 'enum'; suggestions (free text allowed) for 'string'. */
 	values?: string[];
-	help: string;
+	help: () => string;
 }
 
 export const STATE_CONTRACT: ContractField[] = [
 	{
 		path: 'authz.class',
-		label: 'Authorization class',
+		label: m.tp_contract_authz_class_label,
 		type: 'enum',
 		values: ['covered', 'contradicted', 'absent'],
-		help: 'Engine ruling: covered (a record fully covers), contradicted (records present but do not cover), absent (no record of the right kind).'
+		help: m.tp_contract_authz_class_help
 	},
 	{
 		path: 'authz.in_scope',
-		label: 'Authorization: in scope',
+		label: m.tp_contract_authz_in_scope_label,
 		type: 'boolean',
-		help: 'A single record fully covers the activity (actor, host, action, window).'
+		help: m.tp_contract_authz_in_scope_help
 	},
 	{
 		path: 'authz.sanctioned_or_routine',
-		label: 'Authorization: sanctioned or routine',
+		label: m.tp_contract_authz_sanctioned_or_routine_label,
 		type: 'boolean',
-		help: 'The activity is sanctioned by a record or routine for this actor.'
+		help: m.tp_contract_authz_sanctioned_or_routine_help
 	},
 	{
 		path: 'authz.actor_genuine',
-		label: 'Authorization: actor genuine',
+		label: m.tp_contract_authz_actor_genuine_label,
 		type: 'boolean',
-		help: 'No signal that the actor identity is compromised or spoofed.'
+		help: m.tp_contract_authz_actor_genuine_help
 	},
 	{
 		path: 'authz.policy_allowed',
-		label: 'Authorization: policy allows',
+		label: m.tp_contract_authz_policy_allowed_label,
 		type: 'boolean',
-		help: 'No prohibition record forbids the action.'
+		help: m.tp_contract_authz_policy_allowed_help
 	},
 	{
 		path: 'verdict',
-		label: 'LLM draft verdict',
+		label: m.tp_contract_verdict_label,
 		type: 'enum',
 		values: ['close', 'needs_more_info', 'escalate'],
-		help: 'The decision the model drafted — the guard runs before it commits.'
+		help: m.tp_contract_verdict_help
 	},
 	{
 		path: 'verdict_confidence',
-		label: 'Verdict confidence',
+		label: m.tp_contract_verdict_confidence_label,
 		type: 'number',
-		help: 'Model confidence in the draft verdict (0–1).'
+		help: m.tp_contract_verdict_confidence_help
 	},
 	{
 		path: 'asset.data_classification',
-		label: 'Asset data classification',
+		label: m.tp_contract_asset_data_classification_label,
 		type: 'string',
 		values: ['pci', 'phi', 'pii', 'confidential', 'internal', 'public'],
-		help: 'Trust-resolved classification of the activity’s asset (free-form; common values suggested).'
+		help: m.tp_contract_asset_data_classification_help
 	},
 	{
 		path: 'asset.environment',
-		label: 'Asset environment',
+		label: m.tp_contract_asset_environment_label,
 		type: 'string',
 		values: ['production', 'staging', 'development'],
-		help: 'Trust-resolved environment of the activity’s asset.'
+		help: m.tp_contract_asset_environment_help
 	},
 	{
 		path: 'asset.criticality',
-		label: 'Asset criticality',
+		label: m.tp_contract_asset_criticality_label,
 		type: 'string',
 		values: ['critical', 'high', 'medium', 'low'],
-		help: 'Trust-resolved criticality of the activity’s asset.'
+		help: m.tp_contract_asset_criticality_help
 	},
 	{
 		path: 'enrichment.ioc',
-		label: 'Malicious indicator present',
+		label: m.tp_contract_enrichment_ioc_label,
 		type: 'boolean',
-		help: 'A malicious enrichment verdict or a threat-intel IOC match.'
+		help: m.tp_contract_enrichment_ioc_help
 	},
 	{
 		path: 'correlation.active_incident',
-		label: 'Active incident correlated',
+		label: m.tp_contract_correlation_active_incident_label,
 		type: 'boolean',
-		help: 'The investigation correlates to an open incident.'
+		help: m.tp_contract_correlation_active_incident_help
 	}
 ];
 
@@ -107,20 +108,28 @@ export function contractField(path: string): ContractField | undefined {
 	return STATE_CONTRACT.find((f) => f.path === path);
 }
 
+export function contractFieldLabel(path: string): string {
+	return contractField(path)?.label() ?? path;
+}
+
 /** conditions.ALLOWED_OPERATORS (minus 'var', which the builder implies). */
 export const COMPARISON_OPS = ['==', '!=', '<', '<=', '>', '>='] as const;
 export const LOGIC_OPS = ['and', 'or', '!', '!!'] as const;
 export const MEMBERSHIP_OPS = ['in'] as const;
 
-export const OPERATOR_LABELS: Record<string, string> = {
-	'==': 'is',
-	'!=': 'is not',
-	'<': '<',
-	'<=': '≤',
-	'>': '>',
-	'>=': '≥',
-	in: 'is one of'
+export const OPERATOR_LABELS: Record<string, () => string> = {
+	'==': m.tp_operator_eq,
+	'!=': m.tp_operator_neq,
+	'<': m.tp_operator_lt,
+	'<=': m.tp_operator_lte,
+	'>': m.tp_operator_gt,
+	'>=': m.tp_operator_gte,
+	in: m.tp_operator_in
 };
+
+export function operatorLabel(op: string): string {
+	return OPERATOR_LABELS[op]?.() ?? op;
+}
 
 /** Backend structural limits (conditions.py). */
 export const CONDITION_MAX_DEPTH = 8;
@@ -311,7 +320,7 @@ function isScalar(v: unknown): boolean {
 export function validateCondition(node: unknown): string[] {
 	const errors: string[] = [];
 	if (typeof node !== 'object' || node === null || Array.isArray(node)) {
-		return ['a condition must be a mapping at its root'];
+		return [m.tp_validate_condition_root()];
 	}
 	const counter = { n: 0 };
 	walkValidate(node, 0, counter, errors);
@@ -322,48 +331,49 @@ function walkValidate(node: unknown, depth: number, counter: { n: number }, erro
 	if (errors.length > 4) return; // enough feedback; avoid error floods
 	counter.n += 1;
 	if (counter.n > CONDITION_MAX_NODES) {
-		errors.push(`condition exceeds ${CONDITION_MAX_NODES} nodes`);
+		errors.push(m.tp_validate_condition_nodes({ max: CONDITION_MAX_NODES }));
 		return;
 	}
 	if (depth > CONDITION_MAX_DEPTH) {
-		errors.push(`condition exceeds depth ${CONDITION_MAX_DEPTH}`);
+		errors.push(m.tp_validate_condition_depth({ max: CONDITION_MAX_DEPTH }));
 		return;
 	}
 	if (node === null || ['string', 'number', 'boolean'].includes(typeof node)) return;
 	if (Array.isArray(node)) {
 		if (node.length > CONDITION_MAX_LIST) {
-			errors.push(`list literals are capped at ${CONDITION_MAX_LIST} entries`);
+			errors.push(m.tp_validate_condition_list_cap({ max: CONDITION_MAX_LIST }));
 		}
-		if (!node.every(isScalar)) errors.push('list literals may contain only scalars');
+		if (!node.every(isScalar)) errors.push(m.tp_validate_condition_list_scalars());
 		return;
 	}
 	if (typeof node !== 'object') {
-		errors.push(`unsupported value ${String(node)}`);
+		errors.push(m.tp_validate_condition_unsupported_value({ value: String(node) }));
 		return;
 	}
 	const entries = Object.entries(node as Record<string, unknown>);
 	if (entries.length !== 1) {
-		errors.push('each condition node must be a single {operator: args} mapping');
+		errors.push(m.tp_validate_condition_single_mapping({ shape: '{operator: args}' }));
 		return;
 	}
 	const [op, args] = entries[0];
 	const allowed = ['var', ...COMPARISON_OPS, ...LOGIC_OPS, ...MEMBERSHIP_OPS];
 	if (!allowed.includes(op)) {
-		errors.push(`operator '${op}' is not allowed`);
+		errors.push(m.tp_validate_operator_not_allowed({ op }));
 		return;
 	}
 	if (op === 'var') {
-		if (typeof args !== 'string') errors.push('var takes a single dotted field name string');
-		else if (!CONTRACT_PATHS.has(args)) errors.push(`field '${args}' is not in the state contract`);
+		if (typeof args !== 'string') errors.push(m.tp_validate_var_string());
+		else if (!CONTRACT_PATHS.has(args))
+			errors.push(m.tp_validate_field_not_contract({ field: args }));
 		return;
 	}
 	const argsList = Array.isArray(args) ? args : [args];
 	if ((COMPARISON_OPS as readonly string[]).includes(op) && argsList.length !== 2) {
-		errors.push(`${op} takes exactly 2 arguments`);
+		errors.push(m.tp_validate_op_two_args({ op }));
 	}
-	if (op === 'in' && argsList.length !== 2) errors.push('in takes exactly 2 arguments');
+	if (op === 'in' && argsList.length !== 2) errors.push(m.tp_validate_op_two_args({ op }));
 	if ((op === '!' || op === '!!') && argsList.length !== 1) {
-		errors.push(`${op} takes exactly 1 argument`);
+		errors.push(m.tp_validate_op_one_arg({ op }));
 	}
 	for (const a of argsList) walkValidate(a, depth + 1, counter, errors);
 }
@@ -373,74 +383,73 @@ export function validateDefinition(def: Record<string, unknown>): string[] {
 	const errors: string[] = [];
 	for (const key of Object.keys(def)) {
 		if (key === 'deterministic_disposition') {
-			errors.push('deterministic_disposition is a built-in-only capability and cannot be authored');
+			errors.push(m.tp_validate_builtin_only());
 		} else if (!AUTHORABLE_FIELDS.has(key)) {
-			errors.push(`unknown field '${key}' (the schema rejects extras)`);
+			errors.push(m.tp_validate_unknown_field({ field: key }));
 		}
 	}
 	const id = def.id;
 	if (typeof id !== 'string' || !SLUG_RE.test(id)) {
-		errors.push('id must be a slug: lowercase letters, digits, hyphens');
+		errors.push(m.tp_validate_id_slug());
 	}
 	const priority = def.priority ?? 100;
 	if (typeof priority !== 'number' || !Number.isInteger(priority) || priority < FILE_PRIORITY_FLOOR) {
-		errors.push(`priority must be an integer ≥ ${FILE_PRIORITY_FLOOR} — built-in protections may not be outranked`);
+		errors.push(m.tp_validate_priority_floor({ floor: FILE_PRIORITY_FLOOR }));
 	}
 	const steps = (def.required_steps as unknown[]) ?? [];
 	for (const s of steps) {
 		if (!(KNOWN_STEP_NODES as readonly string[]).includes(String(s))) {
-			errors.push(`unknown required step '${String(s)}'`);
+			errors.push(m.tp_validate_unknown_step({ step: String(s) }));
 		}
 	}
 	const modules = (def.decision_modules as unknown[]) ?? [];
-	for (const m of modules) {
-		if (!(KNOWN_DECISION_MODULES as readonly string[]).includes(String(m))) {
-			errors.push(`unknown decision module '${String(m)}'`);
+	for (const mod of modules) {
+		if (!(KNOWN_DECISION_MODULES as readonly string[]).includes(String(mod))) {
+			errors.push(m.tp_validate_unknown_module({ module: String(mod) }));
 		}
 	}
 	const legal = (def.legal_actions as Record<string, unknown[]>) ?? {};
 	for (const [phase, actions] of Object.entries(legal)) {
 		if (!(KNOWN_PHASES as readonly string[]).includes(phase)) {
-			errors.push(`unknown legal_actions phase '${phase}' (only triage|decide)`);
+			errors.push(m.tp_validate_unknown_phase({ phase }));
 			continue;
 		}
 		for (const a of actions ?? []) {
 			if (!(SUPERVISOR_ACTIONS as readonly string[]).includes(String(a))) {
-				errors.push(`unknown action '${String(a)}' in phase '${phase}'`);
+				errors.push(m.tp_validate_unknown_action({ action: String(a), phase }));
 			} else if (!(GRANTABLE_ACTIONS as readonly string[]).includes(String(a))) {
-				errors.push(
-					`CLOSE cannot be granted in phase '${phase}' — leave the phase unconstrained ` +
-						'or route terminal decisions through VERDICT'
-				);
+				errors.push(m.tp_validate_close_not_grantable({ phase }));
 			}
 		}
 	}
 	const guardrails = (def.guardrails as GuardrailDef[]) ?? [];
 	if (guardrails.length > MAX_GUARDRAILS) {
-		errors.push(`at most ${MAX_GUARDRAILS} guardrails per triage policy`);
+		errors.push(m.tp_validate_max_guardrails({ max: MAX_GUARDRAILS }));
 	}
 	guardrails.forEach((g, i) => {
-		const label = `guardrail ${i + 1}`;
+		const n = i + 1;
 		if (!(GUARDRAIL_EFFECTS as readonly string[]).includes(g.effect)) {
-			errors.push(`${label}: effect must be override or interrupt`);
+			errors.push(m.tp_validate_guardrail_effect({ n }));
 		}
 		if (!(GUARDRAIL_TARGETS as readonly string[]).includes(g.to)) {
-			errors.push(`${label}: target must be escalate, needs_more_info or human_review`);
+			errors.push(m.tp_validate_guardrail_target({ n }));
 		}
 		if (g.effect === 'interrupt' && g.to !== 'human_review') {
-			errors.push(`${label}: interrupt guardrails route to human_review only`);
+			errors.push(m.tp_validate_guardrail_interrupt_target({ n }));
 		}
 		if (g.effect === 'override' && g.to === 'human_review') {
-			errors.push(`${label}: override guardrails target a disposition, not review`);
+			errors.push(m.tp_validate_guardrail_override_target({ n }));
 		}
 		if (!g.reason || g.reason.length < 1 || g.reason.length > MAX_REASON_LEN) {
-			errors.push(`${label}: reason is required (1–${MAX_REASON_LEN} chars)`);
+			errors.push(m.tp_validate_guardrail_reason({ n, max: MAX_REASON_LEN }));
 		}
-		for (const e of validateCondition(g.when)) errors.push(`${label}: ${e}`);
+		for (const e of validateCondition(g.when)) {
+			errors.push(m.tp_validate_guardrail_condition({ n, error: e }));
+		}
 	});
 	const bytes = new TextEncoder().encode(JSON.stringify(def)).length;
 	if (bytes > MAX_DEFINITION_BYTES) {
-		errors.push(`definition exceeds ${MAX_DEFINITION_BYTES} bytes`);
+		errors.push(m.tp_validate_definition_bytes({ max: MAX_DEFINITION_BYTES }));
 	}
 	return errors;
 }
@@ -531,14 +540,14 @@ export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>
 		return {
 			stage: 'floor',
 			finalDecision: 'escalate',
-			reason: 'safety floor: malicious indicators never let a close stand'
+			reason: m.tp_sim_reason_ioc_floor()
 		};
 	}
 	if (verdict === 'close' && authzClass === 'contradicted') {
 		return {
 			stage: 'floor',
 			finalDecision: 'escalate',
-			reason: 'safety floor: authorization records present but do not cover'
+			reason: m.tp_sim_reason_authz_floor()
 		};
 	}
 	const rails = def.guardrails ?? [];
@@ -572,13 +581,13 @@ export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>
 			effect: 'interrupt',
 			finalDecision: verdict, // draft stands — held for sign-off
 			heldForReview: true,
-			reason: `close on a ${dataClass}-classified asset requires human sign-off`
+			reason: m.tp_sim_reason_signoff({ dataClass })
 		};
 	}
 	return {
 		stage: 'commit',
 		finalDecision: verdict,
-		reason: 'no guardrail fired — the draft stands'
+		reason: m.tp_sim_reason_commit()
 	};
 }
 
@@ -587,25 +596,44 @@ export function simulateGuard(def: TriagePolicyDef, ctx: Record<string, unknown>
 /** A human-readable sentence for a condition, used in summaries and previews. */
 export function conditionToSentence(node: unknown): string {
 	const group = conditionToGroup(node);
-	if (group === null) return 'custom condition (JSON)';
+	if (group === null) return m.tp_condition_custom_json();
 	return groupSentence(group);
 }
 
 function groupSentence(group: RuleGroup): string {
 	const parts = group.children.map((c) =>
-		c.kind === 'group' ? `(${groupSentence(c)})` : ruleSentence(c)
+		c.kind === 'group' ? m.tp_condition_group({ condition: groupSentence(c) }) : ruleSentence(c)
 	);
-	return parts.join(group.op === 'and' ? ' AND ' : ' OR ');
+	return parts.join(group.op === 'and' ? m.tp_condition_join_and() : m.tp_condition_join_or());
 }
 
 function ruleSentence(rule: RuleRow): string {
 	const field = contractField(rule.field);
-	const name = field?.label ?? rule.field;
+	const name = field?.label() ?? rule.field;
 	if (field?.type === 'boolean' && rule.op === '==') {
-		return rule.value === true ? name : `not ${name}`;
+		return rule.value === true
+			? m.tp_condition_bool_true({ field: name })
+			: m.tp_condition_bool_false({ field: name });
 	}
 	const val = Array.isArray(rule.value)
 		? rule.value.map((v) => String(v)).join(', ')
 		: String(rule.value);
-	return `${name} ${OPERATOR_LABELS[rule.op] ?? rule.op} ${val}`;
+	switch (rule.op) {
+		case '==':
+			return m.tp_condition_op_eq({ field: name, value: val });
+		case '!=':
+			return m.tp_condition_op_neq({ field: name, value: val });
+		case '<':
+			return m.tp_condition_op_lt({ field: name, value: val });
+		case '<=':
+			return m.tp_condition_op_lte({ field: name, value: val });
+		case '>':
+			return m.tp_condition_op_gt({ field: name, value: val });
+		case '>=':
+			return m.tp_condition_op_gte({ field: name, value: val });
+		case 'in':
+			return m.tp_condition_op_in({ field: name, value: val });
+		default:
+			return m.tp_condition_op_unknown({ field: name, op: rule.op, value: val });
+	}
 }

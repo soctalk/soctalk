@@ -4,6 +4,8 @@
 	import { api, type AnalyticsSummary } from '$lib/api/client';
 	import { formatDecision, formatSeverity, formatDuration, formatPercent } from '$lib/utils/formatters';
 	import { isMsspScope, authSession } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
+	import { currentLocale } from '$lib/i18n';
 	import MsspAnalytics from '$lib/components/MsspAnalytics.svelte';
 
 	let analytics: AnalyticsSummary | null = null;
@@ -35,7 +37,7 @@
 		try {
 			analytics = await api.analytics.summary(selectedDays);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load analytics';
+			error = e instanceof Error ? e.message : m.ana_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -57,7 +59,7 @@
 					fontFamily: 'inherit'
 				},
 				series: [{
-					name: 'Investigations',
+					name: m.nav_investigations(),
 					data: analytics.ai_behavior.confidence_distribution.map(b => b.count)
 				}],
 				colors: ['#6366f1'],
@@ -102,10 +104,10 @@
 					fontFamily: 'inherit'
 				},
 				series: [
-					{ name: 'Close', data: analytics.ai_behavior.decision_trends.map(t => t.close) },
-					{ name: 'Escalate', data: analytics.ai_behavior.decision_trends.map(t => t.escalate) },
-					{ name: 'Needs Info', data: analytics.ai_behavior.decision_trends.map(t => t.needs_more_info) },
-					{ name: 'Suspicious', data: analytics.ai_behavior.decision_trends.map(t => t.suspicious) },
+					{ name: m.dec_close(), data: analytics.ai_behavior.decision_trends.map(t => t.close) },
+					{ name: m.dec_escalate(), data: analytics.ai_behavior.decision_trends.map(t => t.escalate) },
+					{ name: m.ana_series_needs_info(), data: analytics.ai_behavior.decision_trends.map(t => t.needs_more_info) },
+					{ name: m.dec_suspicious(), data: analytics.ai_behavior.decision_trends.map(t => t.suspicious) },
 				],
 				colors: ['#22c55e', '#ef4444', '#f59e0b', '#8b5cf6'],
 				fill: {
@@ -117,7 +119,7 @@
 				xaxis: {
 					categories: analytics.ai_behavior.decision_trends.map(t => {
 						const d = new Date(t.period);
-						return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+						return d.toLocaleDateString(currentLocale(), { month: 'short', day: 'numeric' });
 					}),
 					labels: { style: { colors: '#94a3b8', fontSize: '11px' } },
 					axisBorder: { show: false },
@@ -155,7 +157,7 @@
 					analytics.human_review.info_requested,
 					analytics.human_review.expired,
 				],
-				labels: ['Approved', 'Rejected', 'More Info', 'Expired'],
+				labels: [m.dec_approved(), m.dec_rejected(), m.ana_label_more_info(), m.dec_expired()],
 				colors: ['#22c55e', '#ef4444', '#f59e0b', '#64748b'],
 				stroke: { show: false },
 				dataLabels: { enabled: false },
@@ -171,7 +173,7 @@
 								show: true,
 								total: {
 									show: true,
-									label: 'Total',
+									label: m.ana_label_total(),
 									color: '#94a3b8',
 									formatter: () => analytics?.human_review.total_reviews.toString() || '0'
 								}
@@ -198,7 +200,7 @@
 					fontFamily: 'inherit'
 				},
 				series: [{
-					name: 'Count',
+					name: m.ana_series_count(),
 					data: [
 						analytics.outcomes.closed_as_false_positive,
 						analytics.outcomes.closed_as_true_positive,
@@ -219,7 +221,7 @@
 					style: { colors: ['#fff'], fontSize: '12px' }
 				},
 				xaxis: {
-					categories: ['False Positive', 'True Positive', 'Suspicious'],
+					categories: [m.ana_verdict_false_positive(), m.ana_verdict_true_positive(), m.dec_suspicious()],
 					labels: { style: { colors: '#94a3b8', fontSize: '11px' } },
 				},
 				yaxis: {
@@ -259,7 +261,7 @@
 </script>
 
 <svelte:head>
-	<title>Analytics - SocTalk</title>
+	<title>{m.nav_analytics()} - SocTalk</title>
 </svelte:head>
 
 <!--
@@ -274,18 +276,18 @@
 {:else}
 <!-- Header with Period Selector -->
 <div class="flex items-center justify-between mb-6">
-	<h1 class="h2">AI Analytics</h1>
+	<h1 class="h2">{m.ana_title()}</h1>
 	<div class="flex items-center gap-2">
-		<span class="text-sm opacity-60">Period:</span>
+		<span class="text-sm opacity-60">{m.ana_period_label()}</span>
 		<select
 			class="select w-32"
 			bind:value={selectedDays}
 			on:change={() => loadAnalytics()}
 		>
-			<option value={1}>Last 24h</option>
-			<option value={7}>Last 7 days</option>
-			<option value={30}>Last 30 days</option>
-			<option value={90}>Last 90 days</option>
+			<option value={1}>{m.ana_period_24h()}</option>
+			<option value={7}>{m.ana_period_7d()}</option>
+			<option value={30}>{m.ana_period_30d()}</option>
+			<option value={90}>{m.ana_period_90d()}</option>
 		</select>
 	</div>
 </div>
@@ -296,54 +298,54 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.ana_error({ error })}</span>
 	</div>
 {:else if analytics}
 	<!-- Executive KPIs -->
 	<section class="mb-8">
-		<h2 class="h4 mb-4 opacity-60">Executive KPIs</h2>
+		<h2 class="h4 mb-4 opacity-60">{m.ana_executive_kpis()}</h2>
 		<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
 			<!-- Auto-Close Rate -->
 			<div class="card p-4">
-				<div class="text-sm opacity-60 mb-1">Auto-Close Rate</div>
+				<div class="text-sm opacity-60 mb-1">{m.ana_kpi_auto_close_rate()}</div>
 				<div class="text-3xl font-bold text-success-500">
 					{formatPercent(analytics.executive_kpis.auto_close_rate)}
 				</div>
 				<div class="text-xs opacity-40 mt-1">
-					{analytics.executive_kpis.auto_closed_count} / {analytics.executive_kpis.total_investigations} investigations
+					{m.ana_kpi_auto_close_sub({ count: analytics.executive_kpis.auto_closed_count, total: analytics.executive_kpis.total_investigations })}
 				</div>
 			</div>
 
 			<!-- Escalation Rate -->
 			<div class="card p-4">
-				<div class="text-sm opacity-60 mb-1">Escalation Rate</div>
+				<div class="text-sm opacity-60 mb-1">{m.ana_kpi_escalation_rate()}</div>
 				<div class="text-3xl font-bold text-error-500">
 					{formatPercent(analytics.executive_kpis.escalation_rate)}
 				</div>
 				<div class="text-xs opacity-40 mt-1">
-					{analytics.executive_kpis.escalated_count} escalated to incidents
+					{m.ana_kpi_escalation_sub({ count: analytics.executive_kpis.escalated_count })}
 				</div>
 			</div>
 
 			<!-- Human Override Rate -->
 			<div class="card p-4">
-				<div class="text-sm opacity-60 mb-1">Human Override Rate</div>
+				<div class="text-sm opacity-60 mb-1">{m.ana_kpi_override_rate()}</div>
 				<div class="text-3xl font-bold text-warning-500">
 					{formatPercent(analytics.executive_kpis.human_override_rate)}
 				</div>
 				<div class="text-xs opacity-40 mt-1">
-					AI decisions changed by analysts
+					{m.ana_kpi_override_sub()}
 				</div>
 			</div>
 
 			<!-- Mean Time to Decision -->
 			<div class="card p-4">
-				<div class="text-sm opacity-60 mb-1">Mean Time to Decision</div>
+				<div class="text-sm opacity-60 mb-1">{m.ana_kpi_mttd()}</div>
 				<div class="text-3xl font-bold text-primary-500">
 					{formatDuration(analytics.executive_kpis.mean_time_to_decision_seconds)}
 				</div>
 				<div class="text-xs opacity-40 mt-1">
-					Avg AI confidence: {analytics.executive_kpis.avg_ai_confidence ? formatPercent(analytics.executive_kpis.avg_ai_confidence) : '-'}
+					{m.ana_kpi_mttd_sub({ value: analytics.executive_kpis.avg_ai_confidence ? formatPercent(analytics.executive_kpis.avg_ai_confidence) : '-' })}
 				</div>
 			</div>
 		</div>
@@ -351,25 +353,25 @@
 
 	<!-- AI Behavior Section -->
 	<section class="mb-8">
-		<h2 class="h4 mb-4 opacity-60">AI Behavior</h2>
+		<h2 class="h4 mb-4 opacity-60">{m.ana_ai_behavior()}</h2>
 		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 			<!-- Confidence Distribution -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-2">Confidence Distribution</h3>
+				<h3 class="text-sm font-semibold mb-2">{m.ana_confidence_distribution()}</h3>
 				<div bind:this={confidenceChartEl} class="h-48"></div>
 				<div class="text-xs opacity-40 mt-2 text-center">
-					High confidence (>80%): {formatPercent(analytics.executive_kpis.high_confidence_rate)}
+					{m.ana_high_confidence_note({ value: formatPercent(analytics.executive_kpis.high_confidence_rate) })}
 				</div>
 			</div>
 
 			<!-- Decision Trends -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-2">Decision Trends</h3>
+				<h3 class="text-sm font-semibold mb-2">{m.ana_decision_trends()}</h3>
 				{#if analytics.ai_behavior.decision_trends.length > 0}
 					<div bind:this={decisionTrendChartEl} class="h-48"></div>
 				{:else}
 					<div class="h-48 flex items-center justify-center opacity-40">
-						No trend data available
+						{m.ana_no_trend_data()}
 					</div>
 				{/if}
 			</div>
@@ -378,7 +380,7 @@
 		<!-- Confidence by Decision Type -->
 		{#if Object.keys(analytics.ai_behavior.avg_confidence_by_decision).length > 0}
 			<div class="card p-4 mt-4">
-				<h3 class="text-sm font-semibold mb-3">Average Confidence by Decision</h3>
+				<h3 class="text-sm font-semibold mb-3">{m.ana_avg_confidence_by_decision()}</h3>
 				<div class="flex flex-wrap gap-4">
 					{#each Object.entries(analytics.ai_behavior.avg_confidence_by_decision) as [decision, confidence]}
 						<div class="flex items-center gap-2">
@@ -395,7 +397,7 @@
 		<!-- Escalation Breakdown by Severity -->
 		{#if analytics.ai_behavior.escalation_breakdown.length > 0}
 			<div class="card p-4 mt-4">
-				<h3 class="text-sm font-semibold mb-3">Escalation Breakdown by Severity</h3>
+				<h3 class="text-sm font-semibold mb-3">{m.ana_escalation_breakdown()}</h3>
 				<div class="space-y-2">
 					{#each analytics.ai_behavior.escalation_breakdown as item}
 						<div class="flex items-center gap-3">
@@ -418,22 +420,22 @@
 
 	<!-- Human-in-the-Loop Section -->
 	<section class="mb-8">
-		<h2 class="h4 mb-4 opacity-60">Human-in-the-Loop</h2>
+		<h2 class="h4 mb-4 opacity-60">{m.ana_human_in_the_loop()}</h2>
 		<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 			<!-- Review Stats Cards -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-3">Review Volume</h3>
+				<h3 class="text-sm font-semibold mb-3">{m.ana_review_volume()}</h3>
 				<div class="space-y-3">
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">Total Reviews</span>
+						<span class="opacity-60">{m.ana_total_reviews()}</span>
 						<span class="font-bold">{analytics.human_review.total_reviews}</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">Currently Pending</span>
+						<span class="opacity-60">{m.ana_currently_pending()}</span>
 						<span class="font-bold text-warning-500">{analytics.human_review.pending}</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">Avg Review Time</span>
+						<span class="opacity-60">{m.ana_avg_review_time()}</span>
 						<span class="font-bold">{formatDuration(analytics.human_review.avg_review_time_seconds)}</span>
 					</div>
 				</div>
@@ -441,35 +443,35 @@
 
 			<!-- Review Outcomes Pie -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-2">Review Outcomes</h3>
+				<h3 class="text-sm font-semibold mb-2">{m.ana_review_outcomes()}</h3>
 				{#if analytics.human_review.total_reviews > 0}
 					<div bind:this={reviewPieChartEl} class="h-48"></div>
 				{:else}
 					<div class="h-48 flex items-center justify-center opacity-40">
-						No review data available
+						{m.ana_no_review_data()}
 					</div>
 				{/if}
 			</div>
 
 			<!-- Agreement/Override Stats -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-3">AI Agreement</h3>
+				<h3 class="text-sm font-semibold mb-3">{m.ana_ai_agreement()}</h3>
 				<div class="space-y-3">
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">AI Agreed (Approved)</span>
+						<span class="opacity-60">{m.ana_ai_agreed()}</span>
 						<span class="font-bold text-success-500">{analytics.human_review.ai_agreed_count}</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">AI Overridden</span>
+						<span class="opacity-60">{m.ana_ai_overridden()}</span>
 						<span class="font-bold text-error-500">{analytics.human_review.ai_overridden_count}</span>
 					</div>
 					<hr class="opacity-20" />
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">Approval Rate</span>
+						<span class="opacity-60">{m.ana_approval_rate()}</span>
 						<span class="font-bold">{formatPercent(analytics.human_review.approval_rate)}</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span class="opacity-60">Override Rate</span>
+						<span class="opacity-60">{m.ana_override_rate()}</span>
 						<span class="font-bold text-warning-500">{formatPercent(analytics.human_review.override_rate)}</span>
 					</div>
 				</div>
@@ -479,39 +481,39 @@
 
 	<!-- Outcomes Section -->
 	<section class="mb-8">
-		<h2 class="h4 mb-4 opacity-60">Investigation Outcomes</h2>
+		<h2 class="h4 mb-4 opacity-60">{m.ana_investigation_outcomes()}</h2>
 		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
 			<!-- Resolution Times -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-3">Resolution Times</h3>
+				<h3 class="text-sm font-semibold mb-3">{m.ana_resolution_times()}</h3>
 				<div class="grid grid-cols-3 gap-4 text-center">
 					<div>
 						<div class="text-2xl font-bold text-primary-500">
 							{formatDuration(analytics.outcomes.avg_resolution_time_seconds)}
 						</div>
-						<div class="text-xs opacity-40">Average</div>
+						<div class="text-xs opacity-40">{m.ana_average()}</div>
 					</div>
 					<div>
 						<div class="text-2xl font-bold">
 							{formatDuration(analytics.outcomes.p50_resolution_time_seconds)}
 						</div>
-						<div class="text-xs opacity-40">Median (p50)</div>
+						<div class="text-xs opacity-40">{m.ana_median_p50()}</div>
 					</div>
 					<div>
 						<div class="text-2xl font-bold text-warning-500">
 							{formatDuration(analytics.outcomes.p90_resolution_time_seconds)}
 						</div>
-						<div class="text-xs opacity-40">p90</div>
+						<div class="text-xs opacity-40">{m.ana_p90()}</div>
 					</div>
 				</div>
 				<div class="mt-4 text-center text-sm opacity-60">
-					{analytics.outcomes.total_closed} investigations closed
+					{m.ana_investigations_closed({ count: analytics.outcomes.total_closed })}
 				</div>
 			</div>
 
 			<!-- Outcome Breakdown -->
 			<div class="card p-4">
-				<h3 class="text-sm font-semibold mb-2">Verdict Breakdown</h3>
+				<h3 class="text-sm font-semibold mb-2">{m.ana_verdict_breakdown()}</h3>
 				<div bind:this={outcomeChartEl} class="h-36"></div>
 			</div>
 		</div>

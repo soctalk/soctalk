@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { api, type AuthorizationFact } from '$lib/api/client';
 	import { currentTenantId, canManageAuthorization } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
 
 	let facts: AuthorizationFact[] = [];
 	let loading = false;
@@ -21,7 +22,7 @@
 			const res = await api.authorizationFacts.list(tid);
 			facts = res.facts;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load authorization facts';
+			error = e instanceof Error ? e.message : m.adm_facts_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -58,7 +59,7 @@
 		try {
 			parsed = JSON.parse(editorText);
 		} catch {
-			editorError = 'Not valid JSON';
+			editorError = m.adm_not_valid_json();
 			editorSaving = false;
 			return;
 		}
@@ -67,7 +68,7 @@
 			editorOpen = false;
 			await load(tenantId);
 		} catch (e) {
-			editorError = e instanceof Error ? e.message : 'Create failed';
+			editorError = e instanceof Error ? e.message : m.adm_create_failed();
 		} finally {
 			editorSaving = false;
 		}
@@ -75,13 +76,13 @@
 
 	async function revoke(f: AuthorizationFact) {
 		if (!tenantId) return;
-		const reason = window.prompt(`Revoke fact "${f.id}"? Optional reason:`, '');
+		const reason = window.prompt(m.adm_revoke_fact_prompt({ id: f.id }), '');
 		if (reason === null) return; // cancelled
 		try {
 			await api.authorizationFacts.revoke(tenantId, f.id, reason || null);
 			await load(tenantId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Revoke failed';
+			error = e instanceof Error ? e.message : m.adm_revoke_failed();
 		}
 	}
 
@@ -91,7 +92,7 @@
 			await api.authorizationFacts.review(tenantId, f.id, decision);
 			await load(tenantId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Review failed';
+			error = e instanceof Error ? e.message : m.adm_review_failed();
 		}
 	}
 </script>
@@ -99,10 +100,9 @@
 <div class="p-6">
 	<div class="flex items-center justify-between mb-4">
 		<div>
-			<h1 class="text-2xl font-semibold">Authorization facts</h1>
+			<h1 class="text-2xl font-semibold">{m.adm_facts_title()}</h1>
 			<p class="text-sm text-gray-500">
-				Org-state the triage engine reasons over. Facts arrive from connectors (the ingest API),
-				SIEM-derived routine, or analyst answers. Revoking is a soft delete; the audit row survives.
+				{m.adm_facts_intro()}
 			</p>
 		</div>
 		{#if $canManageAuthorization}
@@ -111,33 +111,33 @@
 				on:click={openCreate}
 				disabled={!tenantId}
 			>
-				+ New fact
+				{m.adm_new_fact()}
 			</button>
 		{/if}
 	</div>
 
 	{#if !tenantId}
-		<p class="text-gray-500">Select a tenant to view its authorization facts.</p>
+		<p class="text-gray-500">{m.adm_select_tenant()}</p>
 	{:else if loading}
-		<p class="text-gray-500">Loading…</p>
+		<p class="text-gray-500">{m.common_loading()}</p>
 	{:else if error}
 		<p class="text-red-600">{error}</p>
 	{:else if facts.length === 0}
-		<p class="text-gray-500">No authorization facts for this tenant yet.</p>
+		<p class="text-gray-500">{m.adm_facts_empty()}</p>
 	{:else}
 		<div class="overflow-x-auto border rounded">
 			<table class="min-w-full text-sm">
 				<thead class="bg-gray-50 text-left text-gray-600">
 					<tr>
-						<th class="px-3 py-2">ID</th>
-						<th class="px-3 py-2">Kind</th>
-						<th class="px-3 py-2">Track</th>
-						<th class="px-3 py-2">Scope</th>
-						<th class="px-3 py-2">Source</th>
-						<th class="px-3 py-2">Trust</th>
-						<th class="px-3 py-2">Review</th>
-						<th class="px-3 py-2">Valid until</th>
-						<th class="px-3 py-2">Provenance</th>
+						<th class="px-3 py-2">{m.adm_th_id()}</th>
+						<th class="px-3 py-2">{m.adm_th_kind()}</th>
+						<th class="px-3 py-2">{m.adm_th_track()}</th>
+						<th class="px-3 py-2">{m.adm_th_scope()}</th>
+						<th class="px-3 py-2">{m.adm_th_source()}</th>
+						<th class="px-3 py-2">{m.adm_th_trust()}</th>
+						<th class="px-3 py-2">{m.adm_th_review()}</th>
+						<th class="px-3 py-2">{m.adm_th_valid_until()}</th>
+						<th class="px-3 py-2">{m.adm_th_provenance()}</th>
 						<th class="px-3 py-2"></th>
 					</tr>
 				</thead>
@@ -153,12 +153,12 @@
 							<td class="px-3 py-2">
 								{#if f.review_status === 'pending'}
 									<span class="text-xs px-2 py-0.5 rounded bg-amber-200 text-amber-900"
-										>awaiting review</span
+										>{m.adm_status_awaiting_review()}</span
 									>
 								{:else if f.review_status === 'rejected'}
-									<span class="text-xs px-2 py-0.5 rounded bg-red-200 text-red-900">rejected</span>
+									<span class="text-xs px-2 py-0.5 rounded bg-red-200 text-red-900">{m.adm_status_rejected()}</span>
 								{:else}
-									<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">approved</span>
+									<span class="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">{m.adm_status_approved()}</span>
 								{/if}
 							</td>
 							<td class="px-3 py-2">{f.valid_until ?? '—'}</td>
@@ -168,14 +168,14 @@
 							<td class="px-3 py-2 text-right whitespace-nowrap">
 								{#if $canManageAuthorization && f.review_status === 'pending'}
 									<button class="text-green-700 hover:underline mr-2" on:click={() => review(f, 'approve')}>
-										Approve
+										{m.adm_approve()}
 									</button>
 									<button class="text-red-600 hover:underline" on:click={() => review(f, 'reject')}>
-										Reject
+										{m.adm_reject()}
 									</button>
 								{:else if $canManageAuthorization}
 									<button class="text-red-600 hover:underline" on:click={() => revoke(f)}>
-										Revoke
+										{m.adm_revoke()}
 									</button>
 								{/if}
 							</td>
@@ -189,10 +189,9 @@
 	{#if editorOpen}
 		<div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
 			<div class="bg-white rounded shadow-lg w-full max-w-2xl p-4">
-				<h2 class="text-lg font-semibold mb-2">New authorization fact</h2>
+				<h2 class="text-lg font-semibold mb-2">{m.adm_modal_new_fact_title()}</h2>
 				<p class="text-xs text-gray-500 mb-2">
-					A typed AuthorizationFact (grant / prohibition / change_freeze / entity_context). Stored as
-					analyst_asserted (trust 60).
+					{m.adm_modal_new_fact_hint()}
 				</p>
 				<textarea
 					class="w-full h-72 font-mono text-xs border rounded p-2"
@@ -200,13 +199,13 @@
 				></textarea>
 				{#if editorError}<p class="text-red-600 text-sm mt-1">{editorError}</p>{/if}
 				<div class="flex justify-end gap-2 mt-3">
-					<button class="px-3 py-2 text-sm" on:click={() => (editorOpen = false)}>Cancel</button>
+					<button class="px-3 py-2 text-sm" on:click={() => (editorOpen = false)}>{m.common_cancel()}</button>
 					<button
 						class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
 						on:click={save}
 						disabled={editorSaving}
 					>
-						{editorSaving ? 'Saving…' : 'Create'}
+						{editorSaving ? m.common_saving() : m.adm_create()}
 					</button>
 				</div>
 			</div>

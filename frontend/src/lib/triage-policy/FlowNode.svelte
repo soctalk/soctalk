@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
+	import { m } from '$lib/paraglide/messages';
 
 	export let data: {
 		title: string;
@@ -55,7 +56,9 @@
 		: ''}"
 >
 	{#if data.fired}
-		<div class="text-[9px] font-bold uppercase tracking-wide text-warning-500">would fire</div>
+		<div class="text-[9px] font-bold uppercase tracking-wide text-warning-500">
+			{m.tp_flow_would_fire()}
+		</div>
 	{/if}
 	{#if data.hasTarget}
 		<Handle type="target" position={Position.Top} class="!bg-surface-400" />

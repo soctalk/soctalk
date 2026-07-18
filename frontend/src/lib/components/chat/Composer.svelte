@@ -3,6 +3,7 @@
   Auto-resizes up to a max height; scrollbar after that.
 -->
 <script lang="ts">
+	import { m } from '$lib/paraglide/messages';
 	import { createEventDispatcher, tick } from 'svelte';
 
 	export let disabled = false;
@@ -48,10 +49,10 @@
 		on:input={autosize}
 		on:keydown={handleKeydown}
 		placeholder={disabled
-			? 'Waiting for response…'
+			? m.cp_waiting()
 			: scope === 'mssp_fleet'
-				? 'Ask about any tenant. Use tenant slugs (e.g. "acme-corp") to scope queries.'
-				: 'Ask the SOC analyst…'}
+				? m.cp_ask_fleet()
+				: m.cp_ask_analyst()}
 		rows="1"
 		{disabled}
 		class="textarea flex-1 resize-none"
@@ -62,6 +63,6 @@
 		class="btn btn-sm variant-filled-primary"
 		disabled={disabled || !value.trim()}
 	>
-		Send
+		{m.cp_send()}
 	</button>
 </form>

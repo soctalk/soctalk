@@ -28,7 +28,7 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { localizedGoto, localizeHref } from '$lib/i18n';
 	import {
 		api,
 		type MsspPendingReviewRow,
@@ -38,6 +38,8 @@
 		type MsspRepeatedIocRow
 	} from '$lib/api/client';
 	import { authSession } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
+	import { formatSeverity } from '$lib/utils/formatters';
 
 	// Same deep-link contract as MsspAnalytics: clicking a tenant
 	// in an *operational* widget (open-by-tenant, pending reviews)
@@ -48,7 +50,7 @@
 		try {
 			const updated = await api.auth.assumeTenant(slug);
 			authSession.update((s) => ({ ...s, user: updated }));
-			await goto('/', { invalidateAll: true });
+			await localizedGoto('/', { invalidateAll: true });
 		} catch (e) {
 			console.error('[Dashboard] drill-in failed:', e);
 		}
@@ -65,12 +67,13 @@
 	const STUCK_HOURS = 8;
 	const IOC_DAYS = 7;
 
+	// Localized via the shared enum-code lookup (called at render time only).
 	function severityLabel(s: number | null | undefined): string {
 		if (s == null) return '—';
-		if (s >= 12) return 'critical';
-		if (s >= 8) return 'high';
-		if (s >= 5) return 'medium';
-		return 'low';
+		if (s >= 12) return formatSeverity('critical');
+		if (s >= 8) return formatSeverity('high');
+		if (s >= 5) return formatSeverity('medium');
+		return formatSeverity('low');
 	}
 
 	// Map numeric severity → Skeleton chip variant. Mirrors the
@@ -144,8 +147,8 @@
 <div class="space-y-6 p-6">
 	<header class="flex items-center justify-between">
 		<div>
-			<h1 class="h2">MSSP Dashboard</h1>
-			<p class="opacity-70 text-sm">Cross-tenant fleet view. Click a row to drill in.</p>
+			<h1 class="h2">{m.dash_mssp_title()}</h1>
+			<p class="opacity-70 text-sm">{m.dash_mssp_subtitle()}</p>
 		</div>
 	</header>
 
@@ -156,19 +159,21 @@
 	     beneath the number. -->
 	<section class="grid grid-cols-1 md:grid-cols-4 gap-4">
 		<div class="card p-4 space-y-1" data-testid="strip-pending-reviews">
-			<div class="text-sm opacity-70 uppercase tracking-wide">Pending reviews</div>
+			<div class="text-sm opacity-70 uppercase tracking-wide">{m.dash_pending_reviews_label()}</div>
 			<div class="text-3xl font-semibold leading-tight">{pendingReviewsTotal}</div>
 			<div class="text-xs opacity-60">
-				across {pendingReviews.length} tenant{pendingReviews.length === 1 ? '' : 's'}
+				{pendingReviews.length === 1
+					? m.dash_across_tenant_one({ count: pendingReviews.length })
+					: m.dash_across_tenants({ count: pendingReviews.length })}
 			</div>
 		</div>
 		<div class="card p-4 space-y-1" data-testid="strip-stuck">
-			<div class="text-sm opacity-70 uppercase tracking-wide">Stuck cases ({STUCK_HOURS}h)</div>
+			<div class="text-sm opacity-70 uppercase tracking-wide">{m.dash_stuck_cases_h({ hours: STUCK_HOURS })}</div>
 			<div class="text-3xl font-semibold leading-tight">{stuckInvestigations.length}</div>
-			<div class="text-xs opacity-60">no activity in {STUCK_HOURS}h</div>
+			<div class="text-xs opacity-60">{m.dash_no_activity_in({ hours: STUCK_HOURS })}</div>
 		</div>
 		<div class="card p-4 space-y-1" data-testid="strip-degraded">
-			<div class="text-sm opacity-70 uppercase tracking-wide">Degraded tenants</div>
+			<div class="text-sm opacity-70 uppercase tracking-wide">{m.dash_degraded_tenants()}</div>
 			<div
 				class="text-3xl font-semibold leading-tight {degradedTenants.length
 					? 'text-error-500'
@@ -176,12 +181,12 @@
 			>
 				{degradedTenants.length}
 			</div>
-			<div class="text-xs opacity-60">adapter silent or non-active</div>
+			<div class="text-xs opacity-60">{m.dash_adapter_silent()}</div>
 		</div>
 		<div class="card p-4 space-y-1" data-testid="strip-iocs">
-			<div class="text-sm opacity-70 uppercase tracking-wide">Repeated IOCs ({IOC_DAYS}d)</div>
+			<div class="text-sm opacity-70 uppercase tracking-wide">{m.dash_repeated_iocs_d({ days: IOC_DAYS })}</div>
 			<div class="text-3xl font-semibold leading-tight">{repeatedIocs.length}</div>
-			<div class="text-xs opacity-60">seen in ≥2 tenants</div>
+			<div class="text-xs opacity-60">{m.dash_seen_in_2plus_tenants()}</div>
 		</div>
 	</section>
 
@@ -190,16 +195,16 @@
 		<!-- Open investigations by tenant -->
 		<div class="space-y-2" data-testid="panel-open-by-tenant">
 			<header class="flex items-baseline justify-between px-1">
-				<h2 class="h3">Open investigations by tenant</h2>
-				<span class="opacity-60 text-xs">oldest first</span>
+				<h2 class="h3">{m.dash_open_by_tenant()}</h2>
+				<span class="opacity-60 text-xs">{m.dash_oldest_first()}</span>
 			</header>
 			{#if loading}
-				<div class="card p-4"><p class="opacity-60 text-sm">Loading…</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.common_loading()}</p></div>
 			{:else if errors.openByTenant}
 				<div class="card p-4"><p class="text-error-500 text-sm">{errors.openByTenant}</p></div>
 			{:else if openByTenant.length === 0}
 				<div class="card p-4">
-					<p class="opacity-60 text-sm">No open investigations across the fleet.</p>
+					<p class="opacity-60 text-sm">{m.dash_no_open_fleet()}</p>
 				</div>
 			{:else}
 				<div class="card overflow-hidden">
@@ -207,10 +212,10 @@
 						<table class="table table-hover">
 							<thead>
 								<tr>
-									<th>Tenant</th>
-									<th class="text-center !w-20">Open</th>
-									<th class="!w-24">Oldest</th>
-									<th class="text-center !w-32">Max severity</th>
+									<th>{m.dash_th_tenant()}</th>
+									<th class="text-center !w-20">{m.dash_th_open()}</th>
+									<th class="!w-24">{m.dash_th_oldest()}</th>
+									<th class="text-center !w-32">{m.dash_th_max_severity()}</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -221,7 +226,7 @@
 												type="button"
 												class="anchor text-left bg-transparent border-0 p-0 cursor-pointer"
 												on:click={() => drillIntoTenant(r.slug)}
-												title="Open this tenant's SOC"
+												title={m.dash_open_tenant_soc_title()}
 											>
 												{r.display_name || r.slug}
 											</button>
@@ -249,17 +254,17 @@
 		<!-- Repeated IOCs across tenants -->
 		<div class="space-y-2" data-testid="panel-repeated-iocs">
 			<header class="flex items-baseline justify-between px-1">
-				<h2 class="h3">Repeated IOCs across tenants</h2>
-				<span class="opacity-60 text-xs">last {IOC_DAYS}d, ≥2 tenants</span>
+				<h2 class="h3">{m.dash_repeated_iocs_across_tenants()}</h2>
+				<span class="opacity-60 text-xs">{m.dash_last_days_2plus({ days: IOC_DAYS })}</span>
 			</header>
 			{#if loading}
-				<div class="card p-4"><p class="opacity-60 text-sm">Loading…</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.common_loading()}</p></div>
 			{:else if errors.repeatedIocs}
 				<div class="card p-4"><p class="text-error-500 text-sm">{errors.repeatedIocs}</p></div>
 			{:else if repeatedIocs.length === 0}
 				<div class="card p-4">
 					<p class="opacity-60 text-sm">
-						No IOCs seen in ≥2 tenants in the last {IOC_DAYS} days.
+						{m.dash_no_repeated_iocs({ days: IOC_DAYS })}
 					</p>
 				</div>
 			{:else}
@@ -268,11 +273,11 @@
 						<table class="table table-hover">
 							<thead>
 								<tr>
-									<th class="!w-24">Type</th>
-									<th>Value</th>
-									<th class="text-center">Tenants</th>
-									<th class="!w-24">Last seen</th>
-									<th class="text-center !w-28">Severity</th>
+									<th class="!w-24">{m.dash_th_type()}</th>
+									<th>{m.dash_th_value()}</th>
+									<th class="text-center">{m.dash_th_tenants()}</th>
+									<th class="!w-24">{m.dash_th_last_seen()}</th>
+									<th class="text-center !w-28">{m.dash_th_severity()}</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -315,27 +320,27 @@
 	<section class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 		<div class="space-y-2" data-testid="panel-stuck-investigations">
 			<header class="flex items-baseline justify-between px-1">
-				<h2 class="h3">Stuck cases ({STUCK_HOURS}h)</h2>
-				<span class="opacity-60 text-xs">oldest activity first</span>
+				<h2 class="h3">{m.dash_stuck_cases_h({ hours: STUCK_HOURS })}</h2>
+				<span class="opacity-60 text-xs">{m.dash_oldest_activity_first()}</span>
 			</header>
 			{#if loading}
-				<div class="card p-4"><p class="opacity-60 text-sm">Loading…</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.common_loading()}</p></div>
 			{:else if errors.stuckInvestigations}
 				<div class="card p-4">
 					<p class="text-error-500 text-sm">{errors.stuckInvestigations}</p>
 				</div>
 			{:else if stuckInvestigations.length === 0}
-				<div class="card p-4"><p class="opacity-60 text-sm">No stuck cases — nice.</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.dash_no_stuck_cases()}</p></div>
 			{:else}
 				<div class="card overflow-hidden">
 					<div class="table-container">
 						<table class="table table-hover">
 							<thead>
 								<tr>
-									<th class="!w-28">Case</th>
-									<th>Tenant</th>
-									<th class="!w-24">Stuck for</th>
-									<th class="text-center !w-28">Severity</th>
+									<th class="!w-28">{m.dash_th_case()}</th>
+									<th>{m.dash_th_tenant()}</th>
+									<th class="!w-24">{m.dash_th_stuck_for()}</th>
+									<th class="text-center !w-28">{m.dash_th_severity()}</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -343,7 +348,7 @@
 									<tr>
 										<td>
 											<a
-												href="/investigations/{c.investigation_id}"
+												href={localizeHref(`/investigations/${c.investigation_id}`)}
 												class="anchor font-mono text-xs"
 												title={c.investigation_id}
 											>
@@ -370,33 +375,33 @@
 
 		<div class="space-y-2" data-testid="panel-tenant-health">
 			<header class="flex items-baseline justify-between px-1">
-				<h2 class="h3">Tenant health</h2>
+				<h2 class="h3">{m.dash_tenant_health()}</h2>
 				<span class="opacity-60 text-xs">
-					{degradedTenants.length} degraded / {tenantHealth.length} total
+					{m.dash_degraded_total({ degraded: degradedTenants.length, total: tenantHealth.length })}
 				</span>
 			</header>
 			{#if loading}
-				<div class="card p-4"><p class="opacity-60 text-sm">Loading…</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.common_loading()}</p></div>
 			{:else if errors.tenantHealth}
 				<div class="card p-4"><p class="text-error-500 text-sm">{errors.tenantHealth}</p></div>
 			{:else if tenantHealth.length === 0}
-				<div class="card p-4"><p class="opacity-60 text-sm">No tenants yet.</p></div>
+				<div class="card p-4"><p class="opacity-60 text-sm">{m.dash_no_tenants_yet()}</p></div>
 			{:else}
 				<div class="card overflow-hidden">
 					<div class="table-container">
 						<table class="table table-hover">
 							<thead>
 								<tr>
-									<th>Tenant</th>
-									<th class="text-center !w-32">State</th>
-									<th class="!w-32">Last heartbeat</th>
+									<th>{m.dash_th_tenant()}</th>
+									<th class="text-center !w-32">{m.dash_th_state()}</th>
+									<th class="!w-32">{m.dash_th_last_heartbeat()}</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each tenantHealth as t (t.tenant_id)}
 									<tr>
 										<td>
-											<a href="/tenants/{t.tenant_id}" class="anchor">
+											<a href={localizeHref(`/tenants/${t.tenant_id}`)} class="anchor">
 												{t.display_name || t.slug}
 											</a>
 										</td>
@@ -405,7 +410,7 @@
 										</td>
 										<td class="font-mono text-xs">
 											{#if t.heartbeat_age_seconds == null}
-												<span class="opacity-40">never</span>
+												<span class="opacity-40">{m.dash_never()}</span>
 											{:else}
 												<span class="opacity-80">{humanAge(t.heartbeat_age_seconds)}</span>
 											{/if}
@@ -427,7 +432,7 @@
 	{#if pendingReviewsTotal > 0}
 		<section class="space-y-2 max-w-md" data-testid="panel-pending-reviews">
 			<header class="flex items-baseline justify-between px-1">
-				<h2 class="h3">Pending reviews by tenant</h2>
+				<h2 class="h3">{m.dash_pending_reviews_by_tenant()}</h2>
 			</header>
 			<div class="card divide-y divide-surface-500/20">
 				{#each pendingReviews as r (r.tenant_id)}
@@ -435,7 +440,7 @@
 						type="button"
 						class="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-surface-500/10 transition-colors"
 						on:click={() => drillIntoTenant(r.slug)}
-						title="Open this tenant's SOC"
+						title={m.dash_open_tenant_soc_title()}
 					>
 						<span class="anchor">{r.display_name || r.slug}</span>
 						<span class="badge variant-soft-primary font-medium">{r.count}</span>

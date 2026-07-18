@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import { api, type AuditEvent } from '$lib/api/client';
 	import { formatEventType } from '$lib/utils/formatters';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 
 	let events: AuditEvent[] = [];
 	let loading = true;
@@ -37,7 +39,7 @@
 			total = result.total;
 			hasMore = result.has_more;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load events';
+			error = e instanceof Error ? e.message : m.audit_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -54,23 +56,23 @@
 </script>
 
 <svelte:head>
-	<title>Audit Log - SocTalk</title>
+	<title>{m.nav_audit_log()} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-4">
-	<h1 class="h2">Audit Log</h1>
+	<h1 class="h2">{m.nav_audit_log()}</h1>
 	<button class="btn variant-soft" on:click={loadEvents} disabled={loading}>
 		{#if loading}
 			<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 		{/if}
-		Refresh
+		{m.audit_refresh()}
 	</button>
 </div>
 
 <!-- Filters -->
 <div class="flex flex-wrap gap-4 mb-4">
 	<select class="select" bind:value={eventTypeFilter} on:change={() => { page = 1; loadEvents(); }}>
-		<option value="">All Event Types</option>
+		<option value="">{m.audit_all_event_types()}</option>
 		{#each eventTypes as type}
 			<option value={type}>{formatEventType(type)}</option>
 		{/each}
@@ -83,18 +85,18 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.audit_error({ error })}</span>
 	</div>
 {:else}
 	<div class="table-container">
 		<table class="table table-hover table-compact">
 			<thead>
 				<tr>
-					<th>Timestamp</th>
-					<th>Event Type</th>
-					<th>Investigation</th>
-					<th>Version</th>
-					<th>Data</th>
+					<th>{m.audit_th_timestamp()}</th>
+					<th>{m.audit_th_event_type()}</th>
+					<th>{m.audit_th_investigation()}</th>
+					<th>{m.audit_th_version()}</th>
+					<th>{m.audit_th_data()}</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -109,7 +111,7 @@
 							</span>
 						</td>
 						<td class="font-mono text-xs">
-							<a href="/investigations/{event.aggregate_id}" class="anchor">
+							<a href={localizeHref(`/investigations/${event.aggregate_id}`)} class="anchor">
 								{event.aggregate_id.slice(0, 8)}...
 							</a>
 						</td>
@@ -117,7 +119,7 @@
 						<td>
 							<details class="text-sm">
 								<summary class="cursor-pointer opacity-60 hover:opacity-100">
-									View data
+									{m.audit_view_data()}
 								</summary>
 								<pre class="text-xs mt-2 p-2 bg-surface-700 rounded overflow-auto max-h-40">
 {JSON.stringify(event.data, null, 2)}
@@ -129,7 +131,7 @@
 				{#if events.length === 0}
 					<tr>
 						<td colspan="5" class="text-center opacity-60 py-8">
-							No audit events found
+							{m.audit_no_events()}
 						</td>
 					</tr>
 				{/if}
@@ -141,7 +143,7 @@
 	{#if total > 50}
 		<div class="flex justify-between items-center mt-4">
 			<span class="text-sm opacity-60">
-				Showing {(page - 1) * 50 + 1} - {Math.min(page * 50, total)} of {total}
+				{m.audit_showing({ from: (page - 1) * 50 + 1, to: Math.min(page * 50, total), total })}
 			</span>
 			<div class="flex gap-2">
 				<button
@@ -149,14 +151,14 @@
 					disabled={page <= 1}
 					on:click={() => { page--; loadEvents(); }}
 				>
-					Previous
+					{m.audit_previous()}
 				</button>
 				<button
 					class="btn btn-sm variant-soft"
 					disabled={!hasMore}
 					on:click={() => { page++; loadEvents(); }}
 				>
-					Next
+					{m.audit_next()}
 				</button>
 			</div>
 		</div>

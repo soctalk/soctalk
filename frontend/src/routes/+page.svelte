@@ -4,6 +4,8 @@
 	import { recentEvents, isMsspScope, authSession } from '$lib/stores';
 	import { browser } from '$app/environment';
 	import { formatDecision, formatAction, formatDuration, formatPhase, formatStatus, formatSeverity } from '$lib/utils/formatters';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 	import MsspDashboard from '$lib/components/MsspDashboard.svelte';
 
 	let metrics: MetricsOverview | null = null;
@@ -44,6 +46,15 @@
 		// Use backend-computed open_wip (accurate backlog at end of each hour)
 		const backlogData = hourlyData.metrics.map(m => m.open_wip);
 
+		// Localized series names — evaluated here (render time, never module
+		// scope). The same strings are referenced by the yaxis seriesName
+		// grouping below, so they must stay in sync.
+		const seriesCreated = m.dash_series_created();
+		const seriesManualClose = m.dash_series_manual_close();
+		const seriesAutoClose = m.dash_series_auto_close();
+		const seriesEscalated = m.dash_series_escalated();
+		const seriesBacklog = m.dash_series_open_backlog();
+
 		const options = {
 			chart: {
 				type: 'bar',
@@ -60,11 +71,11 @@
 				fontFamily: 'inherit'
 			},
 			series: [
-				{ name: 'Created', type: 'bar', group: 'inflow', data: createdData },
-				{ name: 'Manual Close', type: 'bar', group: 'outflow', data: manualClosedData },
-				{ name: 'Auto-Close', type: 'bar', group: 'outflow', data: autoClosedData },
-				{ name: 'Escalated', type: 'bar', group: 'outflow', data: escalatedData },
-				{ name: 'Open (Backlog)', type: 'line', data: backlogData }
+				{ name: seriesCreated, type: 'bar', group: 'inflow', data: createdData },
+				{ name: seriesManualClose, type: 'bar', group: 'outflow', data: manualClosedData },
+				{ name: seriesAutoClose, type: 'bar', group: 'outflow', data: autoClosedData },
+				{ name: seriesEscalated, type: 'bar', group: 'outflow', data: escalatedData },
+				{ name: seriesBacklog, type: 'line', data: backlogData }
 			],
 			colors: ['#6366f1', '#22c55e', '#14b8a6', '#f59e0b', '#ef4444'],
 			plotOptions: {
@@ -94,17 +105,17 @@
 			},
 			yaxis: [
 				{
-					seriesName: ['Created', 'Manual Close', 'Auto-Close', 'Escalated'],
-					title: { text: 'Per Hour', style: { color: '#94a3b8', fontSize: '11px' } },
+					seriesName: [seriesCreated, seriesManualClose, seriesAutoClose, seriesEscalated],
+					title: { text: m.dash_axis_per_hour(), style: { color: '#94a3b8', fontSize: '11px' } },
 					labels: {
 						style: { colors: '#94a3b8', fontSize: '11px' },
 						formatter: (val: number) => Math.round(val).toString()
 					}
 				},
 				{
-					seriesName: 'Open (Backlog)',
+					seriesName: seriesBacklog,
 					opposite: true,
-					title: { text: 'Backlog', style: { color: '#ef4444', fontSize: '11px' } },
+					title: { text: m.dash_axis_backlog(), style: { color: '#ef4444', fontSize: '11px' } },
 					labels: {
 						style: { colors: '#ef4444', fontSize: '11px' },
 						formatter: (val: number) => Math.round(val).toString()
@@ -170,7 +181,7 @@
 
 			} catch (e) {
 				if (import.meta.env.DEV) console.error('Failed to load dashboard:', e);
-				error = e instanceof Error ? e.message : 'Failed to load metrics';
+				error = e instanceof Error ? e.message : m.dash_load_metrics_failed();
 			} finally {
 				loading = false;
 			}
@@ -248,73 +259,87 @@
 		}
 	}
 
+	// Message FUNCTION refs in the map; called only when a row renders so the
+	// locale is already resolved (never evaluate m.x() at module scope).
 	function formatEventType(type: string): { label: string; variant: string } {
-		const mapping: Record<string, { label: string; variant: string }> = {
-			'investigation.created': { label: 'Investigation Started', variant: 'variant-soft-primary' },
-			'investigation.closed': { label: 'Investigation Closed', variant: 'variant-soft-success' },
-			'human.review_requested': { label: 'Review Requested', variant: 'variant-soft-warning' },
-			'human.decision_received': { label: 'Review Completed', variant: 'variant-soft-success' },
-			'verdict.rendered': { label: 'Verdict Rendered', variant: 'variant-soft-tertiary' },
-			'enrichment.completed': { label: 'Enrichment Done', variant: 'variant-soft' },
-			'enrichment.requested': { label: 'Enrichment Started', variant: 'variant-soft' },
-			'enrichment.failed': { label: 'Enrichment Failed', variant: 'variant-soft-error' },
-			'thehive.case_created': { label: 'Case Created', variant: 'variant-soft-success' },
-			'phase.changed': { label: 'Phase Changed', variant: 'variant-soft' },
-			'alert.correlated': { label: 'Alert Added', variant: 'variant-soft' },
-			'observable.extracted': { label: 'Observable Found', variant: 'variant-soft' },
-			'supervisor.decision': { label: 'Supervisor Decision', variant: 'variant-soft-tertiary' },
-			'misp.context_retrieved': { label: 'MISP Intel Retrieved', variant: 'variant-soft' },
-			'wazuh.forensics_collected': { label: 'Forensics Collected', variant: 'variant-soft' },
+		const mapping: Record<string, { label: () => string; variant: string }> = {
+			'investigation.created': { label: m.dash_evt_investigation_created, variant: 'variant-soft-primary' },
+			'investigation.closed': { label: m.dash_evt_investigation_closed, variant: 'variant-soft-success' },
+			'human.review_requested': { label: m.dash_evt_review_requested, variant: 'variant-soft-warning' },
+			'human.decision_received': { label: m.dash_evt_review_completed, variant: 'variant-soft-success' },
+			'verdict.rendered': { label: m.dash_evt_verdict_rendered, variant: 'variant-soft-tertiary' },
+			'enrichment.completed': { label: m.dash_evt_enrichment_done, variant: 'variant-soft' },
+			'enrichment.requested': { label: m.dash_evt_enrichment_started, variant: 'variant-soft' },
+			'enrichment.failed': { label: m.dash_evt_enrichment_failed, variant: 'variant-soft-error' },
+			'thehive.case_created': { label: m.dash_evt_case_created, variant: 'variant-soft-success' },
+			'phase.changed': { label: m.dash_evt_phase_changed, variant: 'variant-soft' },
+			'alert.correlated': { label: m.dash_evt_alert_added, variant: 'variant-soft' },
+			'observable.extracted': { label: m.dash_evt_observable_found, variant: 'variant-soft' },
+			'supervisor.decision': { label: m.dash_evt_supervisor_decision, variant: 'variant-soft-tertiary' },
+			'misp.context_retrieved': { label: m.dash_evt_misp_intel, variant: 'variant-soft' },
+			'wazuh.forensics_collected': { label: m.dash_evt_forensics_collected, variant: 'variant-soft' },
 		};
-		return mapping[type] || { label: type.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), variant: 'variant-soft' };
+		const hit = mapping[type];
+		if (hit) return { label: hit.label(), variant: hit.variant };
+		return { label: type.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), variant: 'variant-soft' };
 	}
 
 	function formatEventDetails(event: { type: string; data: Record<string, unknown> }): string {
 		const d = event.data;
 		switch (event.type) {
 			case 'investigation.created':
-				return d.title ? `"${d.title}"` : 'New investigation started';
+				return d.title ? `"${d.title}"` : m.dash_evd_new_investigation();
 			case 'investigation.closed':
-				return d.verdict_decision ? formatDecision(d.verdict_decision as string) : 'Investigation closed';
-			case 'human.review_requested':
-				const reviewVerdict = d.verdict_decision ? formatDecision(d.verdict_decision as string) : '';
-				const reviewConf = d.verdict_confidence ? ` (${Math.round((d.verdict_confidence as number) * 100)}%)` : '';
-				return reviewVerdict ? `Suggested: ${reviewVerdict}${reviewConf}` : 'Awaiting review';
+				return d.verdict_decision ? formatDecision(d.verdict_decision as string) : m.dash_evd_investigation_closed();
+			case 'human.review_requested': {
+				if (!d.verdict_decision) return m.dash_evd_awaiting_review();
+				const verdict = formatDecision(d.verdict_decision as string);
+				return d.verdict_confidence
+					? m.dash_evd_suggested_conf({ verdict, pct: Math.round((d.verdict_confidence as number) * 100) })
+					: m.dash_evd_suggested({ verdict });
+			}
 			case 'human.decision_received':
-				return d.decision ? `Analyst: ${formatDecision(d.decision as string)}` : 'Review submitted';
-			case 'verdict.rendered':
-				const conf = d.confidence ? ` (${Math.round((d.confidence as number) * 100)}%)` : '';
-				return d.decision ? `${formatDecision(d.decision as string)}${conf}` : 'Verdict determined';
+				return d.decision ? m.dash_evd_analyst({ decision: formatDecision(d.decision as string) }) : m.dash_evd_review_submitted();
+			case 'verdict.rendered': {
+				if (!d.decision) return m.dash_evd_verdict_determined();
+				const decision = formatDecision(d.decision as string);
+				return d.confidence
+					? m.dash_evd_verdict_conf({ decision, pct: Math.round((d.confidence as number) * 100) })
+					: decision;
+			}
 			case 'enrichment.completed':
-				return d.analyzer ? `${d.analyzer}: ${d.verdict || 'done'}` : 'Enrichment complete';
+				return d.analyzer
+					? m.dash_evd_analyzer_result({ analyzer: String(d.analyzer), verdict: String(d.verdict || m.dash_evd_done()) })
+					: m.dash_evd_enrichment_complete();
 			case 'enrichment.requested':
-				return d.analyzer ? `Running ${d.analyzer}` : 'Starting enrichment';
+				return d.analyzer ? m.dash_evd_running_analyzer({ analyzer: String(d.analyzer) }) : m.dash_evd_starting_enrichment();
 			case 'enrichment.failed':
-				return d.analyzer ? `${d.analyzer} failed` : 'Enrichment error';
+				return d.analyzer ? m.dash_evd_analyzer_failed({ analyzer: String(d.analyzer) }) : m.dash_evd_enrichment_error();
 			case 'thehive.case_created':
-				return d.case_number ? `Case #${d.case_number}` : 'Case opened in TheHive';
+				return d.case_number ? m.dash_evd_case_number({ num: String(d.case_number) }) : m.dash_evd_case_opened();
 			case 'phase.changed':
-				return d.to_phase ? `Now in ${formatPhase(d.to_phase as string)} phase` : 'Phase updated';
+				return d.to_phase ? m.dash_evd_phase_now({ phase: formatPhase(d.to_phase as string) }) : m.dash_evd_phase_updated();
 			case 'alert.correlated':
-				return d.rule_description ? `${d.rule_description}` : 'Alert correlated';
+				return d.rule_description ? `${d.rule_description}` : m.dash_evd_alert_correlated();
 			case 'observable.extracted':
-				return d.value ? `${d.type}: ${d.value}` : 'Observable detected';
+				return d.value ? `${d.type}: ${d.value}` : m.dash_evd_observable_detected();
 			case 'supervisor.decision':
-				return d.action ? formatAction(d.action as string) : 'Decision recorded';
+				return d.action ? formatAction(d.action as string) : m.dash_evd_decision_recorded();
 			case 'misp.context_retrieved':
-				return d.event_count ? `${d.event_count} related events found` : 'Threat intel retrieved';
+				return d.event_count ? m.dash_evd_related_events({ count: d.event_count as number }) : m.dash_evd_threat_intel();
 			case 'wazuh.forensics_collected':
-				return d.agent_id ? `Agent ${d.agent_id}` : 'Forensic data collected';
-			default:
+				return d.agent_id ? m.dash_evd_agent({ id: String(d.agent_id) }) : m.dash_evd_forensics_collected();
+			default: {
 				// Fallback: show first meaningful field value
 				const firstValue = Object.values(d).find(v => typeof v === 'string' && v.length < 60);
-				return firstValue ? String(firstValue) : 'Event recorded';
+				return firstValue ? String(firstValue) : m.dash_evd_event_recorded();
+			}
 		}
 	}
 </script>
 
 <svelte:head>
-	<title>Dashboard - SocTalk</title>
+	<title>{m.nav_dashboard()} - SocTalk</title>
 </svelte:head>
 
 <!--
@@ -328,12 +353,12 @@
 	<MsspDashboard />
 {:else}
 <div class="flex items-center justify-between mb-6">
-	<h1 class="h2">Dashboard</h1>
+	<h1 class="h2">{m.nav_dashboard()}</h1>
 	<button class="btn variant-soft" on:click={loadDashboard} disabled={loading}>
 		{#if loading}
 			<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 		{/if}
-		Refresh
+		{m.dash_refresh()}
 	</button>
 </div>
 
@@ -343,25 +368,25 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.dash_error({ error })}</span>
 	</div>
 {:else if metrics}
 	<!-- KPI Cards -->
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
 		<div class="card p-4 variant-soft">
-			<h3 class="text-sm opacity-60">Open Investigations</h3>
+			<h3 class="text-sm opacity-60">{m.dash_kpi_open_investigations()}</h3>
 			<p class="text-3xl font-bold">{metrics.open_investigations}</p>
 		</div>
 		<div class="card p-4 variant-soft-warning">
-			<h3 class="text-sm opacity-60">Pending Reviews</h3>
+			<h3 class="text-sm opacity-60">{m.dash_kpi_pending_reviews()}</h3>
 			<p class="text-3xl font-bold">{metrics.pending_reviews}</p>
 		</div>
 		<div class="card p-4 variant-soft">
-			<h3 class="text-sm opacity-60">Avg. Time to Triage</h3>
+			<h3 class="text-sm opacity-60">{m.dash_kpi_avg_time_to_triage()}</h3>
 			<p class="text-3xl font-bold">{formatDuration(metrics.avg_time_to_triage_seconds)}</p>
 		</div>
 		<div class="card p-4 variant-soft">
-			<h3 class="text-sm opacity-60">Avg. Time to Verdict</h3>
+			<h3 class="text-sm opacity-60">{m.dash_kpi_avg_time_to_verdict()}</h3>
 			<p class="text-3xl font-bold">{formatDuration(metrics.avg_time_to_verdict_seconds)}</p>
 		</div>
 	</div>
@@ -369,23 +394,23 @@
 	<!-- Today's Activity -->
 	<div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Created Today</h4>
+			<h4 class="text-xs opacity-60">{m.dash_kpi_created_today()}</h4>
 			<p class="text-xl font-bold">{metrics.investigations_created_today}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Closed Today</h4>
+			<h4 class="text-xs opacity-60">{m.dash_kpi_closed_today()}</h4>
 			<p class="text-xl font-bold">{metrics.investigations_closed_today}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Escalations</h4>
+			<h4 class="text-xs opacity-60">{m.dash_kpi_escalations()}</h4>
 			<p class="text-xl font-bold">{metrics.escalations_today}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Auto-Closed</h4>
+			<h4 class="text-xs opacity-60">{m.dash_kpi_auto_closed()}</h4>
 			<p class="text-xl font-bold">{metrics.auto_closed_today}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Malicious IOCs</h4>
+			<h4 class="text-xs opacity-60">{m.dash_kpi_malicious_iocs()}</h4>
 			<p class="text-xl font-bold text-error-500">{metrics.malicious_observables_today}</p>
 		</div>
 	</div>
@@ -394,16 +419,16 @@
 	<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 		<!-- Investigation Throughput Chart -->
 		<div class="card p-4 lg:col-span-2">
-			<h3 class="h4 mb-4">Investigation Throughput (24h)</h3>
+			<h3 class="h4 mb-4">{m.dash_throughput_24h()}</h3>
 			<div bind:this={chartElement} class="h-64"></div>
 			{#if hourlyData && hourlyData.metrics.length === 0}
-				<p class="opacity-60 text-center py-8">No hourly data available</p>
+				<p class="opacity-60 text-center py-8">{m.dash_no_hourly_data()}</p>
 			{/if}
 		</div>
 
 		<!-- Verdict Distribution -->
 		<div class="card p-4">
-			<h3 class="h4 mb-4">Verdicts Today</h3>
+			<h3 class="h4 mb-4">{m.dash_verdicts_today()}</h3>
 			{#if verdictData.length > 0}
 				<div class="space-y-3 py-4">
 					{#each verdictData as { name, value }}
@@ -428,28 +453,28 @@
 				</div>
 				<div class="flex flex-wrap justify-center gap-3 mt-4 text-xs">
 					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded bg-error-500"></span> Escalate
+						<span class="w-2 h-2 rounded bg-error-500"></span> {m.dec_escalate()}
 					</span>
 					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded bg-warning-500"></span> Needs more info
+						<span class="w-2 h-2 rounded bg-warning-500"></span> {m.dash_legend_needs_more_info()}
 					</span>
 					<span class="flex items-center gap-1">
-						<span class="w-2 h-2 rounded bg-success-500"></span> Close
+						<span class="w-2 h-2 rounded bg-success-500"></span> {m.dec_close()}
 					</span>
 				</div>
 			{:else}
-				<p class="opacity-60 text-center py-8">No verdicts yet today</p>
+				<p class="opacity-60 text-center py-8">{m.dash_no_verdicts_today()}</p>
 			{/if}
 		</div>
 	</div>
 
 	<!-- Active Investigations Status Board -->
 	<div class="card p-4 mb-6">
-		<h3 class="h4 mb-4">Active Investigations</h3>
+		<h3 class="h4 mb-4">{m.dash_active_investigations()}</h3>
 		{#if activeInvestigations.length > 0}
 			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
 				{#each activeInvestigations as inv}
-					<a href="/investigations/{inv.id}" class="card p-3 variant-soft hover:variant-soft-primary transition-colors">
+					<a href={localizeHref(`/investigations/${inv.id}`)} class="card p-3 variant-soft hover:variant-soft-primary transition-colors">
 						<div class="flex items-start justify-between mb-2">
 							<div class="flex items-center gap-2">
 								<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -461,19 +486,19 @@
 								<span class="badge {getSeverityColor(inv.max_severity)} text-xs">{formatSeverity(inv.max_severity)}</span>
 							{/if}
 						</div>
-						<h4 class="font-medium text-sm truncate">{inv.title || 'Untitled Investigation'}</h4>
+						<h4 class="font-medium text-sm truncate">{inv.title || m.dash_untitled_investigation()}</h4>
 						<div class="flex items-center gap-3 mt-2 text-xs opacity-60">
-							<span>Phase: {formatPhase(inv.phase)}</span>
-							<span>{inv.alert_count} alerts</span>
+							<span>{m.dash_phase_label({ phase: formatPhase(inv.phase) })}</span>
+							<span>{m.dash_alerts_count({ count: inv.alert_count })}</span>
 							{#if inv.malicious_count > 0}
-								<span class="text-error-500">{inv.malicious_count} malicious</span>
+								<span class="text-error-500">{m.dash_malicious_count({ count: inv.malicious_count })}</span>
 							{/if}
 						</div>
 					</a>
 				{/each}
 			</div>
 		{:else}
-			<p class="opacity-60 text-center py-8">No active investigations</p>
+			<p class="opacity-60 text-center py-8">{m.dash_no_active_investigations()}</p>
 		{/if}
 	</div>
 
@@ -481,25 +506,25 @@
 	<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
 		<!-- Recent Investigations Table -->
 		<div class="card p-4 lg:col-span-2">
-			<h3 class="h4 mb-4">Recent Investigations</h3>
+			<h3 class="h4 mb-4">{m.dash_recent_investigations()}</h3>
 			{#if recentInvestigations.length > 0}
 				<div class="table-container">
 					<table class="table table-compact">
 						<thead>
 							<tr>
-								<th>Title</th>
-								<th>Status</th>
-								<th>Verdict</th>
-								<th>Alerts</th>
-								<th>Created</th>
+								<th>{m.dash_th_title()}</th>
+								<th>{m.dash_th_status()}</th>
+								<th>{m.dash_th_verdict()}</th>
+								<th>{m.dash_th_alerts()}</th>
+								<th>{m.dash_th_created()}</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each recentInvestigations.slice(0, 5) as inv}
 								<tr>
 									<td class="max-w-xs truncate">
-										<a href="/investigations/{inv.id}" class="anchor">
-											{inv.title || 'Untitled'}
+										<a href={localizeHref(`/investigations/${inv.id}`)} class="anchor">
+											{inv.title || m.dash_untitled()}
 										</a>
 									</td>
 									<td><span class="badge {getStatusColor(inv.status)} text-xs">{formatStatus(inv.status)}</span></td>
@@ -522,16 +547,16 @@
 					</table>
 				</div>
 				<div class="mt-3 text-right">
-					<a href="/investigations" class="anchor text-sm">View all investigations &rarr;</a>
+					<a href={localizeHref('/investigations')} class="anchor text-sm">{m.dash_view_all_investigations()}</a>
 				</div>
 			{:else}
-				<p class="opacity-60 text-center py-8">No investigations yet</p>
+				<p class="opacity-60 text-center py-8">{m.dash_no_investigations_yet()}</p>
 			{/if}
 		</div>
 
 		<!-- Severity Breakdown -->
 		<div class="card p-4">
-			<h3 class="h4 mb-4">Open by Severity</h3>
+			<h3 class="h4 mb-4">{m.dash_open_by_severity()}</h3>
 			<div class="space-y-3">
 				{#each Object.entries(metrics.severity_breakdown) as [severity, count]}
 					<div class="flex items-center justify-between">
@@ -548,7 +573,7 @@
 					</div>
 				{/each}
 				{#if Object.keys(metrics.severity_breakdown).length === 0}
-					<p class="opacity-60 text-center py-4">No open investigations</p>
+					<p class="opacity-60 text-center py-4">{m.dash_no_open_investigations()}</p>
 				{/if}
 			</div>
 		</div>
@@ -556,15 +581,15 @@
 
 	<!-- Recent Events -->
 	<div class="card p-4">
-		<h3 class="h4 mb-4">Live Event Stream</h3>
+		<h3 class="h4 mb-4">{m.dash_live_event_stream()}</h3>
 		{#if $recentEvents.length > 0}
 			<div class="table-container">
 				<table class="table table-compact">
 					<thead>
 						<tr>
-							<th>Time</th>
-							<th>Event</th>
-							<th>Details</th>
+							<th>{m.dash_th_time()}</th>
+							<th>{m.dash_th_event()}</th>
+							<th>{m.dash_th_details()}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -586,7 +611,7 @@
 				</table>
 			</div>
 		{:else}
-			<p class="opacity-60 text-center py-8">No events yet. Events will appear here in real-time.</p>
+			<p class="opacity-60 text-center py-8">{m.dash_no_events_yet()}</p>
 		{/if}
 	</div>
 {/if}

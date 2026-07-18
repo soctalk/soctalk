@@ -1,20 +1,21 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { localizedGoto } from '$lib/i18n';
 	import { api } from '$lib/api/client';
 	import { tenantsApi, tenantStateBadge, type Tenant } from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
 
 	async function scopeTo(slug: string) {
 		try {
 			const updated = await api.auth.assumeTenant(slug);
 			authSession.update((s) => ({ ...s, user: updated }));
-			goto('/');
+			localizedGoto('/');
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Scope',
-				message: e instanceof Error ? e.message : 'Failed to switch tenant scope',
+				title: m.ten_scope_toast_title(),
+				message: e instanceof Error ? e.message : m.ten_scope_switch_failed(),
 			});
 		}
 	}
@@ -28,7 +29,7 @@
 	// actually present, redirect only when we know the user is non-MSSP.
 	$: if ($authSession.user) {
 		if (!$isMsspScope) {
-			goto('/');
+			localizedGoto('/');
 		} else if (loadedFor !== $authSession.user.user_id) {
 			loadedFor = $authSession.user.user_id;
 			void load();
@@ -43,8 +44,8 @@
 		try {
 			tenants = await tenantsApi.list();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load tenants';
-			addToast({ type: 'error', title: 'Tenants', message: error });
+			error = e instanceof Error ? e.message : m.ten_load_failed();
+			addToast({ type: 'error', title: m.nav_tenants(), message: error });
 		} finally {
 			loading = false;
 		}
@@ -61,34 +62,34 @@
 
 <div class="space-y-4">
 	<div class="flex items-center justify-between">
-		<h1 class="h2">Tenants</h1>
-		<button class="btn variant-filled-primary" on:click={() => goto('/tenants/new')}>
-			+ New Tenant
+		<h1 class="h2">{m.nav_tenants()}</h1>
+		<button class="btn variant-filled-primary" on:click={() => localizedGoto('/tenants/new')}>
+			{m.ten_new_tenant()}
 		</button>
 	</div>
 
 	{#if loading}
 		<div class="card p-6 flex items-center gap-3">
 			<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"></span>
-			<span>Loading tenants…</span>
+			<span>{m.ten_loading_tenants()}</span>
 		</div>
 	{:else if error}
 		<div class="card p-6 text-error-500">{error}</div>
 	{:else if tenants.length === 0}
 		<div class="card p-6 opacity-70">
-			No tenants yet. Click <strong>+ New Tenant</strong> to onboard one.
+			{m.ten_empty_hint({ button: m.ten_new_tenant() })}
 		</div>
 	{:else}
 		<div class="card overflow-hidden">
 			<table class="table table-hover">
 				<thead>
 					<tr>
-						<th>Display Name</th>
-						<th>Slug</th>
-						<th>Profile</th>
-						<th>State</th>
-						<th>Created</th>
-						<th>Actions</th>
+						<th>{m.ten_display_name()}</th>
+						<th>{m.ten_slug()}</th>
+						<th>{m.ten_profile()}</th>
+						<th>{m.ten_state()}</th>
+						<th>{m.ten_created()}</th>
+						<th>{m.ten_actions()}</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -109,12 +110,12 @@
 									type="button"
 									class="btn btn-sm variant-soft-primary"
 									title={ready
-										? 'Pin session to this tenant — SOC pages will scope to them'
-										: `Tenant is ${t.state} — wait for it to reach \'active\' before pinning. Per-tenant SOC data isn\'t available yet.`}
+										? m.ten_open_soc_title()
+										: m.ten_open_soc_title_not_ready({ state: t.state })}
 									disabled={!ready}
 									on:click={() => scopeTo(t.slug)}
 								>
-									Open SOC
+									{m.ten_open_soc()}
 								</button>
 							</td>
 						</tr>

@@ -3,6 +3,8 @@
 	import { api, type PendingReview, ApiError } from '$lib/api/client';
 	import { addToast, pendingReviewsCount, canReview } from '$lib/stores';
 	import { formatSeverity, formatStatus, formatDecision } from '$lib/utils/formatters';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 
 	let reviews: PendingReview[] = [];
 	let loading = true;
@@ -25,13 +27,13 @@
 
 	onMount(() => loadReviews());
 
-	function handleReviewError(e: unknown, action: string): void {
+	function handleReviewError(e: unknown, fallbackMessage: string): void {
 		// Check for race condition (409 Conflict)
 		if (e instanceof ApiError && e.status === 409) {
 			addToast({
 				type: 'info',
-				title: 'Already Handled',
-				message: 'This review was already handled via Slack. Refreshing list...'
+				title: m.rev_toast_already_handled_title(),
+				message: m.rev_toast_already_handled_msg()
 			});
 			selectedReview = null;
 			feedback = '';
@@ -41,8 +43,8 @@
 		// Generic error
 		addToast({
 			type: 'error',
-			title: 'Error',
-			message: e instanceof Error ? e.message : `Failed to ${action}`
+			title: m.rev_toast_error_title(),
+			message: e instanceof Error ? e.message : fallbackMessage
 		});
 	}
 
@@ -54,7 +56,7 @@
 			reviews = result.items;
 			pendingReviewsCount.set(result.total);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load reviews';
+			error = e instanceof Error ? e.message : m.rev_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -64,12 +66,12 @@
 		processing = true;
 		try {
 			await api.review.approve(id, feedback || undefined);
-			addToast({ type: 'success', title: 'Approved', message: 'Review approved successfully' });
+			addToast({ type: 'success', title: m.rev_toast_approved_title(), message: m.rev_toast_approved_msg() });
 			selectedReview = null;
 			feedback = '';
 			await loadReviews();
 		} catch (e) {
-			handleReviewError(e, 'approve');
+			handleReviewError(e, m.rev_failed_approve());
 		} finally {
 			processing = false;
 		}
@@ -77,18 +79,18 @@
 
 	async function rejectReview(id: string) {
 		if (!feedback.trim()) {
-			addToast({ type: 'warning', title: 'Required', message: 'Please provide feedback for rejection' });
+			addToast({ type: 'warning', title: m.rev_toast_required_title(), message: m.rev_toast_feedback_required_msg() });
 			return;
 		}
 		processing = true;
 		try {
 			await api.review.reject(id, feedback);
-			addToast({ type: 'success', title: 'Rejected', message: 'Review rejected' });
+			addToast({ type: 'success', title: m.rev_toast_rejected_title(), message: m.rev_toast_rejected_msg() });
 			selectedReview = null;
 			feedback = '';
 			await loadReviews();
 		} catch (e) {
-			handleReviewError(e, 'reject');
+			handleReviewError(e, m.rev_failed_reject());
 		} finally {
 			processing = false;
 		}
@@ -97,19 +99,19 @@
 	async function requestMoreInfo(id: string) {
 		const questions = requestInfoQuestions.filter(q => q.trim());
 		if (questions.length === 0) {
-			addToast({ type: 'warning', title: 'Required', message: 'Please add at least one question' });
+			addToast({ type: 'warning', title: m.rev_toast_required_title(), message: m.rev_toast_question_required_msg() });
 			return;
 		}
 		processing = true;
 		try {
 			await api.review.requestInfo(id, questions);
-			addToast({ type: 'success', title: 'Request Sent', message: 'Additional information requested' });
+			addToast({ type: 'success', title: m.rev_toast_request_sent_title(), message: m.rev_toast_request_sent_msg() });
 			showRequestInfoModal = false;
 			requestInfoQuestions = [''];
 			selectedReview = null;
 			await loadReviews();
 		} catch (e) {
-			handleReviewError(e, 'request info');
+			handleReviewError(e, m.rev_failed_request_info());
 			showRequestInfoModal = false;
 		} finally {
 			processing = false;
@@ -147,15 +149,15 @@
 	}
 
 	function formatTimeRemaining(expiresAt: string | null): string {
-		if (!expiresAt) return 'No deadline';
+		if (!expiresAt) return m.rev_no_deadline();
 		const expires = new Date(expiresAt);
 		const now = new Date();
 		const diff = expires.getTime() - now.getTime();
-		if (diff <= 0) return 'Expired';
+		if (diff <= 0) return m.rev_expired();
 		const minutes = Math.floor(diff / 60000);
 		const hours = Math.floor(minutes / 60);
-		if (hours > 0) return `${hours}h ${minutes % 60}m remaining`;
-		return `${minutes}m remaining`;
+		if (hours > 0) return m.rev_time_remaining_hm({ hours, minutes: minutes % 60 });
+		return m.rev_time_remaining_m({ minutes });
 	}
 
 	function isExpiringSoon(expiresAt: string | null): boolean {
@@ -176,16 +178,16 @@
 </script>
 
 <svelte:head>
-	<title>Human Review - SocTalk</title>
+	<title>{m.header_human_review()} - SocTalk</title>
 </svelte:head>
 
 	<div class="flex items-center justify-between mb-6">
-		<h1 class="h2">Human Review Queue</h1>
+		<h1 class="h2">{m.rev_queue_title()}</h1>
 		<button class="btn variant-soft" on:click={loadReviews} disabled={loading}>
 			{#if loading}
 				<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 			{/if}
-			Refresh
+			{m.rev_refresh()}
 		</button>
 	</div>
 
@@ -195,15 +197,15 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.rev_error_banner({ error })}</span>
 	</div>
 {:else if reviews.length === 0}
 	<div class="card p-8 text-center">
 		<svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto opacity-40 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
 		</svg>
-		<h2 class="h3 mb-2">All Caught Up!</h2>
-		<p class="opacity-60">No pending reviews at this time.</p>
+		<h2 class="h3 mb-2">{m.rev_all_caught_up()}</h2>
+		<p class="opacity-60">{m.rev_no_pending()}</p>
 	</div>
 {:else}
 	<div class="grid gap-3">
@@ -232,13 +234,13 @@
 							<div class="flex items-center gap-2 flex-wrap">
 								<h3 class="font-semibold truncate">{review.title}</h3>
 								{#if isExpiringSoon(review.expires_at)}
-									<span class="badge variant-filled-warning animate-pulse text-xs">Urgent</span>
+									<span class="badge variant-filled-warning animate-pulse text-xs">{m.rev_urgent()}</span>
 								{/if}
 							</div>
 							<div class="flex items-center gap-3 text-xs opacity-60 mt-1">
-								<span>{review.alert_count} alerts</span>
+								<span>{m.rev_alerts_count({ count: review.alert_count })}</span>
 								{#if review.malicious_count > 0}
-									<span class="text-error-500">{review.malicious_count} malicious</span>
+									<span class="text-error-500">{m.rev_malicious_count({ count: review.malicious_count })}</span>
 								{/if}
 								<span>{formatTimeRemaining(review.expires_at)}</span>
 							</div>
@@ -251,7 +253,7 @@
 							</span>
 							{#if review.ai_decision}
 								<span class="badge {getDecisionColor(review.ai_decision)} text-xs">
-									AI: {formatDecision(review.ai_decision)}
+									{m.rev_ai_decision_badge({ decision: formatDecision(review.ai_decision) })}
 								</span>
 							{/if}
 						</div>
@@ -262,7 +264,7 @@
 								class="btn btn-sm variant-filled-primary flex-shrink-0"
 								on:click|stopPropagation={() => { expandedReviews.add(review.id); expandedReviews = new Set(expandedReviews); selectedReview = review; }}
 							>
-								Review
+								{m.rev_review_btn()}
 							</button>
 						{/if}
 					</div>
@@ -274,14 +276,14 @@
 						<!-- Investigation Link -->
 						<div class="flex items-center gap-2 text-sm py-3">
 							<a
-								href="/investigations/{review.investigation_id}"
+								href={localizeHref(`/investigations/${review.investigation_id}`)}
 								class="text-primary-500 hover:underline flex items-center gap-1"
 								on:click|stopPropagation
 							>
 								<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
 								</svg>
-								View Full Investigation
+								{m.rev_view_full_investigation()}
 							</a>
 						</div>
 
@@ -292,19 +294,19 @@
 						<div class="grid grid-cols-4 gap-3 mb-4 text-center">
 							<div class="card p-2 variant-soft">
 								<div class="text-lg font-bold">{review.alert_count}</div>
-								<div class="text-xs opacity-60">Alerts</div>
+								<div class="text-xs opacity-60">{m.rev_stats_alerts()}</div>
 							</div>
 							<div class="card p-2 variant-soft-error">
 								<div class="text-lg font-bold text-error-500">{review.malicious_count}</div>
-								<div class="text-xs opacity-60">Malicious</div>
+								<div class="text-xs opacity-60">{m.rev_stats_malicious()}</div>
 							</div>
 							<div class="card p-2 variant-soft-warning">
 								<div class="text-lg font-bold text-warning-500">{review.suspicious_count}</div>
-								<div class="text-xs opacity-60">Suspicious</div>
+								<div class="text-xs opacity-60">{m.rev_stats_suspicious()}</div>
 							</div>
 							<div class="card p-2 variant-soft-success">
 								<div class="text-lg font-bold text-success-500">{review.clean_count}</div>
-								<div class="text-xs opacity-60">Clean</div>
+								<div class="text-xs opacity-60">{m.rev_stats_clean()}</div>
 							</div>
 						</div>
 
@@ -316,10 +318,10 @@
 										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
 										</svg>
-										AI Recommendation
+										{m.rev_ai_recommendation()}
 									</span>
 									<span class="badge {getDecisionColor(review.ai_decision)}">
-										{formatDecision(review.ai_decision)} ({Math.round((review.ai_confidence || 0) * 100)}%)
+										{m.rev_decision_confidence({ decision: formatDecision(review.ai_decision), pct: Math.round((review.ai_confidence || 0) * 100) })}
 									</span>
 								</div>
 								{#if review.ai_assessment}
@@ -340,14 +342,14 @@
 									<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
 									</svg>
-									Key Findings
+									{m.rev_key_findings()}
 								</h4>
 								<ul class="list-disc list-inside text-sm space-y-1">
 									{#each review.findings.slice(0, 5) as finding}
 										<li>{finding}</li>
 									{/each}
 									{#if review.findings.length > 5}
-										<li class="opacity-60">...and {review.findings.length - 5} more</li>
+										<li class="opacity-60">{m.rev_and_more({ count: review.findings.length - 5 })}</li>
 									{/if}
 								</ul>
 							</div>
@@ -360,7 +362,7 @@
 									<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
 									</svg>
-									Enrichment Results
+									{m.rev_enrichment_results()}
 								</summary>
 								<div class="bg-surface-500/10 rounded p-2 max-h-32 overflow-y-auto mt-2">
 									<pre class="text-xs whitespace-pre-wrap">{JSON.stringify(review.enrichments, null, 2)}</pre>
@@ -375,7 +377,7 @@
 									<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
 									</svg>
-									MISP Threat Intel
+									{m.rev_misp_threat_intel()}
 								</summary>
 								<div class="bg-surface-500/10 rounded p-2 max-h-32 overflow-y-auto mt-2">
 									<pre class="text-xs whitespace-pre-wrap">{JSON.stringify(review.misp_context, null, 2)}</pre>
@@ -390,11 +392,11 @@
 						{#if selectedReview?.id === review.id}
 							<div class="border-t border-surface-500/20 pt-4 mt-4">
 								<label class="label mb-3">
-									<span>Analyst Feedback (required for rejection)</span>
+									<span>{m.rev_feedback_label()}</span>
 									<textarea
 										class="textarea"
 										rows="3"
-										placeholder="Add your feedback, analysis notes, or reasoning..."
+										placeholder={m.rev_feedback_placeholder()}
 										bind:value={feedback}
 									></textarea>
 								</label>
@@ -404,7 +406,7 @@
 										on:click={() => { selectedReview = null; feedback = ''; }}
 										disabled={processing}
 									>
-										Cancel
+										{m.common_cancel()}
 									</button>
 									<button
 										class="btn variant-soft-secondary"
@@ -414,7 +416,7 @@
 										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
 										</svg>
-										Request Info
+										{m.rev_request_info()}
 									</button>
 									<button
 										class="btn variant-filled-error"
@@ -424,7 +426,7 @@
 										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
 										</svg>
-										Reject & Close
+										{m.rev_reject_close()}
 									</button>
 									<button
 										class="btn variant-filled-success"
@@ -434,7 +436,7 @@
 										<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
 										</svg>
-										Approve & Escalate
+										{m.rev_approve_escalate()}
 									</button>
 								</div>
 							</div>
@@ -448,7 +450,7 @@
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
 									</svg>
-									Take Action
+									{m.rev_take_action()}
 								</button>
 							</div>
 						{/if}
@@ -464,9 +466,9 @@
 {#if showRequestInfoModal && selectedReview}
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
 		<div class="card p-6 w-full max-w-lg m-4 max-h-[90vh] overflow-y-auto">
-			<h3 class="h3 mb-4">Request Additional Information</h3>
+			<h3 class="h3 mb-4">{m.rev_modal_request_title()}</h3>
 			<p class="text-sm opacity-80 mb-4">
-				Add questions or requests for additional analysis. The system will gather more information and update the review.
+				{m.rev_modal_request_hint()}
 			</p>
 
 			<div class="space-y-3 mb-4">
@@ -475,7 +477,7 @@
 						<input
 							type="text"
 							class="input flex-1"
-							placeholder="Enter your question or request..."
+							placeholder={m.rev_question_placeholder()}
 							bind:value={requestInfoQuestions[i]}
 						/>
 						{#if requestInfoQuestions.length > 1}
@@ -499,7 +501,7 @@
 				<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
 				</svg>
-				Add Another Question
+				{m.rev_add_question()}
 			</button>
 
 			<div class="flex justify-end gap-2">
@@ -508,7 +510,7 @@
 					on:click={() => { showRequestInfoModal = false; requestInfoQuestions = ['']; }}
 					disabled={processing}
 				>
-					Cancel
+					{m.common_cancel()}
 				</button>
 					<button
 						class="btn variant-filled-primary"
@@ -518,7 +520,7 @@
 						{#if processing}
 							<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 						{/if}
-						Send Request
+						{m.rev_send_request()}
 					</button>
 				</div>
 			</div>

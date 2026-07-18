@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref, localizedGoto } from '$lib/i18n';
 	import { currentTenantId } from '$lib/stores';
 	import ConditionBuilder from '$lib/triage-policy/ConditionBuilder.svelte';
 	import TriagePolicyFlowPreview from '$lib/triage-policy/TriagePolicyFlowPreview.svelte';
@@ -156,7 +157,9 @@
 	);
 
 	$: validationErrors = [
-		...guardrails.flatMap((g, i) => (g.rawError ? [`guardrail ${i + 1}: ${g.rawError}`] : [])),
+		...guardrails.flatMap((g, i) =>
+			g.rawError ? [m.tp_validate_guardrail_condition({ n: i + 1, error: g.rawError })] : []
+		),
 		...validateDefinition(definition as unknown as Record<string, unknown>)
 	];
 
@@ -195,7 +198,7 @@
 			rawError: null,
 			rawNotice:
 				conditionToGroup(g.when) === null
-					? 'this condition uses shapes the visual builder cannot show — editing as JSON'
+					? m.tp_builder_unrepresentable_json_notice()
 					: null
 		}));
 	}
@@ -228,14 +231,14 @@
 			const all = await api.triagePolicies.listAuthored(tid);
 			if (key !== loadedKey) return; // stale response — a newer load owns the form
 			const row = all.find((p) => p.triage_policy_id === id);
-			if (!row) throw new Error(`triage policy '${id}' not found for this tenant`);
+			if (!row) throw new Error(m.tp_not_found({ id }));
 			existingStatus = row.status;
 			lifecycleStatus = row.status === 'draft' ? 'draft' : 'shadow';
 			loadDefinition(row.definition);
 			loaded = true;
 		} catch (e) {
 			if (key !== loadedKey) return;
-			loadError = e instanceof Error ? e.message : 'Failed to load triage policy';
+			loadError = e instanceof Error ? e.message : m.tp_load_one_failed();
 		}
 	}
 
@@ -288,8 +291,7 @@
 			const parsed = JSON.parse(g.rawWhen);
 			const group = conditionToGroup(parsed);
 			if (group === null) {
-				g.rawNotice =
-					'this condition uses shapes the visual builder cannot show (e.g. ! / !!) — keep editing it as JSON';
+				g.rawNotice = m.tp_builder_unrepresentable_keep_json_notice();
 				guardrails = guardrails;
 				return;
 			}
@@ -297,7 +299,7 @@
 			g.rawError = null;
 			g.rawNotice = null;
 		} catch {
-			g.rawError = 'invalid JSON';
+			g.rawError = m.tp_invalid_json_lower();
 		}
 		guardrails = guardrails;
 	}
@@ -308,7 +310,7 @@
 			JSON.parse(text);
 			g.rawError = null;
 		} catch {
-			g.rawError = 'invalid JSON';
+			g.rawError = m.tp_invalid_json_lower();
 		}
 		guardrails = guardrails;
 	}
@@ -328,7 +330,7 @@
 			jsonError = null;
 			showJson = false;
 		} catch (e) {
-			jsonError = e instanceof Error ? e.message : 'Invalid JSON';
+			jsonError = e instanceof Error ? e.message : m.tp_invalid_json_no_period();
 		}
 	}
 
@@ -388,9 +390,9 @@
 			const doc = definition as unknown as Record<string, unknown>;
 			if (mode === 'create') await api.triagePolicies.createAuthored(tenantId, doc, lifecycleStatus);
 			else await api.triagePolicies.updateAuthored(tenantId, editId!, doc, lifecycleStatus);
-			goto('/triage-policies');
+			await localizedGoto('/triage-policies');
 		} catch (e) {
-			saveError = e instanceof Error ? e.message : 'Save failed.';
+			saveError = e instanceof Error ? e.message : m.tp_save_failed();
 		} finally {
 			saving = false;
 		}
@@ -404,31 +406,29 @@
 </script>
 
 <svelte:head>
-	<title>{mode === 'edit' ? `Edit ${editId}` : 'New triage policy'} - SocTalk</title>
+	<title>{mode === 'edit' ? m.tp_editor_head_edit({ id: editId ?? '' }) : m.tp_new_policy_title()} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-1">
-	<h1 class="h2">{mode === 'edit' ? `Edit triage policy` : 'New triage policy'}</h1>
+	<h1 class="h2">{mode === 'edit' ? m.tp_edit_policy_title() : m.tp_new_policy_title()}</h1>
 	<div class="flex gap-2">
-		<button class="btn btn-sm variant-soft" on:click={openJson}>View as JSON</button>
-		<a class="btn btn-sm variant-soft" href="/triage-policies">Cancel</a>
+		<button class="btn btn-sm variant-soft" on:click={openJson}>{m.tp_view_as_json()}</button>
+		<a class="btn btn-sm variant-soft" href={localizeHref('/triage-policies')}>{m.tp_cancel()}</a>
 		<button
 			class="btn btn-sm variant-filled-primary"
 			on:click={save}
 			disabled={saving || !tenantId || validationErrors.length > 0}
 		>
-			{saving ? 'Saving…' : mode === 'create' ? 'Create (shadow)' : 'Save revision'}
+			{saving ? m.tp_saving() : mode === 'create' ? m.tp_create_shadow() : m.tp_save_revision()}
 		</button>
 	</div>
 </div>
 <p class="opacity-60 text-sm mb-4">
-	Authored triage policies run in shadow: matched and evaluated for audit, enforcing nothing, until
-	promoted. The safety floor (IOC / contradicted-authorization vetoes) always applies and cannot
-	be weakened here — guardrails can only raise suspicion, never suppress it.
+	{m.tp_editor_intro()}
 </p>
 
 {#if !tenantId}
-	<div class="card p-6 opacity-60 text-sm">Pin a tenant (from Tenants) to author triage policies.</div>
+	<div class="card p-6 opacity-60 text-sm">{m.tp_editor_pin_hint()}</div>
 {:else if loadError}
 	<div class="alert variant-filled-error"><span>{loadError}</span></div>
 {:else if !loaded}
@@ -440,10 +440,10 @@
 		<!-- ------------------------------------------------ form column -->
 		<div class="xl:col-span-3 space-y-4">
 			<section class="card p-4 space-y-3">
-				<h3 class="h4">Identity</h3>
+				<h3 class="h4">{m.tp_identity()}</h3>
 				<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
 					<label class="label text-sm sm:col-span-2">
-						<span class="opacity-70">Triage policy id (slug)</span>
+						<span class="opacity-70">{m.tp_policy_id_label()}</span>
 						<input
 							class="input font-mono"
 							bind:value={pid}
@@ -452,7 +452,9 @@
 						/>
 					</label>
 					<label class="label text-sm">
-						<span class="opacity-70">Priority (≥ {FILE_PRIORITY_FLOOR}, lower wins)</span>
+						<span class="opacity-70"
+							>{m.tp_priority_label({ floor: FILE_PRIORITY_FLOOR })}</span
+						>
 						<input class="input" type="number" min={FILE_PRIORITY_FLOOR} bind:value={priority} />
 					</label>
 				</div>
@@ -460,34 +462,33 @@
 					<div class="flex items-center gap-2 text-sm">
 						<span class="badge variant-filled-success text-xs">active</span>
 						<span class="opacity-70">
-							This policy currently governs triage — saving a revision keeps it active and
-							queues a worker rollout with the new definition.
+							{m.tp_active_revision_note()}
 						</span>
 					</div>
 				{:else}
 					<label class="flex items-center gap-2 text-sm">
 						<input class="checkbox" type="checkbox" checked={lifecycleStatus === 'draft'}
 							on:change={(e) => (lifecycleStatus = e.currentTarget.checked ? 'draft' : 'shadow')} />
-						<span>Keep as draft (not yet shadow-evaluated against live runs)</span>
+						<span>{m.tp_keep_as_draft()}</span>
 					</label>
 				{/if}
 			</section>
 
 			<section class="card p-4 space-y-3">
-				<h3 class="h4">Which alerts does it own?</h3>
+				<h3 class="h4">{m.tp_match_section_title()}</h3>
 				<p class="text-xs opacity-60">
-					Criteria are OR'd — the triage policy applies when any one matches.
+					{m.tp_match_section_hint()}
 				</p>
 				<label class="label text-sm">
-					<span class="opacity-70">Wazuh rule groups (comma-separated)</span>
+					<span class="opacity-70">{m.tp_wazuh_rule_groups()}</span>
 					<input class="input" bind:value={ruleGroupsText} placeholder="sudo, su" />
 				</label>
 				<label class="label text-sm">
-					<span class="opacity-70">Rule ids (comma-separated)</span>
+					<span class="opacity-70">{m.tp_rule_ids()}</span>
 					<input class="input" bind:value={ruleIdsText} placeholder="5402, 5501" />
 				</label>
 				<div class="text-sm">
-					<span class="opacity-70">Authorization activity tracks</span>
+					<span class="opacity-70">{m.tp_authorization_activity_tracks()}</span>
 					<div class="flex gap-4 mt-1">
 						{#each AUTHORIZATION_TRACKS as t}
 							<label class="flex items-center gap-2">
@@ -500,9 +501,9 @@
 			</section>
 
 			<section class="card p-4 space-y-3">
-				<h3 class="h4">Investigation requirements</h3>
+				<h3 class="h4">{m.tp_investigation_requirements()}</h3>
 				<div class="text-sm">
-					<span class="opacity-70">Steps that must run before a verdict is legal</span>
+					<span class="opacity-70">{m.tp_required_steps_label()}</span>
 					{#each KNOWN_STEP_NODES as s}
 						<label class="flex items-center gap-2 mt-1">
 							<input class="checkbox" type="checkbox" bind:checked={stepChecked[s]} />
@@ -511,16 +512,16 @@
 					{/each}
 				</div>
 				<div class="text-sm">
-					<span class="opacity-70">Deterministic decision modules to consult</span>
-					{#each KNOWN_DECISION_MODULES as m}
+					<span class="opacity-70">{m.tp_decision_modules_to_consult()}</span>
+					{#each KNOWN_DECISION_MODULES as mod}
 						<label class="flex items-center gap-2 mt-1">
-							<input class="checkbox" type="checkbox" bind:checked={moduleChecked[m]} />
-							<span class="font-mono text-xs">{m}</span>
+							<input class="checkbox" type="checkbox" bind:checked={moduleChecked[mod]} />
+							<span class="font-mono text-xs">{mod}</span>
 						</label>
 					{/each}
 				</div>
 				<div class="text-sm space-y-2">
-					<span class="opacity-70">Allowed supervisor actions per phase (unchecked phase = unconstrained)</span>
+					<span class="opacity-70">{m.tp_allowed_supervisor_actions()}</span>
 					{#each ['triage', 'decide'] as phase}
 						<div class="flex flex-wrap items-center gap-3">
 							<label class="flex items-center gap-2 w-20">
@@ -562,11 +563,10 @@
 			</section>
 
 			<section class="card p-4 space-y-3">
-				<h3 class="h4">Close sign-off</h3>
+				<h3 class="h4">{m.tp_close_signoff()}</h3>
 				<label class="label text-sm">
 					<span class="opacity-70">
-						A committing close on an asset with one of these data classifications waits for a
-						human (comma-separated)
+						{m.tp_close_signoff_label()}
 					</span>
 					<input class="input" bind:value={signoffText} placeholder="pci, phi" />
 				</label>
@@ -574,19 +574,17 @@
 
 			<section class="card p-4 space-y-3">
 				<div class="flex items-center justify-between">
-					<h3 class="h4">Guardrails</h3>
+					<h3 class="h4">{m.tp_guardrails_title()}</h3>
 					<button
 						class="btn btn-sm variant-soft"
 						on:click={addGuardrail}
 						disabled={guardrails.length >= MAX_GUARDRAILS}
 					>
-						+ Add guardrail
+						{m.tp_add_guardrail()}
 					</button>
 				</div>
 				<p class="text-xs opacity-60">
-					Evaluated after the safety floor, in order — the first matching rule wins. Overrides can
-					only raise a decision (close → needs_more_info → escalate); interrupts hold the draft for
-					human review.
+					{m.tp_guardrails_hint()}
 				</p>
 
 				{#each guardrails as g, i}
@@ -594,11 +592,11 @@
 						<div class="flex items-center gap-2">
 							<span class="badge variant-filled text-xs">{i + 1}</span>
 							<select class="select w-auto !py-1 text-xs" bind:value={g.effect} on:change={() => onEffectChange(g)}>
-								<option value="override">override the decision</option>
-								<option value="interrupt">interrupt for human review</option>
+								<option value="override">{m.tp_guardrail_effect_override_option()}</option>
+								<option value="interrupt">{m.tp_guardrail_effect_interrupt_option()}</option>
 							</select>
 							{#if g.effect === 'override'}
-								<span class="text-xs opacity-60">raise to</span>
+								<span class="text-xs opacity-60">{m.tp_raise_to()}</span>
 								<select class="select w-auto !py-1 text-xs" bind:value={g.to}>
 									{#each GUARDRAIL_TARGETS.filter((t) => t !== 'human_review') as t}
 										<option value={t}>{t}</option>
@@ -608,16 +606,16 @@
 								<span class="badge variant-soft-tertiary text-xs">→ human_review</span>
 							{/if}
 							<div class="flex-1"></div>
-							<button class="btn-icon btn-icon-sm variant-soft" title="Move up" on:click={() => moveGuardrail(i, -1)} disabled={i === 0}>↑</button>
-							<button class="btn-icon btn-icon-sm variant-soft" title="Move down" on:click={() => moveGuardrail(i, 1)} disabled={i === guardrails.length - 1}>↓</button>
-							<button class="btn-icon btn-icon-sm variant-soft-error" title="Remove" on:click={() => removeGuardrail(i)}>✕</button>
+							<button class="btn-icon btn-icon-sm variant-soft" title={m.tp_move_up()} on:click={() => moveGuardrail(i, -1)} disabled={i === 0}>↑</button>
+							<button class="btn-icon btn-icon-sm variant-soft" title={m.tp_move_down()} on:click={() => moveGuardrail(i, 1)} disabled={i === guardrails.length - 1}>↓</button>
+							<button class="btn-icon btn-icon-sm variant-soft-error" title={m.tp_remove()} on:click={() => removeGuardrail(i)}>✕</button>
 						</div>
 
 						<div class="pl-1">
 							{#if g.builder !== null}
 								<ConditionBuilder bind:group={g.builder} on:change={() => (guardrails = guardrails)} />
 								<button class="anchor text-xs mt-1" on:click={() => toJsonMode(g)}>
-									edit condition as JSON
+									{m.tp_edit_condition_as_json()}
 								</button>
 							{:else}
 								<textarea
@@ -632,27 +630,27 @@
 									<div class="text-xs text-warning-500">{g.rawNotice}</div>
 								{/if}
 								<button class="anchor text-xs mt-1" on:click={() => toBuilderMode(g)}>
-									back to visual builder
+									{m.tp_back_to_visual_builder()}
 								</button>
 							{/if}
 						</div>
 
 						<label class="label text-sm">
-							<span class="opacity-70 text-xs">Reason shown to the analyst when this fires</span>
+							<span class="opacity-70 text-xs">{m.tp_guardrail_reason_label()}</span>
 							<input class="input !py-1 text-sm" bind:value={g.reason}
-								placeholder="why this rule raises / interrupts" maxlength="512" />
+								placeholder={m.tp_guardrail_reason_placeholder()} maxlength="512" />
 						</label>
 					</div>
 				{/each}
 				{#if guardrails.length === 0}
-					<div class="text-sm opacity-50 text-center py-2">No guardrails yet.</div>
+					<div class="text-sm opacity-50 text-center py-2">{m.tp_no_guardrails_yet()}</div>
 				{/if}
 			</section>
 
 			{#if validationErrors.length}
 				<div class="alert variant-soft-error text-sm">
 					<div>
-						<p class="font-semibold mb-1">Fix before saving:</p>
+						<p class="font-semibold mb-1">{m.tp_fix_before_saving()}</p>
 						<ul class="list-disc ml-5 space-y-0.5">
 							{#each validationErrors as e}
 								<li>{e}</li>
@@ -672,14 +670,14 @@
 		>
 			<section class="card p-2">
 				<div class="flex items-center justify-between px-2 pt-1">
-					<h3 class="h4">Decision flow</h3>
+					<h3 class="h4">{m.tp_decision_flow()}</h3>
 					<label class="flex items-center gap-2 text-xs opacity-70">
 						<input class="checkbox checkbox-sm" type="checkbox" bind:checked={flowCompact} />
-						compact
+						{m.tp_compact()}
 					</label>
 				</div>
 				<p class="text-xs opacity-60 px-2 pb-1">
-					Projection of this document onto the triage pipeline — click a guardrail to jump to it.
+					{m.tp_decision_flow_hint()}
 				</p>
 				<div class="h-[32rem]">
 					<TriagePolicyFlowPreview
@@ -692,13 +690,13 @@
 			</section>
 
 			<section class="card p-4 space-y-2">
-				<h3 class="h4">Try it</h3>
+				<h3 class="h4">{m.tp_try_it()}</h3>
 				<p class="text-xs opacity-60">
-					Set a sample verdict context and see what this triage policy would do.
+					{m.tp_try_it_hint()}
 				</p>
 				<div class="grid grid-cols-2 gap-2 text-sm">
 					<label class="label">
-						<span class="opacity-70 text-xs">LLM draft verdict</span>
+						<span class="opacity-70 text-xs">{m.tp_try_llm_draft_verdict()}</span>
 						<select class="select !py-1" bind:value={sim.verdict}>
 							<option value="close">close</option>
 							<option value="needs_more_info">needs_more_info</option>
@@ -706,11 +704,11 @@
 						</select>
 					</label>
 					<label class="label">
-						<span class="opacity-70 text-xs">Confidence</span>
+						<span class="opacity-70 text-xs">{m.tp_try_confidence()}</span>
 						<input class="input !py-1" type="number" min="0" max="1" step="0.05" bind:value={sim.confidence} />
 					</label>
 					<label class="label">
-						<span class="opacity-70 text-xs">Authorization class</span>
+						<span class="opacity-70 text-xs">{m.tp_try_authorization_class()}</span>
 						<select class="select !py-1" bind:value={sim.authzClass}>
 							<option value="covered">covered</option>
 							<option value="contradicted">contradicted</option>
@@ -718,13 +716,13 @@
 						</select>
 					</label>
 					<label class="label">
-						<span class="opacity-70 text-xs">Asset data classification</span>
+						<span class="opacity-70 text-xs">{m.tp_try_asset_data_classification()}</span>
 						<input class="input !py-1" bind:value={sim.dataClass} placeholder="pci" />
 					</label>
 					<label class="label">
-						<span class="opacity-70 text-xs">Asset criticality</span>
+						<span class="opacity-70 text-xs">{m.tp_try_asset_criticality()}</span>
 						<select class="select !py-1" bind:value={sim.criticality}>
-							<option value="">unknown</option>
+							<option value="">{m.tp_unknown_lower()}</option>
 							<option value="critical">critical</option>
 							<option value="high">high</option>
 							<option value="medium">medium</option>
@@ -732,44 +730,46 @@
 						</select>
 					</label>
 					<label class="label">
-						<span class="opacity-70 text-xs">Asset environment</span>
+						<span class="opacity-70 text-xs">{m.tp_try_asset_environment()}</span>
 						<input class="input !py-1" bind:value={sim.environment} placeholder="production" />
 					</label>
 					<label class="flex items-center gap-2">
 						<input class="checkbox" type="checkbox" bind:checked={sim.ioc} />
-						<span class="text-xs">malicious indicator (IOC)</span>
+						<span class="text-xs">{m.tp_try_malicious_indicator()}</span>
 					</label>
 					<label class="flex items-center gap-2">
 						<input class="checkbox" type="checkbox" bind:checked={sim.activeIncident} />
-						<span class="text-xs">active incident</span>
+						<span class="text-xs">{m.tp_try_active_incident()}</span>
 					</label>
 				</div>
 				<div class="card variant-soft p-3 text-sm space-y-1">
 					<div class="flex items-center gap-2 flex-wrap">
-						<span class="opacity-60 text-xs">outcome</span>
+						<span class="opacity-60 text-xs">{m.tp_try_outcome()}</span>
 						<span class="badge {SIM_BADGE[simResult.finalDecision] ?? 'variant-soft'} text-xs">
 							{simResult.finalDecision}
 						</span>
 						{#if simResult.heldForReview}
 							<span class="badge variant-filled-tertiary text-xs">
-								draft held — human review disposes
+								{m.tp_try_draft_held()}
 							</span>
 						{/if}
 						{#if simResult.stage === 'guardrail'}
 							<span class="text-xs opacity-70">
-								guardrail {(simResult.index ?? 0) + 1} fired ({simResult.effect})
+								{m.tp_try_guardrail_fired({
+									n: (simResult.index ?? 0) + 1,
+									effect: simResult.effect ?? ''
+								})}
 							</span>
 						{:else if simResult.stage === 'floor'}
-							<span class="text-xs opacity-70">safety floor (not this policy)</span>
+							<span class="text-xs opacity-70">{m.tp_try_safety_floor()}</span>
 						{:else if simResult.stage === 'signoff'}
-							<span class="text-xs opacity-70">close sign-off interrupt</span>
+							<span class="text-xs opacity-70">{m.tp_try_close_signoff_interrupt()}</span>
 						{/if}
 					</div>
 					<p class="text-xs opacity-70">{simResult.reason}</p>
 				</div>
 				<p class="text-[10px] opacity-40">
-					Contract fields simulated: {STATE_CONTRACT.length}. The worker's guard remains the
-					authority — this preview mirrors it for authoring feedback only.
+					{m.tp_contract_fields_note({ count: STATE_CONTRACT.length })}
 				</p>
 			</section>
 		</div>
@@ -779,18 +779,17 @@
 {#if showJson}
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
 		<div class="card p-6 max-w-2xl w-full space-y-3">
-			<h3 class="h4">Triage policy document</h3>
+			<h3 class="h4">{m.tp_json_document_title()}</h3>
 			<p class="text-xs opacity-60">
-				The form and this JSON are the same document. Edit here and apply, or copy it out — the
-				YAML export uses the identical structure.
+				{m.tp_json_document_hint()}
 			</p>
 			<textarea class="textarea font-mono text-xs h-80" bind:value={jsonText}></textarea>
 			{#if jsonError}
 				<div class="alert variant-filled-error text-sm"><span>{jsonError}</span></div>
 			{/if}
 			<div class="flex justify-end gap-2">
-				<button class="btn variant-soft" on:click={() => (showJson = false)}>Close</button>
-				<button class="btn variant-filled-primary" on:click={applyJson}>Apply to form</button>
+				<button class="btn variant-soft" on:click={() => (showJson = false)}>{m.tp_close()}</button>
+				<button class="btn variant-filled-primary" on:click={applyJson}>{m.tp_apply_to_form()}</button>
 			</div>
 		</div>
 	</div>

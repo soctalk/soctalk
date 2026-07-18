@@ -3,6 +3,8 @@
 		import { api, type InvestigationSummary } from '$lib/api/client';
 		import { authSession, isMsspScope } from '$lib/stores';
 		import { formatStatus, formatPhase, formatSeverity, formatDecision } from '$lib/utils/formatters';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 
 		// Show the per-row Tenant column only when the session is in
 		// cross-tenant view — i.e. an MSSP user with no current_tenant
@@ -37,7 +39,7 @@
 			total = result.total;
 			hasMore = result.has_more;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load investigations';
+			error = e instanceof Error ? e.message : m.inv_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -72,40 +74,40 @@
 </script>
 
 <svelte:head>
-	<title>Investigations - SocTalk</title>
+	<title>{m.nav_investigations()} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-4">
-	<h1 class="h2">Investigations</h1>
+	<h1 class="h2">{m.inv_title()}</h1>
 	<button class="btn variant-soft" on:click={loadInvestigations} disabled={loading}>
 		{#if loading}
 			<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 		{/if}
-		Refresh
+		{m.inv_refresh()}
 	</button>
 </div>
 
 <!-- Filters -->
 <div class="flex flex-wrap gap-4 mb-4">
 	<select class="select" bind:value={statusFilter} on:change={() => { page = 1; loadInvestigations(); }}>
-		<option value="">All Statuses</option>
-		<option value="pending">Pending</option>
-		<option value="in_progress">In Progress</option>
-		<option value="paused">Paused</option>
-		<option value="escalated">Escalated</option>
-		<option value="auto_closed">Auto-Closed</option>
-		<option value="closed">Closed</option>
-		<option value="rejected">Rejected</option>
-		<option value="cancelled">Cancelled</option>
+		<option value="">{m.inv_all_statuses()}</option>
+		<option value="pending">{formatStatus('pending')}</option>
+		<option value="in_progress">{formatStatus('in_progress')}</option>
+		<option value="paused">{formatStatus('paused')}</option>
+		<option value="escalated">{formatStatus('escalated')}</option>
+		<option value="auto_closed">{formatStatus('auto_closed')}</option>
+		<option value="closed">{formatStatus('closed')}</option>
+		<option value="rejected">{formatStatus('rejected')}</option>
+		<option value="cancelled">{formatStatus('cancelled')}</option>
 	</select>
 	<select class="select" bind:value={phaseFilter} on:change={() => { page = 1; loadInvestigations(); }}>
-		<option value="">All Phases</option>
-		<option value="triage">Triage</option>
-		<option value="enrichment">Enrichment</option>
-		<option value="analysis">Analysis</option>
-		<option value="verdict">Verdict</option>
-		<option value="human_review">Human Review</option>
-		<option value="closed">Closed</option>
+		<option value="">{m.inv_all_phases()}</option>
+		<option value="triage">{formatPhase('triage')}</option>
+		<option value="enrichment">{formatPhase('enrichment')}</option>
+		<option value="analysis">{formatPhase('analysis')}</option>
+		<option value="verdict">{formatPhase('verdict')}</option>
+		<option value="human_review">{formatPhase('human_review')}</option>
+		<option value="closed">{formatPhase('closed')}</option>
 	</select>
 </div>
 
@@ -115,7 +117,7 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.inv_error({ error })}</span>
 	</div>
 {:else}
 	<div class="table-container">
@@ -123,17 +125,17 @@
 			<thead>
 				<tr>
 					{#if showTenantColumn}
-						<th>Tenant</th>
+						<th>{m.inv_col_tenant()}</th>
 					{/if}
-					<th>Title</th>
-					<th>Status</th>
-					<th>Phase</th>
-					<th>Severity</th>
-					<th>Alerts</th>
-					<th>Malicious</th>
-					<th>Verdict</th>
-					<th>Created</th>
-					<th>Actions</th>
+					<th>{m.inv_col_title()}</th>
+					<th>{m.inv_col_status()}</th>
+					<th>{m.inv_col_phase()}</th>
+					<th>{m.inv_col_severity()}</th>
+					<th>{m.inv_col_alerts()}</th>
+					<th>{m.inv_col_malicious()}</th>
+					<th>{m.inv_col_verdict()}</th>
+					<th>{m.inv_col_created()}</th>
+					<th>{m.inv_col_actions()}</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -151,8 +153,8 @@
 							</td>
 						{/if}
 						<td class="max-w-xs truncate">
-							<a href="/investigations/{inv.id}" class="anchor">
-								{inv.title || 'Untitled Investigation'}
+							<a href={localizeHref(`/investigations/${inv.id}`)} class="anchor">
+								{inv.title || m.inv_untitled()}
 							</a>
 						</td>
 						<td><span class="badge {getStatusBadge(inv.status)}">{formatStatus(inv.status)}</span></td>
@@ -182,14 +184,14 @@
 							{new Date(inv.created_at).toLocaleString()}
 						</td>
 						<td>
-							<a href="/investigations/{inv.id}" class="btn btn-sm variant-soft">View</a>
+							<a href={localizeHref(`/investigations/${inv.id}`)} class="btn btn-sm variant-soft">{m.inv_view()}</a>
 						</td>
 					</tr>
 				{/each}
 				{#if investigations.length === 0}
 					<tr>
 						<td colspan={showTenantColumn ? 10 : 9} class="text-center opacity-60 py-8">
-							No investigations found
+							{m.inv_empty()}
 						</td>
 					</tr>
 				{/if}
@@ -201,7 +203,7 @@
 	{#if total > 20}
 		<div class="flex justify-between items-center mt-4">
 			<span class="text-sm opacity-60">
-				Showing {(page - 1) * 20 + 1} - {Math.min(page * 20, total)} of {total}
+				{m.inv_showing_range({ from: (page - 1) * 20 + 1, to: Math.min(page * 20, total), total })}
 			</span>
 			<div class="flex gap-2">
 				<button
@@ -209,14 +211,14 @@
 					disabled={page <= 1}
 					on:click={() => { page--; loadInvestigations(); }}
 				>
-					Previous
+					{m.inv_previous()}
 				</button>
 				<button
 					class="btn btn-sm variant-soft"
 					disabled={!hasMore}
 					on:click={() => { page++; loadInvestigations(); }}
 				>
-					Next
+					{m.inv_next()}
 				</button>
 			</div>
 		</div>

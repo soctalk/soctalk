@@ -9,6 +9,7 @@
 -->
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import { m } from '$lib/paraglide/messages';
 	import type { ProposedActionView } from '$lib/stores/chat';
 
 	export let action: ProposedActionView;
@@ -22,14 +23,15 @@
 	$: confirmed = !!action.confirmed_at;
 	$: actionLabel = labelForAction(action.action);
 
+	// Localized display label for a proposed-action code (call-time, #52).
 	function labelForAction(a: string): string {
 		switch (a) {
 			case 'approve_review':
-				return 'Approve & Escalate';
+				return m.cp_approve_escalate();
 			case 'reject_review':
-				return 'Reject & Close';
+				return m.cp_reject_close();
 			case 'expire_review':
-				return 'Expire Review';
+				return m.cp_expire_review();
 			default:
 				return a;
 		}
@@ -60,7 +62,7 @@
 					d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
 				/>
 			</svg>
-			Proposed action
+			{m.cp_proposed_action()}
 		</div>
 		<div class="text-sm">
 			<span class="font-semibold">{actionLabel}</span>
@@ -71,12 +73,12 @@
 		<div class="text-xs opacity-80 whitespace-pre-wrap">{action.reason}</div>
 		{#if action.confidence !== null && action.confidence !== undefined}
 			<div class="text-xs opacity-60">
-				Confidence: {Math.round(action.confidence * 100)}%
+				{m.cp_confidence({ pct: Math.round(action.confidence * 100) })}
 			</div>
 		{/if}
 		{#if action.evidence && action.evidence.length > 0}
 			<div class="text-xs opacity-70">
-				Evidence:
+				{m.cp_evidence()}
 				{#each action.evidence as ev, i}
 					<span class="font-mono">{ev.kind}:{ev.id.slice(0, 8)}</span>{#if i < action.evidence.length - 1},
 					{/if}
@@ -85,7 +87,7 @@
 		{/if}
 		{#if confirmed}
 			<div class="text-xs text-success-500">
-				Confirmed at {new Date(action.confirmed_at ?? '').toLocaleString()}
+				{m.cp_confirmed_at({ ts: new Date(action.confirmed_at ?? '').toLocaleString() })}
 			</div>
 		{:else}
 			<div class="flex gap-2 pt-1">
@@ -95,7 +97,7 @@
 					on:click={() => (dismissed = true)}
 					{disabled}
 				>
-					Dismiss
+					{m.cp_dismiss()}
 				</button>
 				<button
 					type="button"
@@ -103,7 +105,7 @@
 					on:click={handleConfirm}
 					disabled={disabled || !messageId || busy}
 				>
-					{busy ? 'Confirming…' : 'Confirm'}
+					{busy ? m.cp_confirming() : m.cp_confirm()}
 				</button>
 			</div>
 		{/if}

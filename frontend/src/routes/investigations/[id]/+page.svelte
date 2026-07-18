@@ -5,6 +5,8 @@
 	import { api, type Investigation, type InvestigationTimelineEvent } from '$lib/api/client';
 	import { addToast, isCustomerScope } from '$lib/stores';
 	import { formatStatus, formatPhase, formatSeverity, formatDecision, formatDuration, formatEventType } from '$lib/utils/formatters';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
 
 	let chatOpen = false;
@@ -31,62 +33,72 @@
 	function formatEventSummary(eventType: string, data: Record<string, unknown>): string {
 		switch (eventType) {
 			case 'investigation.created':
-				return `Investigation started: "${data.title || 'Untitled'}"`;
+				return m.inv_ev_created({ title: String(data.title || m.inv_ev_untitled()) });
 			case 'investigation.started':
-				return `Investigation began in ${formatPhase(data.phase as string) || 'Triage'} phase`;
+				return m.inv_ev_started({ phase: formatPhase(data.phase as string) || formatPhase('triage') });
 			case 'investigation.closed':
-				return `Investigation closed`;
+				return m.inv_ev_closed();
 			case 'investigation.paused':
-				return `Investigation paused`;
+				return m.inv_ev_paused();
 			case 'investigation.resumed':
-				return `Investigation resumed`;
+				return m.inv_ev_resumed();
 			case 'investigation.cancelled':
-				return `Investigation cancelled${data.reason ? `: ${data.reason}` : ''}`;
+				return data.reason
+					? m.inv_ev_cancelled_reason({ reason: String(data.reason) })
+					: m.inv_ev_cancelled();
 			case 'investigation.escalated':
-				return `Investigation escalated to incident response`;
+				return m.inv_ev_escalated();
 			case 'investigation.auto_closed':
-				return `Investigation auto-closed (no threats found)`;
+				return m.inv_ev_auto_closed();
 			case 'alert.added':
-				return `Alert added: ${data.alert_id || 'Unknown'}`;
+				return m.inv_ev_alert_added({ id: String(data.alert_id || m.common_unknown()) });
 			case 'alert.correlated':
-				return `Alert correlated: ${data.description || data.alert_id || 'Unknown alert'}`;
+				return m.inv_ev_alert_correlated({ desc: String(data.description || data.alert_id || m.inv_ev_unknown_alert()) });
 			case 'observable.extracted':
-				return `Found ${data.observable_type}: ${data.observable_value}`;
+				return m.inv_ev_observable({ type: String(data.observable_type), value: String(data.observable_value) });
 			case 'enrichment.requested':
-				return `Enrichment requested from ${data.enrichment_type || 'external source'}`;
+				return m.inv_ev_enrichment_requested({ source: String(data.enrichment_type || m.inv_ev_external_source()) });
 			case 'enrichment.completed': {
 				const result = data.result as Record<string, number> | undefined;
 				if (result && typeof result.malicious === 'number') {
-					return `${data.enrichment_type}: ${result.malicious} malicious, ${result.suspicious || 0} suspicious detections for ${data.observable_value}`;
+					return m.inv_ev_enrichment_result({
+						type: String(data.enrichment_type),
+						malicious: result.malicious,
+						suspicious: result.suspicious || 0,
+						value: String(data.observable_value)
+					});
 				}
-				return `Enrichment completed for ${data.observable_value}`;
+				return m.inv_ev_enrichment_completed({ value: String(data.observable_value) });
 			}
 			case 'enrichment.failed':
-				return `Enrichment failed for ${data.observable_value}: ${data.error || 'Unknown error'}`;
+				return m.inv_ev_enrichment_failed({ value: String(data.observable_value), error: String(data.error || m.inv_unknown_error()) });
 			case 'phase.changed':
-				return `Phase changed: ${formatPhase(data.old_phase as string) || '?'} → ${formatPhase(data.new_phase as string || data.phase as string) || '?'}`;
+				return m.inv_ev_phase_changed({
+					from: formatPhase(data.old_phase as string) || '?',
+					to: formatPhase(data.new_phase as string || data.phase as string) || '?'
+				});
 			case 'verdict.rendered':
 			case 'verdict.proposed':
-				return `Verdict: ${formatDecision(data.decision as string)} (${Math.round((data.confidence as number || 0) * 100)}% confidence)`;
+				return m.inv_ev_verdict({ decision: formatDecision(data.decision as string), pct: Math.round((data.confidence as number || 0) * 100) });
 			case 'human.review_requested':
 			case 'review.requested':
-				return `Human review requested: ${data.reason || 'Manual review required'}`;
+				return m.inv_ev_review_requested({ reason: String(data.reason || m.inv_ev_manual_review()) });
 			case 'human.decision_received':
-				return `Human decision: ${formatDecision(data.decision as string)}`;
+				return m.inv_ev_human_decision({ decision: formatDecision(data.decision as string) });
 			case 'thehive.case_created':
-				return `TheHive case created: ${data.case_id || 'Unknown'}`;
+				return m.inv_ev_thehive_case({ id: String(data.case_id || m.common_unknown()) });
 			case 'thehive.alert_promoted':
-				return `Alert promoted to TheHive case`;
+				return m.inv_ev_alert_promoted();
 			case 'misp.ioc_matched':
-				return `MISP IOC match found`;
+				return m.inv_ev_misp_ioc();
 			case 'misp.context_retrieved':
-				return `MISP context retrieved`;
+				return m.inv_ev_misp_context();
 			case 'analyzer.invoked':
-				return `Analyzer invoked: ${data.analyzer || 'Unknown'}`;
+				return m.inv_ev_analyzer_invoked({ name: String(data.analyzer || m.common_unknown()) });
 			case 'analyzer.completed':
-				return `Analyzer completed: ${data.analyzer || 'Unknown'}`;
+				return m.inv_ev_analyzer_completed({ name: String(data.analyzer || m.common_unknown()) });
 			case 'error.occurred':
-				return `Error: ${data.message || data.error || 'Unknown error'}`;
+				return m.inv_error({ error: String(data.message || data.error || m.inv_unknown_error()) });
 			default:
 				return formatEventType(eventType);
 		}
@@ -97,35 +109,35 @@
 
 		switch (eventType) {
 			case 'investigation.created':
-				if (data.alert_ids) details.push({ label: 'Alerts', value: `${(data.alert_ids as string[]).length} alerts` });
-				if (data.source_ip) details.push({ label: 'Source IP', value: String(data.source_ip) });
-				if (data.source_agent) details.push({ label: 'Agent', value: String(data.source_agent) });
-				if (data.max_severity) details.push({ label: 'Severity', value: String(data.max_severity).toUpperCase(), highlight: true });
+				if (data.alert_ids) details.push({ label: m.inv_col_alerts(), value: m.inv_alerts_count({ count: (data.alert_ids as string[]).length }) });
+				if (data.source_ip) details.push({ label: m.inv_detail_source_ip(), value: String(data.source_ip) });
+				if (data.source_agent) details.push({ label: m.inv_detail_agent(), value: String(data.source_agent) });
+				if (data.max_severity) details.push({ label: m.inv_col_severity(), value: String(data.max_severity).toUpperCase(), highlight: true });
 				break;
 			case 'alert.correlated':
-				if (data.rule_id) details.push({ label: 'Rule ID', value: String(data.rule_id) });
-				if (data.severity) details.push({ label: 'Severity', value: String(data.severity).toUpperCase(), highlight: true });
-				if (data.description) details.push({ label: 'Description', value: String(data.description) });
+				if (data.rule_id) details.push({ label: m.inv_detail_rule_id(), value: String(data.rule_id) });
+				if (data.severity) details.push({ label: m.inv_col_severity(), value: String(data.severity).toUpperCase(), highlight: true });
+				if (data.description) details.push({ label: m.inv_detail_description(), value: String(data.description) });
 				break;
 			case 'observable.extracted':
-				if (data.classification) details.push({ label: 'Classification', value: String(data.classification) });
+				if (data.classification) details.push({ label: m.inv_detail_classification(), value: String(data.classification) });
 				break;
 			case 'enrichment.completed': {
 				const result = data.result as Record<string, number> | undefined;
 				if (result) {
-					if (typeof result.malicious === 'number') details.push({ label: 'Malicious', value: String(result.malicious), highlight: result.malicious > 0 });
-					if (typeof result.suspicious === 'number') details.push({ label: 'Suspicious', value: String(result.suspicious) });
-					if (typeof result.harmless === 'number') details.push({ label: 'Harmless', value: String(result.harmless) });
+					if (typeof result.malicious === 'number') details.push({ label: m.inv_col_malicious(), value: String(result.malicious), highlight: result.malicious > 0 });
+					if (typeof result.suspicious === 'number') details.push({ label: m.inv_suspicious(), value: String(result.suspicious) });
+					if (typeof result.harmless === 'number') details.push({ label: m.inv_detail_harmless(), value: String(result.harmless) });
 				}
 				break;
 			}
 			case 'verdict.rendered':
 			case 'verdict.proposed':
-				if (data.assessment) details.push({ label: 'Assessment', value: String(data.assessment) });
-				if (data.recommendation) details.push({ label: 'Recommendation', value: String(data.recommendation) });
+				if (data.assessment) details.push({ label: m.inv_detail_assessment(), value: String(data.assessment) });
+				if (data.recommendation) details.push({ label: m.inv_detail_recommendation(), value: String(data.recommendation) });
 				if (data.evidence) {
 					const evidence = data.evidence as string[];
-					evidence.forEach((e, i) => details.push({ label: i === 0 ? 'Evidence' : '', value: e }));
+					evidence.forEach((e, i) => details.push({ label: i === 0 ? m.inv_detail_evidence() : '', value: e }));
 				}
 				break;
 		}
@@ -153,7 +165,7 @@
 		try {
 			await refreshInvestigation();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load investigation';
+			error = e instanceof Error ? e.message : m.inv_load_one_failed();
 		} finally {
 			loading = false;
 		}
@@ -181,7 +193,7 @@
 			showCancelModal = false;
 			cancelReason = '';
 		} catch (e) {
-			addToast({ type: 'error', message: e instanceof Error ? e.message : 'Failed to cancel' });
+			addToast({ type: 'error', message: e instanceof Error ? e.message : m.inv_cancel_failed() });
 		} finally {
 			actionLoading = false;
 		}
@@ -265,7 +277,7 @@
 </script>
 
 <svelte:head>
-	<title>{investigation?.title || 'Investigation'} - SocTalk</title>
+	<title>{investigation?.title || m.ttl_investigation()} - SocTalk</title>
 </svelte:head>
 
 {#if !loading && investigation}
@@ -274,12 +286,12 @@
 		type="button"
 		class="chat-launcher btn variant-filled-primary"
 		on:click={() => (chatOpen = !chatOpen)}
-		title="Ask the SOC AI about this investigation"
+		title={m.inv_ask_ai_title()}
 	>
 		<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
 		</svg>
-		{chatOpen ? 'Close chat' : 'Ask AI'}
+		{chatOpen ? m.inv_close_chat() : m.inv_ask_ai()}
 	</button>
 	{#if chatOpen}
 		<aside class="chat-dock">
@@ -294,21 +306,21 @@
 	</div>
 {:else if error}
 	<div class="alert variant-filled-error">
-		<span>Error: {error}</span>
+		<span>{m.inv_error({ error })}</span>
 	</div>
 {:else if investigation}
 	<!-- Header -->
 	<div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
 		<div>
 			<div class="flex items-center gap-2 mb-2">
-				<a href="/investigations" class="btn btn-sm variant-soft">
+				<a href={localizeHref('/investigations')} class="btn btn-sm variant-soft">
 					<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
 					</svg>
-					Back
+					{m.inv_back()}
 				</a>
 			</div>
-			<h1 class="h2">{investigation.title || 'Untitled Investigation'}</h1>
+			<h1 class="h2">{investigation.title || m.inv_untitled()}</h1>
 			<div class="flex flex-wrap items-center gap-2 mt-2">
 				<span class="badge {getStatusBadge(investigation.status)}">{formatStatus(investigation.status)}</span>
 				<span class="badge variant-soft">{formatPhase(investigation.phase)}</span>
@@ -339,7 +351,7 @@
 					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
 					</svg>
-					Cancel
+					{m.common_cancel()}
 				</button>
 			{/if}
 		</div>
@@ -348,27 +360,27 @@
 	<!-- Info Cards -->
 	<div class="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-6">
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Alerts</h4>
+			<h4 class="text-xs opacity-60">{m.inv_col_alerts()}</h4>
 			<p class="text-2xl font-bold">{investigation.alert_count}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Observables</h4>
+			<h4 class="text-xs opacity-60">{m.inv_observables()}</h4>
 			<p class="text-2xl font-bold">{investigation.observable_count}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60 text-error-500">Malicious</h4>
+			<h4 class="text-xs opacity-60 text-error-500">{m.inv_col_malicious()}</h4>
 			<p class="text-2xl font-bold text-error-500">{investigation.malicious_count}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60 text-warning-500">Suspicious</h4>
+			<h4 class="text-xs opacity-60 text-warning-500">{m.inv_suspicious()}</h4>
 			<p class="text-2xl font-bold text-warning-500">{investigation.suspicious_count}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Time to Triage</h4>
+			<h4 class="text-xs opacity-60">{m.inv_time_to_triage()}</h4>
 			<p class="text-2xl font-bold">{formatDuration(investigation.time_to_triage_seconds)}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60">Time to Verdict</h4>
+			<h4 class="text-xs opacity-60">{m.inv_time_to_verdict()}</h4>
 			<p class="text-2xl font-bold">{formatDuration(investigation.time_to_verdict_seconds)}</p>
 		</div>
 	</div>
@@ -379,35 +391,35 @@
 		<div class="space-y-6">
 			<!-- Investigation Details -->
 			<div class="card p-4">
-				<h3 class="h4 mb-4">Details</h3>
+				<h3 class="h4 mb-4">{m.inv_details()}</h3>
 				<dl class="space-y-2">
 					<div class="flex justify-between">
-						<dt class="opacity-60">ID</dt>
+						<dt class="opacity-60">{m.inv_label_id()}</dt>
 						<dd class="font-mono text-xs">{investigation.id.slice(0, 8)}...</dd>
 					</div>
 					<div class="flex justify-between">
-						<dt class="opacity-60">Created</dt>
+						<dt class="opacity-60">{m.inv_col_created()}</dt>
 						<dd>{new Date(investigation.created_at).toLocaleString()}</dd>
 					</div>
 					<div class="flex justify-between">
-						<dt class="opacity-60">Updated</dt>
+						<dt class="opacity-60">{m.inv_label_updated()}</dt>
 						<dd>{new Date(investigation.updated_at).toLocaleString()}</dd>
 					</div>
 					{#if investigation.closed_at}
 						<div class="flex justify-between">
-							<dt class="opacity-60">Closed</dt>
+							<dt class="opacity-60">{m.inv_label_closed()}</dt>
 							<dd>{new Date(investigation.closed_at).toLocaleString()}</dd>
 						</div>
 					{/if}
 					{#if investigation.thehive_case_id}
 						<div class="flex justify-between">
-							<dt class="opacity-60">TheHive Case</dt>
+							<dt class="opacity-60">{m.inv_label_thehive_case()}</dt>
 							<dd class="font-mono text-sm">{investigation.thehive_case_id}</dd>
 						</div>
 					{/if}
 					{#if investigation.threat_actor}
 						<div class="flex justify-between">
-							<dt class="opacity-60">Threat Actor</dt>
+							<dt class="opacity-60">{m.inv_label_threat_actor()}</dt>
 							<dd class="badge variant-filled-error">{investigation.threat_actor}</dd>
 						</div>
 					{/if}
@@ -417,10 +429,10 @@
 			<!-- Verdict -->
 			{#if investigation.verdict_decision}
 				<div class="card p-4">
-					<h3 class="h4 mb-4">Verdict</h3>
+					<h3 class="h4 mb-4">{m.inv_col_verdict()}</h3>
 					<div class="space-y-3">
 						<div class="flex items-center justify-between">
-							<span class="opacity-60">Decision</span>
+							<span class="opacity-60">{m.inv_label_decision()}</span>
 							<span class="badge {getVerdictBadge(investigation.verdict_decision)} text-lg px-3 py-1">
 								{formatDecision(investigation.verdict_decision)}
 							</span>
@@ -428,7 +440,7 @@
 						{#if investigation.verdict_confidence}
 							<div>
 								<div class="flex justify-between text-sm mb-1">
-									<span class="opacity-60">Confidence</span>
+									<span class="opacity-60">{m.inv_label_confidence()}</span>
 									<span>{(investigation.verdict_confidence * 100).toFixed(0)}%</span>
 								</div>
 								<div class="w-full h-2 bg-surface-500/30 rounded-full overflow-hidden">
@@ -443,7 +455,7 @@
 						{/if}
 						{#if investigation.verdict_reasoning}
 							<div>
-								<span class="opacity-60 text-sm">Reasoning</span>
+								<span class="opacity-60 text-sm">{m.inv_label_reasoning()}</span>
 								<p class="mt-1 text-sm bg-surface-500/20 rounded p-2">
 									{investigation.verdict_reasoning}
 								</p>
@@ -457,11 +469,11 @@
 			{#if investigation.tokens_used !== null && investigation.tokens_used !== undefined}
 				{#if !$isCustomerScope}
 					<div class="card p-4">
-						<h3 class="h4 mb-4">Agent Run</h3>
+						<h3 class="h4 mb-4">{m.inv_agent_run()}</h3>
 						<div class="space-y-3">
 							<div>
 								<div class="flex justify-between text-sm mb-1">
-									<span class="opacity-60">Token Spend</span>
+									<span class="opacity-60">{m.inv_token_spend()}</span>
 									<span class="font-mono">
 										{investigation.tokens_used?.toLocaleString() ?? 0}
 										{#if investigation.tokens_budget}
@@ -482,7 +494,7 @@
 							</div>
 							{#if investigation.disposition}
 								<div class="flex items-center justify-between">
-									<span class="opacity-60 text-sm">Disposition</span>
+									<span class="opacity-60 text-sm">{m.inv_label_disposition()}</span>
 									<span class="badge {investigation.disposition === 'escalate' ? 'variant-filled-error' : investigation.disposition === 'close_fp' ? 'variant-filled-success' : investigation.disposition === 'halted_budget' ? 'variant-filled-warning' : 'variant-filled-surface'}">
 										{investigation.disposition.replace('_', ' ')}
 									</span>
@@ -495,30 +507,30 @@
 
 			<!-- Observable Stats -->
 			<div class="card p-4">
-				<h3 class="h4 mb-4">Observable Summary</h3>
+				<h3 class="h4 mb-4">{m.inv_observable_summary()}</h3>
 				<div class="space-y-2">
 					<div class="flex items-center justify-between">
-						<span>Total</span>
+						<span>{m.inv_total()}</span>
 						<span class="font-mono">{investigation.observable_count}</span>
 					</div>
 					<div class="flex items-center justify-between">
 						<span class="flex items-center gap-2">
 							<span class="w-2 h-2 rounded-full bg-error-500"></span>
-							Malicious
+							{m.inv_col_malicious()}
 						</span>
 						<span class="font-mono text-error-500">{investigation.malicious_count}</span>
 					</div>
 					<div class="flex items-center justify-between">
 						<span class="flex items-center gap-2">
 							<span class="w-2 h-2 rounded-full bg-warning-500"></span>
-							Suspicious
+							{m.inv_suspicious()}
 						</span>
 						<span class="font-mono text-warning-500">{investigation.suspicious_count}</span>
 					</div>
 					<div class="flex items-center justify-between">
 						<span class="flex items-center gap-2">
 							<span class="w-2 h-2 rounded-full bg-success-500"></span>
-							Clean
+							{m.inv_clean()}
 						</span>
 						<span class="font-mono text-success-500">{investigation.clean_count}</span>
 					</div>
@@ -530,12 +542,12 @@
 		<div class="lg:col-span-2">
 			<div class="card p-4">
 					<div class="flex items-center justify-between mb-4">
-						<h3 class="h4">Event Timeline</h3>
+						<h3 class="h4">{m.inv_event_timeline()}</h3>
 						<button class="btn btn-sm variant-soft" on:click={loadEvents} disabled={eventsLoading}>
 							{#if eventsLoading}
 								<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 							{/if}
-							Refresh
+							{m.inv_refresh()}
 						</button>
 					</div>
 
@@ -544,7 +556,7 @@
 						<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
 					</div>
 				{:else if events.length === 0}
-					<p class="opacity-60 text-center py-8">No events recorded</p>
+					<p class="opacity-60 text-center py-8">{m.inv_no_events()}</p>
 				{:else}
 					<div class="space-y-4 max-h-[600px] overflow-y-auto pr-2">
 						{#each events as event, i}
@@ -599,7 +611,7 @@
 										>
 											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
 										</svg>
-										{expandedEvents.has(event.id) ? 'Hide' : 'Show'} raw data
+										{expandedEvents.has(event.id) ? m.inv_hide_raw() : m.inv_show_raw()}
 									</button>
 									{#if expandedEvents.has(event.id)}
 										<div class="mt-2 text-sm bg-surface-500/10 rounded p-3 border border-surface-500/20">
@@ -620,15 +632,15 @@
 {#if showCancelModal}
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
 		<div class="card p-6 w-full max-w-md m-4">
-			<h3 class="h3 mb-4">Cancel Investigation</h3>
-			<p class="mb-4 opacity-80">Are you sure you want to cancel this investigation?</p>
+			<h3 class="h3 mb-4">{m.inv_cancel_investigation()}</h3>
+			<p class="mb-4 opacity-80">{m.inv_cancel_confirm()}</p>
 			<label class="label mb-4">
-				<span>Reason (optional)</span>
+				<span>{m.inv_reason_optional()}</span>
 				<textarea
 					class="textarea"
 					rows="3"
 					bind:value={cancelReason}
-					placeholder="Provide a reason for cancellation..."
+					placeholder={m.inv_reason_placeholder()}
 				></textarea>
 			</label>
 			<div class="flex justify-end gap-2">
@@ -636,7 +648,7 @@
 					class="btn variant-soft"
 					on:click={() => { showCancelModal = false; cancelReason = ''; }}
 				>
-					Keep Investigation
+					{m.inv_keep_investigation()}
 				</button>
 					<button
 						class="btn variant-filled-error"
@@ -646,7 +658,7 @@
 						{#if actionLoading}
 							<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 						{/if}
-						Cancel Investigation
+						{m.inv_cancel_investigation()}
 					</button>
 			</div>
 		</div>

@@ -3,6 +3,8 @@
 	import { api, type TenantLlmConfig } from '$lib/api/client';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
 	import { goto } from '$app/navigation';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref, localizedGoto } from '$lib/i18n';
 
 	// Tenant-side BYOK page. Tenant_admins paste their own LLM API
 	// key here so the runs-worker (which executes investigation
@@ -28,7 +30,7 @@
 		try {
 			cfg = await api.tenantLlm.get();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load LLM config';
+			error = e instanceof Error ? e.message : m.llm_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -40,12 +42,12 @@
 	// this page and can paste a key on the tenant's behalf — that's
 	// the legitimate use case for the wholesale model.
 	$: if ($authSession.user && $isMsspScope) {
-		goto('/tenants');
+		localizedGoto('/tenants');
 	}
 
 	async function setKey() {
 		if (!pasted.trim()) {
-			error = 'Paste a non-empty API key';
+			error = m.llm_key_empty();
 			return;
 		}
 		saving = true;
@@ -55,12 +57,11 @@
 			pasted = '';
 			addToast({
 				type: 'success',
-				title: 'LLM key updated',
-				message:
-					'Your investigation runs will use this key starting with the next case.',
+				title: m.llm_key_updated_title(),
+				message: m.llm_key_updated_msg(),
 			});
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to update LLM key';
+			error = e instanceof Error ? e.message : m.llm_key_update_failed();
 		} finally {
 			saving = false;
 		}
@@ -73,12 +74,11 @@
 			cfg = await api.tenantLlm.clearKey();
 			addToast({
 				type: 'success',
-				title: 'Reverted to MSSP shared key',
-				message:
-					'Your runs will resume on your service provider’s shared LLM credential.',
+				title: m.llm_reverted_title(),
+				message: m.llm_reverted_msg(),
 			});
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to clear LLM key';
+			error = e instanceof Error ? e.message : m.llm_key_clear_failed();
 		} finally {
 			clearing = false;
 		}
@@ -86,84 +86,69 @@
 </script>
 
 <svelte:head>
-	<title>LLM Settings — SocTalk</title>
+	<title>{m.llm_page_title()} — SocTalk</title>
 </svelte:head>
 
 <div class="space-y-6 max-w-3xl">
 	<header class="flex items-baseline justify-between">
-		<h1 class="h2">LLM Provider</h1>
-		<a href="/settings" class="anchor text-sm">← All settings</a>
+		<h1 class="h2">{m.llm_heading()}</h1>
+		<a href={localizeHref('/settings')} class="anchor text-sm">{m.llm_all_settings()}</a>
 	</header>
 
-	<p class="opacity-80 text-sm">
-		Investigation runs use this credential to call your LLM provider.
-		By default your service provider funds these calls on a shared
-		install-wide key. Paste your own key below to bring your own
-		account — your runs will be billed to <strong>you</strong>, not your
-		MSSP.
-	</p>
+	<p class="opacity-80 text-sm">{m.llm_intro()}</p>
 
 	{#if loading}
 		<div class="card p-6 flex items-center gap-3">
 			<span
 				class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"
 			></span>
-			<span>Loading…</span>
+			<span>{m.common_loading()}</span>
 		</div>
 	{:else if !cfg}
 		<div class="card p-6 text-error-500">
-			{error ?? 'Failed to load configuration.'}
+			{error ?? m.llm_load_failed_cfg()}
 		</div>
 	{:else}
 		<div class="card p-6 space-y-5">
 			<div>
-				<h3 class="h4">Provider</h3>
+				<h3 class="h4">{m.llm_provider()}</h3>
 				<dl class="grid grid-cols-3 gap-2 text-sm mt-2">
-					<dt class="opacity-60">Vendor</dt>
+					<dt class="opacity-60">{m.llm_vendor()}</dt>
 					<dd class="col-span-2">
 						<code class="text-xs">{cfg.provider}</code>
 					</dd>
-					<dt class="opacity-60">Endpoint</dt>
+					<dt class="opacity-60">{m.llm_endpoint()}</dt>
 					<dd class="col-span-2">
 						<code class="text-xs">{cfg.base_url}</code>
 					</dd>
-					<dt class="opacity-60">Model</dt>
+					<dt class="opacity-60">{m.llm_model()}</dt>
 					<dd class="col-span-2">
 						<code class="text-xs">{cfg.model}</code>
 					</dd>
 				</dl>
-				<p class="text-xs opacity-60 mt-2">
-					These are configured by your service provider and apply to all
-					tenants on this install. Contact your MSSP if you need a
-					different provider.
-				</p>
+				<p class="text-xs opacity-60 mt-2">{m.llm_provider_hint()}</p>
 			</div>
 
 			<hr class="opacity-30" />
 
 			<div>
-				<h3 class="h4">API key</h3>
+				<h3 class="h4">{m.llm_api_key()}</h3>
 				{#if cfg.has_api_key}
 					<div
 						class="mt-2 flex items-center gap-3 p-3 rounded
                           bg-success-500/10 border border-success-500/30"
 					>
-						<span class="badge variant-soft-success">BYOK active</span>
+						<span class="badge variant-soft-success">{m.llm_byok_active()}</span>
 						<code class="text-xs">{cfg.api_key_preview}</code>
-						<span class="text-xs opacity-70 ml-auto">
-							Investigation runs use your key.
-						</span>
+						<span class="text-xs opacity-70 ml-auto">{m.llm_runs_use_your_key()}</span>
 					</div>
 				{:else}
 					<div
 						class="mt-2 flex items-center gap-3 p-3 rounded
                           bg-warning-500/10 border border-warning-500/30"
 					>
-						<span class="badge variant-soft-warning">MSSP shared</span>
-						<span class="text-xs">
-							Your service provider's shared key is in use. Paste
-							your own below to switch.
-						</span>
+						<span class="badge variant-soft-warning">{m.llm_mssp_shared()}</span>
+						<span class="text-xs">{m.llm_shared_in_use()}</span>
 					</div>
 				{/if}
 
@@ -173,7 +158,7 @@
 				>
 					<label class="block">
 						<span class="text-sm opacity-80">
-							{cfg.has_api_key ? 'Replace key' : 'New API key'}
+							{cfg.has_api_key ? m.llm_replace_key() : m.llm_new_key()}
 						</span>
 						<input
 							type="password"
@@ -184,11 +169,7 @@
 							disabled={saving || clearing}
 						/>
 					</label>
-					<p class="text-xs opacity-60">
-						Stored encrypted at rest in your service provider's
-						control plane and mounted into your investigation
-						worker only. Never visible to other tenants.
-					</p>
+					<p class="text-xs opacity-60">{m.llm_storage_hint()}</p>
 					{#if error}
 						<p class="text-error-500 text-sm">{error}</p>
 					{/if}
@@ -198,7 +179,7 @@
 							class="btn variant-filled-primary"
 							disabled={saving || clearing || !pasted.trim()}
 						>
-							{saving ? 'Saving…' : cfg.has_api_key ? 'Replace key' : 'Save key'}
+							{saving ? m.common_saving() : cfg.has_api_key ? m.llm_replace_key() : m.llm_save_key()}
 						</button>
 						{#if cfg.has_api_key}
 							<button
@@ -206,9 +187,9 @@
 								class="btn variant-ghost-surface"
 								on:click={clearKey}
 								disabled={saving || clearing}
-								title="Stop using your own key; resume on the MSSP shared credential."
+								title={m.llm_revert_title_attr()}
 							>
-								{clearing ? 'Reverting…' : 'Revert to MSSP shared'}
+								{clearing ? m.llm_reverting() : m.llm_revert()}
 							</button>
 						{/if}
 					</div>

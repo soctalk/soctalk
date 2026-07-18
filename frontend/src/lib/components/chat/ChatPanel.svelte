@@ -11,6 +11,7 @@
     height           string         — CSS height (defaults to 100%)
 -->
 <script lang="ts">
+	import { m } from '$lib/paraglide/messages';
 	import { createEventDispatcher, onDestroy, onMount } from 'svelte';
 	import { createChatStore } from '$lib/stores/chat';
 	import Composer from './Composer.svelte';
@@ -72,7 +73,7 @@
 					d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
 				/>
 			</svg>
-			<span class="font-semibold">Ask AI</span>
+			<span class="font-semibold">{m.cp_ask_ai()}</span>
 			{#if $state.conversation?.investigation_id}
 				<span class="badge variant-soft-tertiary text-xs">
 					Case {$state.conversation.investigation_id.slice(0, 8)}
@@ -82,12 +83,12 @@
 					Focused on {$state.conversation.focused_tenant_slug}
 				</span>
 			{:else if $state.conversation?.scope === 'mssp_fleet'}
-				<span class="badge variant-soft-secondary text-xs">Fleet</span>
+				<span class="badge variant-soft-secondary text-xs">{m.cp_fleet()}</span>
 			{/if}
 		</div>
 		{#if $state.streaming}
 			<button class="btn btn-sm variant-soft-error" on:click={handleStop} type="button">
-				Stop
+				{m.cp_stop()}
 			</button>
 		{/if}
 	</header>

@@ -7,6 +7,7 @@
 		type AdapterStatus
 	} from '$lib/api/tenants';
 	import { addToast } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
 
 	// Profile-agnostic External SIEM panel for the tenant detail page. Shows the
 	// masked connection (GET .../external-siem), polls live adapter ingest status
@@ -67,7 +68,7 @@
 		try {
 			read = await tenantsApi.getExternalSiem(tenantId);
 		} catch (e) {
-			readError = e instanceof Error ? e.message : 'Failed to load external SIEM';
+			readError = e instanceof Error ? e.message : m.ten_siem_load_failed();
 		} finally {
 			loadingRead = false;
 		}
@@ -150,14 +151,14 @@
 			editing = false;
 			addToast({
 				type: 'success',
-				title: 'External SIEM',
-				message: 'Connection updated'
+				title: m.ten_siem_title(),
+				message: m.ten_siem_connection_updated()
 			});
 			void pollStatus(); // the adapter just rolled — refresh status
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'External SIEM',
+				title: m.ten_siem_title(),
 				message: e instanceof Error ? e.message : String(e)
 			});
 		} finally {
@@ -178,8 +179,8 @@
 		status === null
 			? '—'
 			: status.reachable === false
-				? `unreachable: ${status.error ?? 'unknown'}`
-				: (status.last_ingest_error ?? 'OK');
+				? m.ten_siem_unreachable_error({ error: status.error ?? m.ten_unknown() })
+				: (status.last_ingest_error ?? m.ten_ok());
 
 	onMount(() => {
 		void loadRead();
@@ -206,11 +207,11 @@
 			aria-expanded={!collapsed}
 		>
 			<span class="opacity-60">{collapsed ? '▸' : '▾'}</span>
-			External SIEM
+			{m.ten_siem_title()}
 		</button>
 		{#if !collapsed && !editing && !loadingRead}
 			<button class="btn btn-sm variant-soft-primary" data-testid="siem-edit" on:click={startEdit}>
-				Edit
+				{m.common_edit()}
 			</button>
 		{/if}
 	</div>
@@ -219,7 +220,7 @@
 		{#if loadingRead}
 			<div class="flex items-center gap-3 text-sm opacity-70">
 				<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"></span>
-				<span>Loading…</span>
+				<span>{m.common_loading()}</span>
 			</div>
 		{:else if readError}
 			<div class="text-error-500 text-sm" data-testid="siem-error">{readError}</div>
@@ -231,9 +232,9 @@
 				data-testid="siem-edit-form"
 			>
 				<div class="space-y-2">
-					<div class="text-sm font-medium">Wazuh Indexer (OpenSearch)</div>
+					<div class="text-sm font-medium">{m.ten_siem_indexer_section()}</div>
 					<label class="label">
-						<span class="text-sm">Indexer URL</span>
+						<span class="text-sm">{m.ten_siem_indexer_url()}</span>
 						<input
 							name="indexer_url"
 							class="input"
@@ -243,25 +244,25 @@
 					</label>
 					<div class="grid grid-cols-2 gap-3">
 						<label class="label">
-							<span class="text-sm">Indexer username</span>
+							<span class="text-sm">{m.ten_siem_indexer_username()}</span>
 							<input name="indexer_username" class="input" bind:value={formData.indexer_username} />
 						</label>
 						<label class="label">
-							<span class="text-sm">Indexer password</span>
+							<span class="text-sm">{m.ten_siem_indexer_password()}</span>
 							<input
 								name="indexer_password"
 								type="password"
 								class="input"
-								placeholder="leave blank to keep"
+								placeholder={m.ten_leave_blank_to_keep()}
 								bind:value={formData.indexer_password}
 							/>
 						</label>
 					</div>
 				</div>
 				<div class="space-y-2">
-					<div class="text-sm font-medium">Wazuh API (manager)</div>
+					<div class="text-sm font-medium">{m.ten_siem_api_section()}</div>
 					<label class="label">
-						<span class="text-sm">API URL</span>
+						<span class="text-sm">{m.ten_siem_api_url()}</span>
 						<input
 							name="api_url"
 							class="input"
@@ -271,27 +272,27 @@
 					</label>
 					<div class="grid grid-cols-2 gap-3">
 						<label class="label">
-							<span class="text-sm">API username</span>
+							<span class="text-sm">{m.ten_siem_api_username()}</span>
 							<input name="api_username" class="input" bind:value={formData.api_username} />
 						</label>
 						<label class="label">
-							<span class="text-sm">API password</span>
+							<span class="text-sm">{m.ten_siem_api_password()}</span>
 							<input
 								name="api_password"
 								type="password"
 								class="input"
-								placeholder="leave blank to keep"
+								placeholder={m.ten_leave_blank_to_keep()}
 								bind:value={formData.api_password}
 							/>
 						</label>
 					</div>
 					<label class="label">
-						<span class="text-sm">API token (optional)</span>
+						<span class="text-sm">{m.ten_siem_api_token_optional()}</span>
 						<input
 							name="api_token"
 							type="password"
 							class="input"
-							placeholder="leave blank to keep"
+							placeholder={m.ten_leave_blank_to_keep()}
 							bind:value={formData.api_token}
 						/>
 					</label>
@@ -303,7 +304,7 @@
 						class="checkbox"
 						bind:checked={formData.verify_ssl}
 					/>
-					<span class="text-sm">Verify TLS certificates (uncheck for self-signed)</span>
+					<span class="text-sm">{m.ten_siem_verify_tls_label()}</span>
 				</label>
 				<div class="flex gap-2">
 					<button
@@ -315,7 +316,7 @@
 						{#if saving}
 							<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 						{/if}
-						Save
+						{m.common_save()}
 					</button>
 					<button
 						type="button"
@@ -324,7 +325,7 @@
 						on:click={cancelEdit}
 						disabled={saving}
 					>
-						Cancel
+						{m.common_cancel()}
 					</button>
 				</div>
 			</form>
@@ -332,39 +333,39 @@
 			<!-- Read view -->
 			<dl class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">Indexer URL</dt>
+					<dt class="opacity-60">{m.ten_siem_indexer_url()}</dt>
 					<dd class="font-mono text-xs text-right break-all" data-testid="siem-indexer-url">
 						{read.indexer_url ?? '—'}
 					</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">Indexer username</dt>
+					<dt class="opacity-60">{m.ten_siem_indexer_username()}</dt>
 					<dd data-testid="siem-indexer-username">{read.indexer_username ?? '—'}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">API URL</dt>
+					<dt class="opacity-60">{m.ten_siem_api_url()}</dt>
 					<dd class="font-mono text-xs text-right break-all" data-testid="siem-api-url">
 						{read.api_url ?? '—'}
 					</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">API username</dt>
+					<dt class="opacity-60">{m.ten_siem_api_username()}</dt>
 					<dd data-testid="siem-api-username">{read.api_username ?? '—'}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">Verify TLS</dt>
+					<dt class="opacity-60">{m.ten_siem_verify_tls()}</dt>
 					<dd data-testid="siem-verify-ssl">{read.verify_ssl ? '✔' : '✘'}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">Indexer password</dt>
+					<dt class="opacity-60">{m.ten_siem_indexer_password()}</dt>
 					<dd data-testid="siem-has-indexer-password">{read.has_indexer_password ? '✔' : '✘'}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">API password</dt>
+					<dt class="opacity-60">{m.ten_siem_api_password()}</dt>
 					<dd data-testid="siem-has-api-password">{read.has_api_password ? '✔' : '✘'}</dd>
 				</div>
 				<div class="flex justify-between gap-3">
-					<dt class="opacity-60">API token</dt>
+					<dt class="opacity-60">{m.ten_siem_api_token()}</dt>
 					<dd data-testid="siem-has-api-token">{read.has_api_token ? '✔' : '✘'}</dd>
 				</div>
 			</dl>
@@ -372,7 +373,7 @@
 			<!-- Live adapter ingest status (polled). -->
 			<div class="mt-4 pt-4 border-t border-surface-500/20">
 				<div class="flex items-center justify-between mb-2">
-					<h4 class="font-medium text-sm">Adapter ingest status</h4>
+					<h4 class="font-medium text-sm">{m.ten_siem_adapter_status()}</h4>
 					<span
 						class="badge {reachable === false
 							? 'variant-filled-error'
@@ -381,24 +382,24 @@
 								: 'variant-filled-surface'}"
 						data-testid="adapter-reachable"
 					>
-						{reachable === null ? 'polling…' : reachable ? 'reachable' : 'unreachable'}
+						{reachable === null ? m.ten_siem_polling() : reachable ? m.ten_siem_reachable() : m.ten_siem_unreachable()}
 					</span>
 				</div>
 				<dl class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-2 text-sm">
 					<div class="flex justify-between gap-3">
-						<dt class="opacity-60">Last alert</dt>
+						<dt class="opacity-60">{m.ten_siem_last_alert()}</dt>
 						<dd class="text-right" data-testid="adapter-last-alert-ts">
 							{status && status.reachable !== false ? fmtTs(status.last_alert_ts) : '—'}
 						</dd>
 					</div>
 					<div class="flex justify-between gap-3">
-						<dt class="opacity-60">Alerts forwarded</dt>
+						<dt class="opacity-60">{m.ten_siem_alerts_forwarded()}</dt>
 						<dd data-testid="adapter-alerts-forwarded">
 							{status && status.reachable !== false ? (status.alerts_forwarded ?? 0) : '—'}
 						</dd>
 					</div>
 					<div class="flex justify-between gap-3">
-						<dt class="opacity-60">Last ingest error</dt>
+						<dt class="opacity-60">{m.ten_siem_last_ingest_error()}</dt>
 						<dd class="text-right break-all" data-testid="adapter-last-ingest-error">{ingestText}</dd>
 					</div>
 				</dl>

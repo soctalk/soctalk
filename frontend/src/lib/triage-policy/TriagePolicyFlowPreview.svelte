@@ -17,6 +17,7 @@
 	import '@xyflow/svelte/dist/style.css';
 	import dagre from '@dagrejs/dagre';
 	import FlowNode from './FlowNode.svelte';
+	import { m } from '$lib/paraglide/messages';
 	import { conditionToSentence, type TriagePolicyDef } from './schema';
 
 	export let definition: TriagePolicyDef;
@@ -37,20 +38,31 @@
 	let layoutKey = '';
 
 	function matchSummary(def: TriagePolicyDef): string {
-		const m = def.applies_to ?? {};
+		const applies = def.applies_to ?? {};
 		const parts: string[] = [];
-		if (m.rule_groups?.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
-		if (m.rule_ids?.length) parts.push(`rules: ${m.rule_ids.join(', ')}`);
-		if (m.authorization_tracks?.length) parts.push(`authz track: ${m.authorization_tracks.join(', ')}`);
-		return parts.join('\n') || 'no matchers yet — matches nothing';
+		if (applies.rule_groups?.length) parts.push(m.tp_match_groups({ v: applies.rule_groups.join(', ') }));
+		if (applies.rule_ids?.length) parts.push(m.tp_match_rules({ v: applies.rule_ids.join(', ') }));
+		if (applies.authorization_tracks?.length)
+			parts.push(m.tp_match_authz_track({ v: applies.authorization_tracks.join(', ') }));
+		return parts.join('\n') || m.tp_match_none();
 	}
 
-	const OUTCOME_META: Record<string, { title: string }> = {
-		escalate: { title: 'Escalate' },
-		needs_more_info: { title: 'Needs more info' },
-		human_review: { title: 'Human review' },
-		commit: { title: 'Decision commits' }
-	};
+	function outcomeTitle(accent: string): string {
+		switch (accent) {
+			case 'escalate':
+				return m.tp_flow_outcome_escalate();
+			case 'needs_more_info':
+				return m.tp_flow_outcome_needs_more_info();
+			case 'human_review':
+				return m.tp_flow_outcome_human_review();
+			case 'commit':
+				return m.tp_flow_outcome_commit();
+			default:
+				return m.tp_flow_invalid_target({
+					target: accent || m.tp_flow_empty_target()
+				});
+		}
+	}
 
 	// ------------------------------------------------------------ size model
 	// dagre needs node dimensions up front; these mirror FlowNode's rendering
@@ -125,7 +137,7 @@
 					position: { x: 0, y: 0 },
 					// A mid-edit JSON `to` can be any string — never crash the projection.
 					data: {
-						title: OUTCOME_META[accent]?.title ?? `invalid target: ${accent || '(empty)'}`,
+						title: outcomeTitle(accent),
 						kind: 'outcome',
 						accent
 					},
@@ -150,10 +162,10 @@
 
 		if (dense) {
 			// the intake chain never varies per-rule — collapse it to one node
-			chainNode('alert', { title: 'Intake → LLM verdict draft', kind: 'verdict' });
+			chainNode('alert', { title: m.tp_flow_dense_intake(), kind: 'verdict' });
 		} else {
 			chainNode('alert', {
-				title: 'Alert matches policy',
+				title: m.tp_flow_alert_matches_policy(),
 				subtitle: matchSummary(def),
 				kind: 'alert'
 			});
@@ -161,56 +173,63 @@
 			const legal = def.legal_actions ?? {};
 			if (steps.length || legal.triage?.length) {
 				const lines: string[] = [];
-				if (steps.length) lines.push(`must run first: ${steps.join(', ')}`);
-				if (legal.triage?.length) lines.push(`allowed actions: ${legal.triage.join(', ')}`);
-				chainNode('triage', { title: 'Triage phase', subtitle: lines.join('\n'), kind: 'phase' });
+				if (steps.length) lines.push(m.tp_flow_must_run_first({ steps: steps.join(', ') }));
+				if (legal.triage?.length)
+					lines.push(m.tp_flow_allowed_actions({ actions: legal.triage.join(', ') }));
+				chainNode('triage', { title: m.tp_flow_triage_phase(), subtitle: lines.join('\n'), kind: 'phase' });
 			}
 			if (legal.decide?.length) {
 				chainNode('decide', {
-					title: 'Decide phase',
-					subtitle: `allowed actions: ${legal.decide.join(', ')}`,
+					title: m.tp_flow_decide_phase(),
+					subtitle: m.tp_flow_allowed_actions({ actions: legal.decide.join(', ') }),
 					kind: 'phase'
 				});
 			}
 			chainNode('verdict', {
-				title: 'LLM drafts a verdict',
-				subtitle: 'close · needs_more_info · escalate\n(proposes — the guard disposes)',
+				title: m.tp_flow_llm_drafts_verdict(),
+				subtitle: m.tp_flow_llm_drafts_verdict_subtitle(),
 				kind: 'verdict'
 			});
 		}
 
 		chainNode('floor', {
-			title: 'Safety floor — always on',
-			subtitle: 'IOC present or contradicted authorization\ncaps any close at escalate (not editable)',
+			title: m.tp_flow_safety_floor_title(),
+			subtitle: m.tp_flow_safety_floor_subtitle(),
 			kind: 'floor',
 			hasFires: true
 		});
-		fires('floor', 'escalate', 'fires');
+		fires('floor', 'escalate', m.tp_flow_fires());
 
 		(def.guardrails ?? []).forEach((g, i) => {
 			chainNode(`guardrail-${i}`, {
-				title: `Guardrail ${i + 1} — ${g.effect}`,
-				subtitle: `when ${conditionToSentence(g.when)}`,
+				title: m.tp_flow_guardrail_title({ n: i + 1, effect: g.effect }),
+				subtitle: m.tp_flow_when({ condition: conditionToSentence(g.when) }),
 				kind: 'guardrail',
 				hasFires: true
 			});
-			fires(`guardrail-${i}`, g.to, g.effect === 'interrupt' ? 'interrupt' : `raise to ${g.to}`);
+			fires(
+				`guardrail-${i}`,
+				g.to,
+				g.effect === 'interrupt'
+					? m.tp_flow_interrupt()
+					: m.tp_flow_raise_to({ target: g.to })
+			);
 		});
 
 		const signoff = def.close_signoff_data_classes ?? [];
 		if (signoff.length) {
 			chainNode('signoff', {
-				title: 'Close sign-off',
-				subtitle: `a close on a ${signoff.join('/')} asset\nwaits for a human`,
+				title: m.tp_flow_close_signoff_title(),
+				subtitle: m.tp_flow_close_signoff_subtitle({ classes: signoff.join('/') }),
 				kind: 'signoff',
 				hasFires: true
 			});
-			fires('signoff', 'human_review', 'interrupt');
+			fires('signoff', 'human_review', m.tp_flow_interrupt());
 		}
 
 		chainNode('commit', {
-			title: 'Decision commits as drafted',
-			subtitle: 'no guardrail fired',
+			title: m.tp_flow_commit_title(),
+			subtitle: m.tp_flow_no_guardrail_fired(),
 			kind: 'terminal'
 		});
 

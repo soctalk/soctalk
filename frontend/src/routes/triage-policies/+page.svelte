@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TriagePolicy, type AuthoredTriagePolicy } from '$lib/api/client';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 	import { currentTenantId, canManageTriagePolicies } from '$lib/stores';
 
 	let policies: TriagePolicy[] = [];
@@ -28,7 +30,7 @@
 		try {
 			authored = await api.triagePolicies.listAuthored(tid);
 		} catch (e) {
-			authoredError = e instanceof Error ? e.message : 'Failed to load authored triage policies';
+			authoredError = e instanceof Error ? e.message : m.tp_load_authored_failed();
 		} finally {
 			authoredLoading = false;
 		}
@@ -60,7 +62,7 @@
 		try {
 			def = JSON.parse(editorText);
 		} catch {
-			editorError = 'Invalid JSON.';
+			editorError = m.tp_invalid_json();
 			return;
 		}
 		editorSaving = true;
@@ -71,20 +73,20 @@
 			editorOpen = false;
 			await loadAuthored(tenantId);
 		} catch (e) {
-			editorError = e instanceof Error ? e.message : 'Save failed.';
+			editorError = e instanceof Error ? e.message : m.tp_save_failed();
 		} finally {
 			editorSaving = false;
 		}
 	}
 
 	async function retire(pid: string) {
-		if (!tenantId || !confirm(`Retire triage policy "${pid}"? This removes it from the tenant.`))
+		if (!tenantId || !confirm(m.tp_confirm_delete({ id: pid })))
 			return;
 		try {
 			await api.triagePolicies.retireAuthored(tenantId, pid);
 			await loadAuthored(tenantId);
 		} catch (e) {
-			authoredError = e instanceof Error ? e.message : 'Retire failed.';
+			authoredError = e instanceof Error ? e.message : m.tp_delete_failed();
 		}
 	}
 
@@ -100,7 +102,7 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		} catch (e) {
-			authoredError = e instanceof Error ? e.message : 'Export failed.';
+			authoredError = e instanceof Error ? e.message : m.tp_export_failed();
 		}
 	}
 
@@ -113,11 +115,11 @@
 			if (active) await api.triagePolicies.activateAuthored(tenantId, pid);
 			else await api.triagePolicies.deactivateAuthored(tenantId, pid);
 			rolloutNote = active
-				? `Activating "${pid}" — a worker rollout was queued; it governs once the reconcile completes.`
-				: `Deactivating "${pid}" — a worker rollout was queued.`;
+				? m.tp_rollout_activating({ id: pid })
+				: m.tp_rollout_deactivating({ id: pid });
 			await loadAuthored(tenantId);
 		} catch (e) {
-			authoredError = e instanceof Error ? e.message : 'Activation change failed.';
+			authoredError = e instanceof Error ? e.message : m.tp_activation_change_failed();
 		}
 	}
 
@@ -137,7 +139,7 @@
 		try {
 			policies = await api.triagePolicies.list();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load triage policies';
+			error = e instanceof Error ? e.message : m.tp_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -158,11 +160,12 @@
 
 	function matchSummary(pb: TriagePolicy): string {
 		const parts: string[] = [];
-		const m = pb.applies_to;
-		if (m.rule_groups.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
-		if (m.rule_ids.length) parts.push(`rules: ${m.rule_ids.join(', ')}`);
-		if (m.authorization_tracks.length) parts.push(`authz: ${m.authorization_tracks.join(', ')}`);
-		return parts.join('  ·  ') || '—';
+		const applies = pb.applies_to;
+		if (applies.rule_groups.length) parts.push(m.tp_match_groups({ v: applies.rule_groups.join(', ') }));
+		if (applies.rule_ids.length) parts.push(m.tp_match_rules({ v: applies.rule_ids.join(', ') }));
+		if (applies.authorization_tracks.length)
+			parts.push(m.tp_match_authz({ v: applies.authorization_tracks.join(', ') }));
+		return parts.join(m.tp_match_separator()) || m.tp_empty_dash();
 	}
 
 	$: activeCount = policies.filter((p) => p.status === 'active').length;
@@ -170,24 +173,22 @@
 </script>
 
 <svelte:head>
-	<title>Triage Policies - SocTalk</title>
+	<title>{m.tp_title()} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-2">
-	<h1 class="h2">Triage Policies</h1>
+	<h1 class="h2">{m.tp_title()}</h1>
 	<button class="btn variant-soft btn-sm" on:click={loadPolicies} disabled={loading}>
 		{#if loading}
 			<span
 				class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"
 			></span>
 		{/if}
-		Refresh
+		{m.tp_refresh()}
 	</button>
 </div>
 <p class="opacity-60 text-sm mb-6">
-	Deterministic guardrails over the AI triage loop — the LLM proposes, a triage policy disposes.
-	Shows the compiled-in (built-in) triage policies that govern triage; these are vetted code and
-	read-only here.
+	{m.tp_intro()}
 </p>
 
 {#if loading}
@@ -195,21 +196,21 @@
 		<div class="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-500"></div>
 	</div>
 {:else if error}
-	<div class="alert variant-filled-error"><span>Error: {error}</span></div>
+	<div class="alert variant-filled-error"><span>{m.tp_error_prefix({ error })}</span></div>
 {:else if policies.length === 0}
-	<div class="card p-8 text-center opacity-60">No triage policies configured.</div>
+	<div class="card p-8 text-center opacity-60">{m.tp_no_policies_configured()}</div>
 {:else}
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60 uppercase tracking-wide">Total</h4>
+			<h4 class="text-xs opacity-60 uppercase tracking-wide">{m.tp_total()}</h4>
 			<p class="text-2xl font-bold">{policies.length}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60 uppercase tracking-wide">Active</h4>
+			<h4 class="text-xs opacity-60 uppercase tracking-wide">{m.tp_active()}</h4>
 			<p class="text-2xl font-bold text-success-500">{activeCount}</p>
 		</div>
 		<div class="card p-3">
-			<h4 class="text-xs opacity-60 uppercase tracking-wide">Shadow</h4>
+			<h4 class="text-xs opacity-60 uppercase tracking-wide">{m.tp_shadow()}</h4>
 			<p class="text-2xl font-bold text-warning-500">{shadowCount}</p>
 		</div>
 	</div>
@@ -248,8 +249,8 @@
 							<div class="text-xs opacity-60 mt-1 truncate">{matchSummary(pb)}</div>
 						</div>
 						<div class="flex items-center gap-3 text-xs opacity-60 flex-shrink-0">
-							<span>v{pb.version}</span>
-							<span>priority {pb.priority}</span>
+							<span>{m.tp_version_short({ version: pb.version })}</span>
+							<span>{m.tp_priority_summary({ priority: pb.priority })}</span>
 						</div>
 					</div>
 				</button>
@@ -258,19 +259,19 @@
 					<div class="border-t border-surface-500/20 p-4 space-y-4 text-sm">
 						{#if pb.deterministic_disposition}
 							<div>
-								<span class="opacity-60">Deterministic disposition:</span>
+								<span class="opacity-60">{m.tp_deterministic_disposition()}</span>
 								<span class="badge variant-soft-error text-xs ml-1"
 									>{pb.deterministic_disposition}</span
 								>
 								<span class="opacity-60 text-xs"
-									>&nbsp;— closes without an LLM look unless a security veto fires</span
+									>&nbsp;{m.tp_deterministic_disposition_note()}</span
 								>
 							</div>
 						{/if}
 
 						{#if pb.required_steps.length}
 							<div>
-								<span class="opacity-60">Required steps before verdict:</span>
+								<span class="opacity-60">{m.tp_required_steps_before_verdict()}</span>
 								{#each pb.required_steps as s}
 									<span class="badge variant-soft text-xs ml-1 font-mono">{s}</span>
 								{/each}
@@ -279,7 +280,7 @@
 
 						{#if pb.decision_modules.length}
 							<div>
-								<span class="opacity-60">Decision modules:</span>
+								<span class="opacity-60">{m.tp_decision_modules()}</span>
 								{#each pb.decision_modules as d}
 									<span class="badge variant-soft text-xs ml-1 font-mono">{d}</span>
 								{/each}
@@ -288,7 +289,7 @@
 
 						{#if Object.keys(pb.legal_actions).length}
 							<div>
-								<span class="opacity-60">Legal actions per phase:</span>
+								<span class="opacity-60">{m.tp_legal_actions_per_phase()}</span>
 								<div class="mt-1 space-y-1">
 									{#each Object.entries(pb.legal_actions) as [phase, actions]}
 										<div class="flex gap-2 items-baseline flex-wrap">
@@ -304,7 +305,7 @@
 
 						{#if pb.close_signoff_data_classes.length}
 							<div>
-								<span class="opacity-60">Close requires human sign-off for data classes:</span>
+								<span class="opacity-60">{m.tp_close_requires_signoff()}</span>
 								{#each pb.close_signoff_data_classes as c}
 									<span class="badge variant-soft-warning text-xs ml-1">{c}</span>
 								{/each}
@@ -313,12 +314,14 @@
 
 						{#if pb.guardrails.length}
 							<div>
-								<span class="opacity-60">Guardrails:</span>
+								<span class="opacity-60">{m.tp_guardrails_label()}</span>
 								<div class="mt-1 space-y-2">
 									{#each pb.guardrails as g}
 										<div class="card variant-soft p-3">
 											<div class="flex items-center gap-2 flex-wrap">
-												<span class="badge variant-filled-warning text-xs">{g.effect} → {g.to}</span>
+												<span class="badge variant-filled-warning text-xs"
+													>{m.tp_guardrail_effect_target({ effect: g.effect, target: g.to })}</span
+												>
 												<span class="text-xs opacity-80">{g.reason}</span>
 											</div>
 											<pre
@@ -334,7 +337,7 @@
 						{/if}
 
 						{#if !pb.required_steps.length && !pb.decision_modules.length && !pb.guardrails.length && !pb.deterministic_disposition && !Object.keys(pb.legal_actions).length && !pb.close_signoff_data_classes.length}
-							<p class="opacity-60">Matching only — no gates or dispositions configured.</p>
+							<p class="opacity-60">{m.tp_matching_only()}</p>
 						{/if}
 					</div>
 				{/if}
@@ -346,12 +349,14 @@
 <!-- Authored triage policies (per-tenant, shadow/draft) -->
 <div class="mt-10">
 	<div class="flex items-center justify-between mb-2">
-		<h2 class="h3">Authored triage policies</h2>
+		<h2 class="h3">{m.tp_authored_title()}</h2>
 		{#if tenantId && $canManageTriagePolicies}
 			<div class="flex gap-2">
-				<a class="btn btn-sm variant-filled-primary" href="/triage-policies/editor">+ New triage policy</a>
-				<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">
-					JSON
+				<a class="btn btn-sm variant-filled-primary" href={localizeHref('/triage-policies/editor')}
+					>{m.tp_new_policy()}</a
+				>
+				<button class="btn btn-sm variant-soft" on:click={openCreate} title={m.tp_raw_json_editor()}>
+					{m.tp_json_button()}
 				</button>
 			</div>
 		{/if}
@@ -359,12 +364,11 @@
 
 	{#if !tenantId}
 		<div class="card p-6 opacity-60 text-sm">
-			Pin a tenant (from Tenants) to author shadow triage policies for it.
+			{m.tp_authored_pin_hint()}
 		</div>
 	{:else}
 		<p class="opacity-60 text-sm mb-3">
-			Triage policies for this tenant, validated server-side. Activate one to govern triage (queues a
-			worker rollout); deactivate returns it to shadow. Export to YAML for git-managed rollout.
+			{m.tp_authored_intro()}
 		</p>
 		{#if authoredError}
 			<div class="alert variant-filled-error mb-3"><span>{authoredError}</span></div>
@@ -373,9 +377,9 @@
 			<div class="alert variant-soft-primary mb-3 text-sm"><span>{rolloutNote}</span></div>
 		{/if}
 		{#if authoredLoading}
-			<div class="card p-6 text-center opacity-60 text-sm">Loading…</div>
+			<div class="card p-6 text-center opacity-60 text-sm">{m.tp_loading()}</div>
 		{:else if authored.length === 0}
-			<div class="card p-6 opacity-60 text-sm">No authored triage policies yet.</div>
+			<div class="card p-6 opacity-60 text-sm">{m.tp_no_authored_policies()}</div>
 		{:else}
 			<div class="grid gap-2">
 				{#each authored as pb (pb.triage_policy_id)}
@@ -383,11 +387,11 @@
 						<div class="flex items-center gap-2 min-w-0">
 							<span class="font-mono font-semibold truncate">{pb.triage_policy_id}</span>
 							<span class="badge {authoredStatusBadge(pb.status)} text-xs">{pb.status}</span>
-							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
+							<span class="badge variant-soft text-xs">{m.tp_revision({ revision: pb.revision })}</span>
 						</div>
 						<div class="flex items-center gap-2 flex-shrink-0">
 							<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.triage_policy_id)}>
-								Export
+								{m.tp_export()}
 							</button>
 							{#if $canManageTriagePolicies}
 								{#if pb.status === 'active'}
@@ -395,34 +399,36 @@
 										class="btn btn-sm variant-soft"
 										on:click={() => setActive(pb.triage_policy_id, false)}
 									>
-										Deactivate
+										{m.tp_deactivate()}
 									</button>
 								{:else}
 									<button
 										class="btn btn-sm variant-filled-success"
 										on:click={() => setActive(pb.triage_policy_id, true)}
 									>
-										Activate
+										{m.tp_activate()}
 									</button>
 								{/if}
 								<a
 									class="btn btn-sm variant-filled-primary"
-									href="/triage-policies/editor?id={encodeURIComponent(pb.triage_policy_id)}"
+									href={localizeHref(
+										`/triage-policies/editor?id=${encodeURIComponent(pb.triage_policy_id)}`
+									)}
 								>
-									Edit
+									{m.tp_edit()}
 								</a>
 								<button
 									class="btn btn-sm variant-soft"
 									on:click={() => openEdit(pb)}
-									title="Raw JSON editor"
+									title={m.tp_raw_json_editor()}
 								>
-									JSON
+									{m.tp_json_button()}
 								</button>
 								<button
 									class="btn btn-sm variant-soft-error"
 									on:click={() => retire(pb.triage_policy_id)}
 								>
-									Delete
+									{m.tp_delete()}
 								</button>
 							{/if}
 						</div>
@@ -437,12 +443,10 @@
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
 		<div class="card p-6 max-w-2xl w-full space-y-4">
 			<h3 class="h4">
-				{editorMode === 'create' ? 'New triage policy' : `Edit ${editorPid}`}
+				{editorMode === 'create' ? m.tp_modal_new_title() : m.tp_modal_edit_title({ id: editorPid })}
 			</h3>
 			<p class="text-xs opacity-60">
-				Definition (JSON). Validated server-side: shadow-only, priority ≥ 60, no
-				deterministic_disposition, id must not collide with a built-in, sandboxed guardrail
-				conditions.
+				{m.tp_modal_hint()}
 			</p>
 			<textarea class="textarea font-mono text-xs h-80" bind:value={editorText}></textarea>
 			{#if editorError}
@@ -450,10 +454,10 @@
 			{/if}
 			<div class="flex justify-end gap-2">
 				<button class="btn variant-soft" on:click={() => (editorOpen = false)} disabled={editorSaving}>
-					Cancel
+					{m.tp_cancel()}
 				</button>
 				<button class="btn variant-filled-primary" on:click={save} disabled={editorSaving}>
-					{editorSaving ? 'Saving…' : 'Save'}
+					{editorSaving ? m.tp_saving() : m.tp_save()}
 				</button>
 			</div>
 		</div>

@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { localizedGoto } from '$lib/i18n';
 	import { page } from '$app/stores';
 	import { api, ApiError } from '$lib/api/client';
 	import { addToast, authSession } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
 
 	let oldPassword = '';
 	let newPassword = '';
@@ -28,9 +29,9 @@
 			try {
 				const session = await api.auth.session();
 				authSession.set(session);
-				if (!session.user) await goto('/login');
+				if (!session.user) await localizedGoto('/login');
 			} catch {
-				await goto('/login');
+				await localizedGoto('/login');
 			}
 		}
 	});
@@ -50,12 +51,12 @@
 			} catch {
 				/* swallow — fall through to dashboard */
 			}
-			setTimeout(() => goto('/', { invalidateAll: true }), 800);
+			setTimeout(() => localizedGoto('/', { invalidateAll: true }), 800);
 		} catch (err) {
 			if (err instanceof ApiError) {
-				errorMessage = err.message || 'Could not change password.';
+				errorMessage = err.message || m.adm_password_change_failed();
 			} else {
-				errorMessage = err instanceof Error ? err.message : 'Something went wrong.';
+				errorMessage = err instanceof Error ? err.message : m.adm_something_went_wrong();
 			}
 		} finally {
 			submitting = false;
@@ -64,30 +65,30 @@
 </script>
 
 <svelte:head>
-	<title>Change Password - SocTalk</title>
+	<title>{m.adm_change_password_page_title()}</title>
 </svelte:head>
 
 <div class="container max-w-md mx-auto py-10 space-y-4">
-	<h1 class="h2">{mustChange ? 'Set a new password' : 'Change password'}</h1>
+	<h1 class="h2">{mustChange ? m.adm_set_new_password() : m.adm_change_password()}</h1>
 
 	{#if mustChange}
 		<aside class="alert variant-soft-warning">
-			Your administrator requires you to set a new password before continuing.
+			{m.adm_must_change_hint()}
 		</aside>
 	{/if}
 
 	{#if success}
 		<aside class="alert variant-filled-success">
-			Password updated. Redirecting to your dashboard…
+			{m.adm_password_updated()}
 		</aside>
 	{:else}
 		<form on:submit|preventDefault={submit} class="card p-6 space-y-4">
 			{#if $authSession.user}
-				<p class="text-xs opacity-70">Signed in as <code>{$authSession.user.email}</code></p>
+				<p class="text-xs opacity-70">{m.adm_signed_in_as()} <code>{$authSession.user.email}</code></p>
 			{/if}
 
 			<label class="label">
-				<span>Current password</span>
+				<span>{m.adm_field_current_password()}</span>
 				<input
 					type="password"
 					class="input"
@@ -99,7 +100,7 @@
 			</label>
 
 			<label class="label">
-				<span>New password</span>
+				<span>{m.adm_field_new_password()}</span>
 				<input
 					type="password"
 					class="input"
@@ -109,12 +110,12 @@
 					disabled={submitting}
 				/>
 				<span class="text-xs opacity-60">
-					{meetsLength ? '✓' : '·'} at least 12 characters
+					{meetsLength ? '✓' : '·'} {m.adm_password_min_length()}
 				</span>
 			</label>
 
 			<label class="label">
-				<span>Confirm new password</span>
+				<span>{m.adm_field_confirm_password()}</span>
 				<input
 					type="password"
 					class="input"
@@ -125,14 +126,14 @@
 				/>
 				{#if confirmPassword.length > 0}
 					<span class="text-xs opacity-60">
-						{matches ? '✓ matches' : '· does not match'}
+						{matches ? m.adm_password_matches() : m.adm_password_no_match()}
 					</span>
 				{/if}
 			</label>
 
 			{#if errorMessage}
 				<div class="alert variant-filled-error">
-					<span>Error: {errorMessage}</span>
+					<span>{m.adm_error_message({ message: errorMessage })}</span>
 				</div>
 			{/if}
 
@@ -144,7 +145,7 @@
 				{#if submitting}
 					<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 				{/if}
-				Update password
+				{m.adm_update_password()}
 			</button>
 		</form>
 	{/if}

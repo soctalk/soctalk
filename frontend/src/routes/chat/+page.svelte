@@ -10,6 +10,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
+	import { m } from '$lib/paraglide/messages';
+	import { currentLocale } from '$lib/i18n';
 
 	interface ConversationRow {
 		id: string;
@@ -42,7 +44,7 @@
 			const data = await res.json();
 			conversations = data.items;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'failed to load conversations';
+			error = e instanceof Error ? e.message : m.chat_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -66,7 +68,7 @@
 			activeId = conv.id;
 			await loadList();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'failed to start conversation';
+			error = e instanceof Error ? e.message : m.chat_start_failed();
 		}
 	}
 
@@ -74,19 +76,19 @@
 </script>
 
 <svelte:head>
-	<title>Chat - SocTalk</title>
+	<title>{m.nav_chat()} - SocTalk</title>
 </svelte:head>
 
 <div class="chat-page flex gap-4">
 	<aside class="conv-list">
 		<div class="flex items-center justify-between mb-3">
-			<h2 class="text-base font-semibold">Conversations</h2>
+			<h2 class="text-base font-semibold">{m.chat_conversations()}</h2>
 			<button
 				class="btn btn-sm variant-filled-primary"
 				on:click={newConversation}
-				title="Start a new chat"
+				title={m.chat_new_title()}
 			>
-				+ New
+				{m.chat_new()}
 			</button>
 		</div>
 
@@ -95,9 +97,9 @@
 		{/if}
 
 		{#if loading && conversations.length === 0}
-			<div class="text-xs opacity-60">Loading…</div>
+			<div class="text-xs opacity-60">{m.common_loading()}</div>
 		{:else if conversations.length === 0}
-			<div class="text-xs opacity-60">No conversations yet.</div>
+			<div class="text-xs opacity-60">{m.chat_no_conversations()}</div>
 		{:else}
 			<ul class="space-y-1">
 				{#each conversations as c (c.id)}
@@ -108,22 +110,22 @@
 							class:active={c.id === activeId}
 							on:click={() => (activeId = c.id)}
 						>
-							<div class="font-medium truncate">{c.title ?? '(untitled)'}</div>
+							<div class="font-medium truncate">{c.title ?? m.chat_untitled()}</div>
 							<div class="text-xs opacity-60 flex items-center gap-2 flex-wrap">
 								{#if c.investigation_id}
 									<span class="badge variant-soft-tertiary text-xs">
-										case:{c.investigation_id.slice(0, 6)}
+										{m.chat_case_badge({ id: c.investigation_id.slice(0, 6) })}
 									</span>
 								{:else if c.scope === 'mssp_fleet' && c.focused_tenant_slug}
 									<span class="badge variant-filled-secondary text-xs">
 										{c.focused_tenant_slug}
 									</span>
 								{:else if c.scope === 'mssp_fleet'}
-									<span class="badge variant-soft-secondary text-xs">Fleet</span>
+									<span class="badge variant-soft-secondary text-xs">{m.chat_scope_fleet()}</span>
 								{:else}
-									<span class="badge variant-soft-tertiary text-xs">Tenant</span>
+									<span class="badge variant-soft-tertiary text-xs">{m.chat_scope_tenant()}</span>
 								{/if}
-								<span>{new Date(c.created_at).toLocaleDateString()}</span>
+								<span>{new Date(c.created_at).toLocaleDateString(currentLocale())}</span>
 							</div>
 						</button>
 					</li>
@@ -144,10 +146,9 @@
 		{:else}
 			<div class="card variant-soft p-8 text-center h-full flex items-center justify-center">
 				<div>
-					<div class="text-lg font-semibold mb-2">Select or start a conversation</div>
+					<div class="text-lg font-semibold mb-2">{m.chat_select_or_start()}</div>
 					<div class="text-sm opacity-60">
-						The AI SOC Analyst can summarise cases, dig through alerts and the audit
-						log, and propose actions on pending reviews.
+						{m.chat_explainer()}
 					</div>
 				</div>
 			</div>
