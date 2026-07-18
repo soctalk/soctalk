@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
+	import { m } from '$lib/paraglide/messages';
 
 	export let data: {
 		title: string;
@@ -38,7 +39,7 @@
 		<div class="text-xs font-semibold leading-tight flex-1">{data.title}</div>
 		{#if data.badge}
 			<span class="badge {BADGE_CLASSES[data.badge] ?? 'variant-soft'} text-[9px] uppercase"
-				>{data.badge}</span
+				>{data.badge === 'gated' ? m.badge_gated() : m.badge_autonomous()}</span
 			>
 		{/if}
 	</div>

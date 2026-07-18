@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { api, type AuthSession } from '$lib/api/client';
 	import { addToast, authSession, tenantContext } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
+	import { localizedGoto } from '$lib/i18n';
 
 	// Dev convenience: pre-fill the bootstrap admin creds when running
 	// vite dev so you can hit Sign in immediately. Stripped from
@@ -23,13 +24,13 @@
 			mode = session.mode;
 
 			if (!session.enabled || session.user) {
-				await goto('/');
+				await localizedGoto('/');
 			}
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Auth Error',
-				message: e instanceof Error ? e.message : 'Unable to check session.'
+				title: m.login_error_title(),
+				message: e instanceof Error ? e.message : m.login_session_check_failed()
 			});
 		} finally {
 			loading = false;
@@ -55,15 +56,15 @@
 			// API call — sending them to /account/password is the only
 			// usable surface, so don't drop them on the dashboard.
 			if (res.must_change) {
-				await goto('/account/password?must_change=1');
+				await localizedGoto('/account/password?must_change=1');
 			} else {
-				await goto('/');
+				await localizedGoto('/');
 			}
 		} catch (e) {
 			addToast({
 				type: 'error',
-				title: 'Login Failed',
-				message: e instanceof Error ? e.message : 'Invalid credentials.'
+				title: m.login_failed_title(),
+				message: e instanceof Error ? e.message : m.login_invalid_creds()
 			});
 		} finally {
 			submitting = false;
@@ -78,7 +79,7 @@
 			enabled = session.enabled;
 			mode = session.mode;
 			if (!session.enabled || session.user) {
-				await goto('/');
+				await localizedGoto('/');
 			}
 		} finally {
 			loading = false;
@@ -92,13 +93,13 @@
 			{#if $tenantContext?.branding.logo_url}
 				<img src={$tenantContext.branding.logo_url} alt="" class="h-10 mb-2" />
 			{/if}
-			<h1 class="h2">Sign in</h1>
+			<h1 class="h2">{m.login_title()}</h1>
 			<p class="text-sm opacity-70">
 				{$tenantContext?.branding.app_name ?? 'SocTalk Control Plane'}
 			</p>
 			{#if $tenantContext}
 				<p class="text-xs opacity-50">
-					{$tenantContext.kind === 'mssp' ? 'MSSP' : 'Tenant'}:
+					{$tenantContext.kind === 'mssp' ? m.scope_mssp() : m.scope_tenant()}:
 					<code>{$tenantContext.slug}</code>
 				</p>
 			{/if}
@@ -107,33 +108,31 @@
 		{#if loading}
 			<div class="flex items-center gap-2 opacity-70">
 				<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"></span>
-				<span>Loading…</span>
+				<span>{m.login_loading()}</span>
 			</div>
 		{:else if !enabled}
-			<p class="opacity-70">Authentication is disabled for this deployment.</p>
-			<button type="button" class="btn variant-filled-primary" on:click={() => goto('/')}>Continue</button>
+			<p class="opacity-70">{m.login_auth_disabled()}</p>
+			<button type="button" class="btn variant-filled-primary" on:click={() => localizedGoto('/')}>{m.login_continue()}</button>
 		{:else if mode === 'proxy'}
-			<p class="opacity-70">
-				This deployment uses upstream authentication. Sign in via your SSO provider and refresh.
-			</p>
+			<p class="opacity-70">{m.login_proxy_hint()}</p>
 			<button type="button" class="btn variant-filled-primary" on:click={refresh} disabled={loading}>
-				Refresh Session
+				{m.login_refresh()}
 			</button>
 		{:else}
 			<form class="space-y-3" on:submit|preventDefault={submit}>
 				<label class="label">
-					<span class="font-medium">Email</span>
+					<span class="font-medium">{m.login_email()}</span>
 					<input type="email" class="input" autocomplete="email" bind:value={email} />
 				</label>
 				<label class="label">
-					<span class="font-medium">Password</span>
+					<span class="font-medium">{m.login_password()}</span>
 					<input type="password" class="input" autocomplete="current-password" bind:value={password} />
 				</label>
 				<button type="submit" class="btn variant-filled-primary w-full" disabled={submitting}>
 					{#if submitting}
 						<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
 					{/if}
-					Sign in
+					{m.login_submit()}
 				</button>
 			</form>
 		{/if}

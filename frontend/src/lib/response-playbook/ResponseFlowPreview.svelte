@@ -14,7 +14,8 @@
 	import '@xyflow/svelte/dist/style.css';
 	import dagre from '@dagrejs/dagre';
 	import ResponseFlowNode from './ResponseFlowNode.svelte';
-	import { CAP_BY_NAME, whenToSentence, type ResponsePlaybookDef } from './schema';
+	import { m } from '$lib/paraglide/messages';
+	import { CAP_BY_NAME, capLabel, whenToSentence, type ResponsePlaybookDef } from './schema';
 
 	export let definition: ResponsePlaybookDef;
 
@@ -53,13 +54,15 @@
 	}
 
 	function matchSummary(def: ResponsePlaybookDef): string {
-		const m = def.applies_to ?? {};
+		const applies = def.applies_to ?? {};
 		const parts: string[] = [];
-		if (m.rule_groups?.length) parts.push(`groups: ${m.rule_groups.join(', ')}`);
-		if (m.rule_ids?.length) parts.push(`rules: ${m.rule_ids.join(', ')}`);
-		if (m.mitre_techniques?.length) parts.push(`ATT&CK: ${m.mitre_techniques.join(', ')}`);
-		if (m.mitre_tactics?.length) parts.push(`tactics: ${m.mitre_tactics.join(', ')}`);
-		return parts.join('\n') || 'matches every alert';
+		if (applies.rule_groups?.length) parts.push(m.flow_groups({ v: applies.rule_groups.join(', ') }));
+		if (applies.rule_ids?.length) parts.push(m.flow_rules({ v: applies.rule_ids.join(', ') }));
+		if (applies.mitre_techniques?.length)
+			parts.push(m.flow_attck({ v: applies.mitre_techniques.join(', ') }));
+		if (applies.mitre_tactics?.length)
+			parts.push(m.flow_tactics({ v: applies.mitre_tactics.join(', ') }));
+		return parts.join('\n') || m.flow_matches_all();
 	}
 
 	function rebuild(def: ResponsePlaybookDef) {
@@ -70,7 +73,7 @@
 			id: 'env',
 			type: 'rp',
 			position: { x: 0, y: 0 },
-			data: { title: 'Effective disposition', subtitle: matchSummary(def), kind: 'envelope', hasNext: true },
+			data: { title: m.flow_disposition(), subtitle: matchSummary(def), kind: 'envelope', hasNext: true },
 			draggable: false,
 			connectable: false
 		});
@@ -83,8 +86,8 @@
 					type: 'rp',
 					position: { x: 0, y: 0 },
 					data: {
-						title: 'Human approval',
-						subtitle: 'gated actions wait for an\nanalyst before they execute',
+						title: m.flow_approval_title(),
+						subtitle: m.flow_approval_sub(),
 						kind: 'approval'
 					},
 					draggable: false,
@@ -113,14 +116,14 @@
 				const gated = meta ? !meta.autonomous : false;
 				const aid = `${which}-${i}`;
 				const sub: string[] = [];
-				if (a.when) sub.push(`when ${whenToSentence(a.when)}`);
-				sub.push(gated ? 'routes to approval' : 'fires automatically');
+				if (a.when) sub.push(m.flow_when({ cond: whenToSentence(a.when) }));
+				sub.push(gated ? m.flow_routes_approval() : m.flow_fires_auto());
 				ns.push({
 					id: aid,
 					type: 'rp',
 					position: { x: 0, y: 0 },
 					data: {
-						title: meta?.label ?? cap,
+						title: capLabel(cap),
 						subtitle: sub.join('\n'),
 						kind: gated ? 'gated' : 'auto',
 						badge: gated ? 'gated' : 'autonomous',
@@ -140,14 +143,14 @@
 						target: ap,
 						type: 'smoothstep',
 						animated: true,
-						label: 'approve'
+						label: m.flow_approve()
 					});
 				}
 			});
 		}
 
-		branch('escalate', 'On escalate', def.response?.on_escalate ?? []);
-		branch('close', 'On close', def.response?.on_close ?? []);
+		branch('escalate', m.flow_on_escalate(), def.response?.on_escalate ?? []);
+		branch('close', m.flow_on_close(), def.response?.on_close ?? []);
 
 		if (ns.length === 1) {
 			ns[0].data.hasNext = false;
@@ -155,7 +158,7 @@
 				id: 'empty',
 				type: 'rp',
 				position: { x: 0, y: 0 },
-				data: { title: 'No actions yet', subtitle: 'add an action to see the flow', kind: 'execute', hasTarget: true },
+				data: { title: m.flow_no_actions(), subtitle: m.flow_add_hint(), kind: 'execute', hasTarget: true },
 				draggable: false,
 				connectable: false
 			});

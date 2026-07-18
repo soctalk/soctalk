@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import { api } from '$lib/api/client';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref, localizedGoto } from '$lib/i18n';
 	import { currentTenantId } from '$lib/stores';
 	import ResponseFlowPreview from '$lib/response-playbook/ResponseFlowPreview.svelte';
 	import {
 		CAPABILITIES,
 		CAP_BY_NAME,
+		capLabel,
 		SCALAR_FIELDS,
 		LIST_FIELDS,
 		COMPARISONS,
@@ -65,7 +67,10 @@
 	function emptyAction(cap = 'annotate_investigation'): ActionState {
 		return {
 			capability: cap,
-			paramsText: cap === 'annotate_investigation' ? '{\n  "body": "escalation acknowledged"\n}' : '{}',
+			paramsText:
+				cap === 'annotate_investigation'
+					? JSON.stringify({ body: m.rpe_default_note_body() }, null, 2)
+					: '{}',
 			paramsError: null,
 			useWhen: false,
 			when: emptyWhen()
@@ -78,7 +83,7 @@
 			a.paramsError = null;
 			return v;
 		} catch {
-			a.paramsError = 'invalid JSON';
+			a.paramsError = m.rpe_params_invalid();
 			return {};
 		}
 	}
@@ -114,7 +119,7 @@
 	$: paramErrors = [...onEscalate, ...onClose].some((a) => a.paramsError);
 	$: validationErrors = [
 		...validateDefinition(definition),
-		...(paramErrors ? ['fix invalid JSON in action params'] : [])
+		...(paramErrors ? [m.verr_fix_json()] : [])
 	];
 
 	function addAction(which: 'escalate' | 'close') {
@@ -172,13 +177,13 @@
 			const all = await api.responsePlaybooks.listAuthored(tid);
 			if (key !== loadedKey) return;
 			const row = all.find((p) => p.response_playbook_id === id);
-			if (!row) throw new Error(`response playbook '${id}' not found for this tenant`);
+			if (!row) throw new Error(m.rpe_not_found({ id }));
 			existingStatus = row.status;
 			loadDefinition(row.definition);
 			loaded = true;
 		} catch (e) {
 			if (key !== loadedKey) return;
-			loadError = e instanceof Error ? e.message : 'Failed to load response playbook';
+			loadError = e instanceof Error ? e.message : m.rpe_load_failed();
 		}
 	}
 
@@ -190,9 +195,9 @@
 			const def = definition as unknown as Record<string, unknown>;
 			if (mode === 'create') await api.responsePlaybooks.createAuthored(tenantId, def);
 			else await api.responsePlaybooks.updateAuthored(tenantId, pid, def);
-			await goto('/response-playbooks');
+			await localizedGoto('/response-playbooks');
 		} catch (e) {
-			saveError = e instanceof Error ? e.message : 'Save failed.';
+			saveError = e instanceof Error ? e.message : m.rp_save_failed();
 		} finally {
 			saving = false;
 		}
@@ -204,36 +209,36 @@
 
 	interface Section {
 		which: Which;
-		label: string;
+		label: () => string;
 		list: ActionState[];
 	}
 	$: sections = [
-		{ which: 'escalate' as Which, label: 'On escalate', list: onEscalate },
-		{ which: 'close' as Which, label: 'On close (annotation only)', list: onClose }
+		{ which: 'escalate' as Which, label: m.rpe_on_escalate, list: onEscalate },
+		{ which: 'close' as Which, label: m.rpe_on_close, list: onClose }
 	] satisfies Section[];
 </script>
 
 <svelte:head>
-	<title>{mode === 'create' ? 'New' : 'Edit'} Response Playbook - SocTalk</title>
+	<title>{mode === 'create' ? m.rpe_new_title() : m.rpe_edit_title({ id: editId ?? '' })} - SocTalk</title>
 </svelte:head>
 
 <div class="flex items-center justify-between mb-4">
-	<h1 class="h2">{mode === 'create' ? 'New response playbook' : `Edit ${editId}`}</h1>
-	<a class="btn btn-sm variant-soft" href="/response-playbooks">← Back</a>
+	<h1 class="h2">{mode === 'create' ? m.rpe_new_title() : m.rpe_edit_title({ id: editId ?? '' })}</h1>
+	<a class="btn btn-sm variant-soft" href={localizeHref('/response-playbooks')}>{m.common_back()}</a>
 </div>
 
 {#if !tenantId}
-	<div class="card p-6 opacity-60 text-sm">Pin a tenant to author response playbooks.</div>
+	<div class="card p-6 opacity-60 text-sm">{m.rpe_pin_hint()}</div>
 {:else if !loaded}
-	<div class="card p-6 opacity-60 text-sm">{loadError ?? 'Loading…'}</div>
+	<div class="card p-6 opacity-60 text-sm">{loadError ?? m.common_loading()}</div>
 {:else}
 	<div class="grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6 items-start">
 	<div class="grid gap-6 content-start min-w-0" data-testid="response-editor">
 		<!-- Identity -->
 		<div class="card p-4 grid gap-3">
-			<h3 class="h4">Identity</h3>
+			<h3 class="h4">{m.rpe_identity()}</h3>
 			<label class="label">
-				<span class="text-sm">ID (slug)</span>
+				<span class="text-sm">{m.rpe_id_label()}</span>
 				<input
 					class="input"
 					data-testid="rp-id"
@@ -244,46 +249,47 @@
 			</label>
 			<div class="grid grid-cols-2 gap-3">
 				<label class="label"
-					><span class="text-sm">Version</span><input class="input" type="number" bind:value={version} /></label
+					><span class="text-sm">{m.rpe_version()}</span><input class="input" type="number" bind:value={version} /></label
 				>
 				<label class="label"
-					><span class="text-sm">Priority</span><input class="input" type="number" bind:value={priority} /></label
+					><span class="text-sm">{m.rpe_priority()}</span><input class="input" type="number" bind:value={priority} /></label
 				>
 			</div>
 			{#if existingStatus}
 				<p class="text-xs opacity-60">
-					Current status: <span class="badge variant-soft text-xs">{existingStatus}</span> — edits keep
-					the current status; activate/deactivate from the list.
+					{m.rpe_current_status()}
+					<span class="badge variant-soft text-xs">{existingStatus}</span>
+					{m.rpe_status_note()}
 				</p>
 			{/if}
 		</div>
 
 		<!-- Applies to -->
 		<div class="card p-4 grid gap-3">
-			<h3 class="h4">Applies to</h3>
-			<p class="text-xs opacity-60">Match the triage envelope. Leave both empty to match every alert.</p>
+			<h3 class="h4">{m.rpe_applies_to()}</h3>
+			<p class="text-xs opacity-60">{m.rpe_applies_hint()}</p>
 			<label class="label"
-				><span class="text-sm">Rule groups (comma-separated)</span
+				><span class="text-sm">{m.rpe_rule_groups()}</span
 				><input class="input" data-testid="rp-groups" bind:value={ruleGroupsText} placeholder="sudo, su" /></label
 			>
 			<label class="label"
-				><span class="text-sm">Rule IDs (comma-separated)</span
+				><span class="text-sm">{m.rpe_rule_ids()}</span
 				><input class="input" bind:value={ruleIdsText} placeholder="5710" /></label
 			>
 			<div class="grid grid-cols-2 gap-3">
 				<label class="label"
-					><span class="text-sm">ATT&CK techniques</span
+					><span class="text-sm">{m.rpe_attck_techniques()}</span
 					><input
 						class="input"
 						data-testid="rp-mitre-techniques"
 						bind:value={mitreTechniquesText}
 						placeholder="T1078, T1021"
-					/><span class="text-[10px] opacity-50">technique IDs (Txxxx), not names</span></label
+					/><span class="text-[10px] opacity-50">{m.rpe_tech_hint()}</span></label
 				>
 				<label class="label"
-					><span class="text-sm">ATT&CK tactics</span
+					><span class="text-sm">{m.rpe_attck_tactics()}</span
 					><input class="input" bind:value={mitreTacticsText} placeholder="Lateral Movement" /><span
-						class="text-[10px] opacity-50">tactic names as your source emits them</span
+						class="text-[10px] opacity-50">{m.rpe_tactic_hint()}</span
 					></label
 				>
 			</div>
@@ -293,35 +299,33 @@
 		{#each sections as section}
 			<div class="card p-4 grid gap-3">
 				<div class="flex items-center justify-between">
-					<h3 class="h4">{section.label}</h3>
+					<h3 class="h4">{section.label()}</h3>
 					<button
 						class="btn btn-sm variant-soft"
 						data-testid="rp-add-{section.which}"
-						on:click={() => addAction(section.which)}>+ Action</button
+						on:click={() => addAction(section.which)}>{m.rpe_add_action()}</button
 					>
 				</div>
 				{#if section.list.length === 0}
-					<p class="text-xs opacity-60">No actions.</p>
+					<p class="text-xs opacity-60">{m.rpe_no_actions()}</p>
 				{/if}
 				{#each section.list as a, i}
 					<div class="card variant-soft p-3 grid gap-2">
 						<div class="flex items-center gap-2">
 							<select class="select" data-testid="rp-{section.which}-cap-{i}" bind:value={a.capability}>
 								{#each capListFor(section.which) as c}
-									<option value={c.name}>{c.label}{c.autonomous ? '' : ' — needs approval'}</option>
+									<option value={c.name}>{capLabel(c.name)}{c.autonomous ? '' : m.rpe_needs_approval()}</option>
 								{/each}
 							</select>
 							<button class="btn btn-sm variant-soft-error" on:click={() => removeAction(section.which, i)}
-								>Remove</button
+								>{m.rpe_remove()}</button
 							>
 						</div>
 						{#if CAP_BY_NAME[a.capability] && !CAP_BY_NAME[a.capability].autonomous}
-							<p class="text-xs opacity-60">
-								Gated: this action routes to a human-approved proposal before it executes.
-							</p>
+							<p class="text-xs opacity-60">{m.rpe_gated_hint()}</p>
 						{/if}
 						<label class="label">
-							<span class="text-xs opacity-70">Params (JSON)</span>
+							<span class="text-xs opacity-70">{m.rpe_params()}</span>
 							<textarea class="textarea font-mono text-xs h-20" bind:value={a.paramsText}></textarea>
 						</label>
 						{#if a.paramsError}
@@ -329,7 +333,7 @@
 						{/if}
 						<label class="flex items-center gap-2 text-sm">
 							<input type="checkbox" class="checkbox" bind:checked={a.useWhen} />
-							<span>Only when…</span>
+							<span>{m.rpe_only_when()}</span>
 						</label>
 						{#if a.useWhen}
 							<div class="flex items-center gap-2 flex-wrap">
@@ -337,13 +341,13 @@
 									{#each ALL_FIELDS as f}<option value={f}>{f}</option>{/each}
 								</select>
 								{#if isListField(a.when.field)}
-									<span class="badge variant-soft text-xs">contains</span>
+									<span class="badge variant-soft text-xs">{m.rpe_contains()}</span>
 								{:else}
 									<select class="select w-auto" bind:value={a.when.op}>
 										{#each COMPARISONS as op}<option value={op}>{op}</option>{/each}
 									</select>
 								{/if}
-								<input class="input w-40" bind:value={a.when.value} placeholder="value" />
+								<input class="input w-40" bind:value={a.when.value} placeholder={m.rpe_value_placeholder()} />
 							</div>
 						{/if}
 					</div>
@@ -369,14 +373,14 @@
 				on:click={save}
 				disabled={saving || validationErrors.length > 0}
 			>
-				{saving ? 'Saving…' : mode === 'create' ? 'Create (shadow)' : 'Save'}
+				{saving ? m.common_saving() : mode === 'create' ? m.rpe_create_shadow() : m.common_save()}
 			</button>
-			<a class="btn variant-soft" href="/response-playbooks">Cancel</a>
-			<span class="text-xs opacity-50 ml-auto">Saved as shadow — activate from the list.</span>
+			<a class="btn variant-soft" href={localizeHref('/response-playbooks')}>{m.common_cancel()}</a>
+			<span class="text-xs opacity-50 ml-auto">{m.rpe_saved_shadow_note()}</span>
 		</div>
 
 		<details class="card p-3">
-			<summary class="cursor-pointer text-sm opacity-70">Preview JSON</summary>
+			<summary class="cursor-pointer text-sm opacity-70">{m.rpe_preview_json()}</summary>
 			<pre class="text-xs mt-2 overflow-x-auto">{JSON.stringify(definition, null, 2)}</pre>
 		</details>
 	</div>
@@ -386,8 +390,8 @@
 	<aside class="hidden xl:block">
 		<div class="card p-1 sticky top-4 h-[calc(100vh-7rem)] flex flex-col">
 			<div class="flex items-center justify-between px-3 pt-2 pb-1">
-				<h3 class="h4">Flow</h3>
-				<span class="text-xs opacity-50">derived from the definition</span>
+				<h3 class="h4">{m.rpe_flow()}</h3>
+				<span class="text-xs opacity-50">{m.rpe_flow_note()}</span>
 			</div>
 			<div class="flex-1 min-h-0">
 				<ResponseFlowPreview {definition} />

@@ -2,41 +2,54 @@
 // Mirrors the server contract (soctalk/response/{models,capabilities,conditions}.py):
 // the editor produces the same JSON the API validates fail-closed, so this is a
 // convenience/UX layer — the server remains the source of truth.
+//
+// i18n (#52): this module keeps PROTOCOL CODES only. Display strings resolve
+// through capLabel()/capDescription()/whenToSentence() etc. at CALL time —
+// message functions must never be evaluated at module scope (the locale is
+// activated after modules initialize).
+import { m } from '$lib/paraglide/messages';
 
 export interface ResponseCapabilityMeta {
 	name: string;
-	label: string;
 	/** tier-0 fires without approval; gated routes to a human-approved proposal. */
 	autonomous: boolean;
 	/** may appear in on_close (server: ON_CLOSE_ALLOWED = annotate only). */
 	onCloseAllowed: boolean;
-	description: string;
 }
 
 export const CAPABILITIES: ResponseCapabilityMeta[] = [
-	{
-		name: 'annotate_investigation',
-		label: 'Annotate investigation',
-		autonomous: true,
-		onCloseAllowed: true,
-		description: 'Write a system note on the investigation (local, tier-0).'
-	},
-	{
-		name: 'notify_webhook',
-		label: 'Notify webhook',
-		autonomous: true,
-		onCloseAllowed: false,
-		description: 'POST the signed envelope to the tenant webhook connector (tier-0).'
-	},
-	{
-		name: 'external_action',
-		label: 'External action (gated)',
-		autonomous: false,
-		onCloseAllowed: false,
-		description:
-			'POST a named action to an operator-configured endpoint. Requires human approval.'
-	}
+	{ name: 'annotate_investigation', autonomous: true, onCloseAllowed: true },
+	{ name: 'notify_webhook', autonomous: true, onCloseAllowed: false },
+	{ name: 'external_action', autonomous: false, onCloseAllowed: false }
 ];
+
+/** Localized display label for a capability code (falls back to the code). */
+export function capLabel(name: string): string {
+	switch (name) {
+		case 'annotate_investigation':
+			return m.cap_annotate_label();
+		case 'notify_webhook':
+			return m.cap_notify_label();
+		case 'external_action':
+			return m.cap_external_label();
+		default:
+			return name;
+	}
+}
+
+/** Localized description for a capability code (falls back to empty). */
+export function capDescription(name: string): string {
+	switch (name) {
+		case 'annotate_investigation':
+			return m.cap_annotate_desc();
+		case 'notify_webhook':
+			return m.cap_notify_desc();
+		case 'external_action':
+			return m.cap_external_desc();
+		default:
+			return '';
+	}
+}
 
 export const CAP_BY_NAME: Record<string, ResponseCapabilityMeta> = Object.fromEntries(
 	CAPABILITIES.map((c) => [c.name, c])
@@ -108,9 +121,9 @@ export function whenToRow(when: unknown): WhenRow | null {
 /** A human sentence for a stored `when` condition, for the flow diagram. */
 export function whenToSentence(when: unknown): string {
 	const row = whenToRow(when);
-	if (!row) return when ? 'advanced condition' : '';
-	if (row.op === 'in') return `${row.field} contains ${row.value}`;
-	return `${row.field} ${row.op} ${row.value}`;
+	if (!row) return when ? m.when_advanced() : '';
+	if (row.op === 'in') return m.when_contains({ field: row.field, value: row.value });
+	return m.when_cmp({ field: row.field, op: row.op, value: row.value });
 }
 
 export interface ResponseActionDef {
@@ -138,23 +151,23 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 export function validateDefinition(def: ResponsePlaybookDef): string[] {
 	const errs: string[] = [];
 	if (!def.id || !SLUG_RE.test(def.id)) {
-		errs.push('id must be a slug: lowercase letters, digits, hyphens.');
+		errs.push(m.verr_id_slug());
 	}
 	const esc = def.response?.on_escalate ?? [];
 	const cls = def.response?.on_close ?? [];
 	if (esc.length === 0 && cls.length === 0) {
-		errs.push('add at least one action (on escalate or on close).');
+		errs.push(m.verr_need_action());
 	}
-	if (esc.length > 8) errs.push('on_escalate allows at most 8 actions.');
-	if (cls.length > 4) errs.push('on_close allows at most 4 actions.');
+	if (esc.length > 8) errs.push(m.verr_max_escalate());
+	if (cls.length > 4) errs.push(m.verr_max_close());
 	for (const a of esc) {
-		if (!CAP_BY_NAME[a.capability]) errs.push(`unknown capability: ${a.capability}`);
+		if (!CAP_BY_NAME[a.capability]) errs.push(m.verr_unknown_cap({ cap: a.capability }));
 	}
 	for (const a of cls) {
 		const meta = CAP_BY_NAME[a.capability];
-		if (!meta) errs.push(`unknown capability: ${a.capability}`);
+		if (!meta) errs.push(m.verr_unknown_cap({ cap: a.capability }));
 		else if (!meta.onCloseAllowed) {
-			errs.push(`on_close permits only annotation-tier actions (got ${a.capability}).`);
+			errs.push(m.verr_close_annotation({ cap: a.capability }));
 		}
 	}
 	return errs;

@@ -1,4 +1,5 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { defineConfig } from 'vite';
 
 // Dev-server proxy to a FastAPI backend OR a remote ingress.
@@ -20,7 +21,18 @@ const apiUrl = process.env.API_URL || 'http://127.0.0.1:8000';
 const apiHost = process.env.API_HOST;
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [
+		// i18n (#52): compiles messages/{locale}.json into tree-shakeable, typed
+		// message functions at src/lib/paraglide. Locale resolution is driven
+		// from the URL by src/lib/i18n (overwriteGetLocale) — globalVariable
+		// keeps the runtime free of cookie/url magic during module init.
+		paraglideVitePlugin({
+			project: './project.inlang',
+			outdir: './src/lib/paraglide',
+			strategy: ['globalVariable', 'baseLocale']
+		}),
+		sveltekit()
+	],
 	server: {
 		proxy: {
 			'/api': {

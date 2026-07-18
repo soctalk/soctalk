@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { api, type AuthoredResponsePlaybook } from '$lib/api/client';
 	import { currentTenantId, canManageTriagePolicies } from '$lib/stores';
+	import { m } from '$lib/paraglide/messages';
+	import { localizeHref } from '$lib/i18n';
 
 	// Reuses the admin-tier config-management gate (the API gates response-playbook
 	// mutations with the same MSSP_ADMIN role as triage policies).
@@ -27,7 +29,7 @@
 		try {
 			authored = await api.responsePlaybooks.listAuthored(tid);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load response playbooks';
+			error = e instanceof Error ? e.message : m.rp_load_failed();
 		} finally {
 			loading = false;
 		}
@@ -68,7 +70,7 @@
 		try {
 			def = JSON.parse(editorText);
 		} catch {
-			editorError = 'Invalid JSON.';
+			editorError = m.rp_invalid_json();
 			return;
 		}
 		editorSaving = true;
@@ -79,20 +81,20 @@
 			editorOpen = false;
 			await load(tenantId);
 		} catch (e) {
-			editorError = e instanceof Error ? e.message : 'Save failed.';
+			editorError = e instanceof Error ? e.message : m.rp_save_failed();
 		} finally {
 			editorSaving = false;
 		}
 	}
 
 	async function retire(pid: string) {
-		if (!tenantId || !confirm(`Delete response playbook "${pid}"? This removes it from the tenant.`))
+		if (!tenantId || !confirm(m.rp_confirm_delete({ id: pid })))
 			return;
 		try {
 			await api.responsePlaybooks.retireAuthored(tenantId, pid);
 			await load(tenantId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Delete failed.';
+			error = e instanceof Error ? e.message : m.rp_delete_failed();
 		}
 	}
 
@@ -108,7 +110,7 @@
 			a.click();
 			URL.revokeObjectURL(url);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Export failed.';
+			error = e instanceof Error ? e.message : m.rp_export_failed();
 		}
 	}
 
@@ -120,12 +122,10 @@
 			else await api.responsePlaybooks.deactivateAuthored(tenantId, pid);
 			// Unlike triage policies, activation is LIVE — L1 dispatches from the DB,
 			// so there is no worker rollout to wait for.
-			note = active
-				? `"${pid}" is now active — it governs response dispatch immediately.`
-				: `"${pid}" returned to shadow — audited only, no longer dispatched.`;
+			note = active ? m.rp_note_active({ id: pid }) : m.rp_note_shadow({ id: pid });
 			await load(tenantId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Activation change failed.';
+			error = e instanceof Error ? e.message : m.rp_activation_failed();
 		}
 	}
 
@@ -146,8 +146,8 @@
 		const parts: string[] = [];
 		const esc = caps('on_escalate');
 		const cls = caps('on_close');
-		if (esc.length) parts.push(`escalate → ${esc.join(', ')}`);
-		if (cls.length) parts.push(`close → ${cls.join(', ')}`);
+		if (esc.length) parts.push(m.rp_summary_escalate({ caps: esc.join(', ') }));
+		if (cls.length) parts.push(m.rp_summary_close({ caps: cls.join(', ') }));
 		return parts.join('  ·  ') || '—';
 	}
 </script>
@@ -157,25 +157,18 @@
 </svelte:head>
 
 <div class="flex items-center justify-between mb-2">
-	<h1 class="h2">Response Playbooks</h1>
+	<h1 class="h2">{m.rp_title()}</h1>
 	{#if tenantId && canManage}
 		<div class="flex gap-2">
-			<a class="btn btn-sm variant-filled-primary" href="/response-playbooks/editor">+ New response playbook</a>
-			<button class="btn btn-sm variant-soft" on:click={openCreate} title="Raw JSON editor">JSON</button>
+			<a class="btn btn-sm variant-filled-primary" href={localizeHref('/response-playbooks/editor')}>{m.rp_new()}</a>
+			<button class="btn btn-sm variant-soft" on:click={openCreate} title={m.rp_json_title()}>JSON</button>
 		</div>
 	{/if}
 </div>
-<p class="opacity-60 text-sm mb-6">
-	Procedural response dispatched after the triage disposition is final — the playbook names vetted
-	capabilities per disposition. Tier-0 actions (annotate, notify) fire autonomously; higher-tier
-	actions route to a human-approved proposal. Activate one to dispatch live; deactivate returns it
-	to shadow (audited only).
-</p>
+<p class="opacity-60 text-sm mb-6">{m.rp_intro()}</p>
 
 {#if !tenantId}
-	<div class="card p-6 opacity-60 text-sm">
-		Pin a tenant (from Tenants) to author response playbooks for it.
-	</div>
+	<div class="card p-6 opacity-60 text-sm">{m.rp_pin_hint()}</div>
 {:else}
 	{#if error}
 		<div class="alert variant-filled-error mb-3"><span>{error}</span></div>
@@ -184,9 +177,9 @@
 		<div class="alert variant-soft-primary mb-3 text-sm"><span>{note}</span></div>
 	{/if}
 	{#if loading}
-		<div class="card p-6 text-center opacity-60 text-sm">Loading…</div>
+		<div class="card p-6 text-center opacity-60 text-sm">{m.common_loading()}</div>
 	{:else if authored.length === 0}
-		<div class="card p-6 opacity-60 text-sm">No response playbooks yet.</div>
+		<div class="card p-6 opacity-60 text-sm">{m.rp_empty()}</div>
 	{:else}
 		<div class="grid gap-2">
 			{#each authored as pb (pb.response_playbook_id)}
@@ -195,13 +188,13 @@
 						<div class="flex items-center gap-2 min-w-0">
 							<span class="font-mono font-semibold truncate">{pb.response_playbook_id}</span>
 							<span class="badge {statusBadge(pb.status)} text-xs">{pb.status}</span>
-							<span class="badge variant-soft text-xs">rev {pb.revision}</span>
+							<span class="badge variant-soft text-xs">{m.rp_rev({ rev: pb.revision })}</span>
 						</div>
 						<div class="text-xs opacity-60 truncate">{actionSummary(pb)}</div>
 					</div>
 					<div class="flex items-center gap-2 flex-shrink-0">
 						<button class="btn btn-sm variant-soft" on:click={() => exportYaml(pb.response_playbook_id)}>
-							Export
+							{m.common_export()}
 						</button>
 						{#if canManage}
 							{#if pb.status === 'active'}
@@ -209,30 +202,30 @@
 									class="btn btn-sm variant-soft"
 									on:click={() => setActive(pb.response_playbook_id, false)}
 								>
-									Deactivate
+									{m.rp_deactivate()}
 								</button>
 							{:else}
 								<button
 									class="btn btn-sm variant-filled-success"
 									on:click={() => setActive(pb.response_playbook_id, true)}
 								>
-									Activate
+									{m.rp_activate()}
 								</button>
 							{/if}
 							<a
 								class="btn btn-sm variant-filled-primary"
-								href="/response-playbooks/editor?id={encodeURIComponent(pb.response_playbook_id)}"
+								href={localizeHref(`/response-playbooks/editor?id=${encodeURIComponent(pb.response_playbook_id)}`)}
 							>
-								Edit
+								{m.common_edit()}
 							</a>
-							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)} title="Raw JSON editor">
+							<button class="btn btn-sm variant-soft" on:click={() => openEdit(pb)} title={m.rp_json_title()}>
 								JSON
 							</button>
 							<button
 								class="btn btn-sm variant-soft-error"
 								on:click={() => retire(pb.response_playbook_id)}
 							>
-								Delete
+								{m.common_delete()}
 							</button>
 						{/if}
 					</div>
@@ -246,23 +239,19 @@
 	<div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
 		<div class="card p-6 max-w-2xl w-full space-y-4">
 			<h3 class="h4">
-				{editorMode === 'create' ? 'New response playbook' : `Edit ${editorPid}`}
+				{editorMode === 'create' ? m.rp_modal_new_title() : m.rp_modal_edit_title({ id: editorPid })}
 			</h3>
-			<p class="text-xs opacity-60">
-				Definition (JSON). Validated server-side: fail-closed, vetted capability names only,
-				on_close restricted to annotation-tier actions. New/edited playbooks land as shadow —
-				activate to dispatch live.
-			</p>
+			<p class="text-xs opacity-60">{m.rp_modal_hint()}</p>
 			<textarea class="textarea font-mono text-xs h-80" bind:value={editorText}></textarea>
 			{#if editorError}
 				<div class="alert variant-filled-error text-sm"><span>{editorError}</span></div>
 			{/if}
 			<div class="flex justify-end gap-2">
 				<button class="btn variant-soft" on:click={() => (editorOpen = false)} disabled={editorSaving}>
-					Cancel
+					{m.common_cancel()}
 				</button>
 				<button class="btn variant-filled-primary" on:click={save} disabled={editorSaving}>
-					{editorSaving ? 'Saving…' : 'Save'}
+					{editorSaving ? m.common_saving() : m.common_save()}
 				</button>
 			</div>
 		</div>

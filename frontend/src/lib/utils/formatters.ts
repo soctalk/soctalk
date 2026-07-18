@@ -1,32 +1,40 @@
+// Enum-code → localized display label (#52). The API returns stable codes;
+// these lookups are the ONLY place codes become prose. Message functions are
+// called at render time (never module scope), with formatSnakeCase as the
+// fallback for codes the catalog doesn't know.
+import { m } from '$lib/paraglide/messages';
+
 export function formatDecision(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
 	// Remove enum prefixes like "VerdictDecision." or "HumanDecision."
 	const clean = value.replace(/^(VerdictDecision|HumanDecision)\./i, '').toLowerCase();
 
-	const map: Record<string, string> = {
-		'escalate': 'Escalate',
-		'close': 'Close',
-		'auto_close': 'Auto-Close',
-		'needs_more_info': 'Needs More Info',
-		'suspicious': 'Suspicious',
-		'approve': 'Approved',
-		'approved': 'Approved',
-		'reject': 'Rejected',
-		'rejected': 'Rejected',
-		'more_info': 'More Info Requested',
-		'info_requested': 'More Info Requested',
-		'expired': 'Expired',
-		'pending': 'Pending',
-		'unknown': 'Unknown',
+	const map: Record<string, () => string> = {
+		escalate: m.dec_escalate,
+		close: m.dec_close,
+		auto_close: m.dec_auto_close,
+		needs_more_info: m.dec_needs_more_info,
+		suspicious: m.dec_suspicious,
+		approve: m.dec_approved,
+		approved: m.dec_approved,
+		reject: m.dec_rejected,
+		rejected: m.dec_rejected,
+		more_info: m.dec_more_info,
+		info_requested: m.dec_more_info,
+		expired: m.dec_expired,
+		pending: m.dec_pending,
+		unknown: m.common_unknown
 	};
 
-	return map[clean] || formatSnakeCase(value);
+	return map[clean]?.() ?? formatSnakeCase(value);
 }
 
 export function formatEventType(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
+	// Event-type prose is still English pending its own catalog section —
+	// tracked under #52's remaining-screens extraction.
 	const map: Record<string, string> = {
 		'investigation.created': 'Investigation Started',
 		'investigation.closed': 'Investigation Closed',
@@ -42,79 +50,79 @@ export function formatEventType(value: string | null | undefined): string {
 		'observable.extracted': 'Observable Found',
 		'supervisor.decision': 'Supervisor Decision',
 		'misp.context_retrieved': 'Threat Intel Retrieved',
-		'wazuh.forensics_collected': 'Forensics Collected',
+		'wazuh.forensics_collected': 'Forensics Collected'
 	};
 
 	return map[value] || formatSnakeCase(value.replace(/[._]/g, ' '));
 }
 
 export function formatSeverity(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
-	const map: Record<string, string> = {
-		'critical': 'Critical',
-		'high': 'High',
-		'medium': 'Medium',
-		'low': 'Low',
-		'info': 'Info',
-		'informational': 'Informational',
+	const map: Record<string, () => string> = {
+		critical: m.sev_critical,
+		high: m.sev_high,
+		medium: m.sev_medium,
+		low: m.sev_low,
+		info: m.sev_info,
+		informational: m.sev_informational
 	};
 
-	return map[value.toLowerCase()] || formatSnakeCase(value);
+	return map[value.toLowerCase()]?.() ?? formatSnakeCase(value);
 }
 
 export function formatPhase(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
-	const map: Record<string, string> = {
-		'triage': 'Triage',
-		'enrichment': 'Enrichment',
-		'analysis': 'Analysis',
-		'verdict': 'Verdict',
-		'human_review': 'Human Review',
-		'escalation': 'Escalation',
-		'closed': 'Closed',
+	const map: Record<string, () => string> = {
+		triage: m.phase_triage,
+		enrichment: m.phase_enrichment,
+		analysis: m.phase_analysis,
+		verdict: m.phase_verdict,
+		human_review: m.phase_human_review,
+		escalation: m.phase_escalation,
+		closed: m.phase_closed
 	};
 
-	return map[value.toLowerCase()] || formatSnakeCase(value);
+	return map[value.toLowerCase()]?.() ?? formatSnakeCase(value);
 }
 
 export function formatStatus(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
-	const map: Record<string, string> = {
-		'pending': 'Pending',
-		'in_progress': 'In Progress',
-		'paused': 'Paused',
-		'escalated': 'Escalated',
-		'auto_closed': 'Auto-Closed',
-		'rejected': 'Rejected',
-		'closed': 'Closed',
-		'cancelled': 'Cancelled',
+	const map: Record<string, () => string> = {
+		pending: m.st_pending,
+		in_progress: m.st_in_progress,
+		paused: m.st_paused,
+		escalated: m.st_escalated,
+		auto_closed: m.st_auto_closed,
+		rejected: m.st_rejected,
+		closed: m.st_closed,
+		cancelled: m.st_cancelled
 	};
 
-	return map[value.toLowerCase()] || formatSnakeCase(value);
+	return map[value.toLowerCase()]?.() ?? formatSnakeCase(value);
 }
 
 export function formatAction(value: string | null | undefined): string {
-	if (!value) return 'Unknown';
+	if (!value) return m.common_unknown();
 
-	const map: Record<string, string> = {
-		'INVESTIGATE': 'Investigate Further',
-		'CLOSE': 'Close Investigation',
-		'ESCALATE': 'Escalate to Incident',
-		'ENRICH': 'Enrich Data',
-		'WAIT': 'Wait for Input',
+	const map: Record<string, () => string> = {
+		INVESTIGATE: m.act_investigate,
+		CLOSE: m.act_close,
+		ESCALATE: m.act_escalate,
+		ENRICH: m.act_enrich,
+		WAIT: m.act_wait
 	};
 
-	return map[value.toUpperCase()] || formatSnakeCase(value);
+	return map[value.toUpperCase()]?.() ?? formatSnakeCase(value);
 }
 
 export function formatSnakeCase(value: string): string {
 	return value
 		.toLowerCase()
 		.replace(/_/g, ' ')
-		.replace(/\b\w/g, c => c.toUpperCase());
+		.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
@@ -133,10 +141,11 @@ export function formatPercent(value: number | null | undefined, decimals = 1): s
 
 export function formatConfidence(value: number | null | undefined): string {
 	if (value === null || value === undefined) return '-';
-	const pct = value * 100;
-	if (pct >= 90) return `${pct.toFixed(0)}% (Very High)`;
-	if (pct >= 70) return `${pct.toFixed(0)}% (High)`;
-	if (pct >= 50) return `${pct.toFixed(0)}% (Medium)`;
-	if (pct >= 30) return `${pct.toFixed(0)}% (Low)`;
-	return `${pct.toFixed(0)}% (Very Low)`;
+	const pct = (value * 100).toFixed(0);
+	const n = Number(pct);
+	if (n >= 90) return m.conf_very_high({ pct });
+	if (n >= 70) return m.conf_high({ pct });
+	if (n >= 50) return m.conf_medium({ pct });
+	if (n >= 30) return m.conf_low({ pct });
+	return m.conf_very_low({ pct });
 }

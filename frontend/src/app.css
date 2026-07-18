@@ -59,3 +59,22 @@
 	max-width: 100%;
 	text-align: center;
 }
+
+/* i18n (#52): CJK-capable font fallback. The theme stack is Latin-oriented;
+   without a CJK face Chinese renders as tofu on machines lacking implicit
+   fallbacks. System CJK faces first (PingFang on macOS, YaHei on Windows,
+   Noto on Linux) — bundling/subsetting a webfont is tracked in #56. */
+:root:lang(zh-CN) body,
+:lang(zh-CN) {
+	font-family:
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		'PingFang SC',
+		'Hiragino Sans GB',
+		'Microsoft YaHei',
+		'Noto Sans SC',
+		'Noto Sans CJK SC',
+		sans-serif;
+}
