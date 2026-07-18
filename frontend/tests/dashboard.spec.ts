@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { TENANT_ID, mockAuthMe } from './helpers';
 
 test.describe('Dashboard', () => {
 	test.beforeEach(async ({ page }) => {
+		// RBAC (#50): without a permissions-bearing identity the shell is empty.
+		// Pin a tenant: '/' renders the MSSP cross-tenant dashboard when unpinned,
+		// and these specs cover the tenant-scoped views.
+		await mockAuthMe(page, { current_tenant: TENANT_ID, current_tenant_slug: 'acme' });
 		// Mock API responses since backend may not be running
 		await page.route('**/api/metrics/overview', async (route) => {
 			await route.fulfill({
@@ -193,6 +198,7 @@ test.describe('Dashboard', () => {
 
 test.describe('Dashboard Error Handling', () => {
 	test('shows error message when API fails', async ({ page }) => {
+		await mockAuthMe(page, { current_tenant: TENANT_ID, current_tenant_slug: 'acme' });
 		// Mock API to return error
 		await page.route('**/api/metrics/overview', async (route) => {
 			await route.fulfill({

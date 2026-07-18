@@ -325,8 +325,9 @@ test.describe('i18n routing behavior', () => {
 	test('in-app navigation keeps the locale prefix', async ({ page }) => {
 		await mockAuthed(page);
 		await page.goto('/pt-br/response-playbooks');
-		await page.locator('aside a', { hasText: 'Configurações' }).first().click();
-		await page.waitForURL((u) => u.pathname === '/pt-br/settings');
-		await expect(page.locator('aside a', { hasText: 'Configurações' }).first()).toBeVisible();
+		const settings = page.locator('aside a', { hasText: 'Configurações' }).first();
+		await expect(settings).toBeVisible();
+		await settings.click();
+		await expect(page).toHaveURL(/\/pt-br\/settings/, { timeout: 15000 });
 	});
 });

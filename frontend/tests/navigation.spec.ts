@@ -1,33 +1,44 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { TENANT_ID, mockAuthMe } from './helpers';
+
+// Specific mocks only — a bare '**/api/**' catch-all also intercepts the vite
+// dev-module graph (/src/lib/api/...) and blanks the page (see helpers.ts).
+async function mockData(page: Page) {
+	await mockAuthMe(page, { current_tenant: TENANT_ID, current_tenant_slug: 'acme' });
+	const empty = {
+		items: [],
+		total: 0,
+		page: 1,
+		page_size: 20,
+		has_more: false
+	};
+	const overview = {
+		open_investigations: 0,
+		pending_reviews: 0,
+		avg_time_to_triage_seconds: null,
+		avg_time_to_verdict_seconds: null,
+		investigations_created_today: 0,
+		investigations_closed_today: 0,
+		escalations_today: 0,
+		auto_closed_today: 0,
+		malicious_observables_today: 0,
+		verdict_breakdown: {},
+		severity_breakdown: {}
+	};
+	const json = (body) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+	await page.route('**/api/metrics/overview*', (r) => r.fulfill(json(overview)));
+	await page.route('**/api/metrics/hourly*', (r) => r.fulfill(json({ metrics: [] })));
+	await page.route('**/api/investigations*', (r) => r.fulfill(json(empty)));
+	await page.route('**/api/review/pending*', (r) => r.fulfill(json(empty)));
+	await page.route('**/api/audit*', (r) => r.fulfill(json(empty)));
+	await page.route('**/api/events/stream*', (r) =>
+		r.fulfill({ status: 200, contentType: 'text/event-stream', body: '' })
+	);
+}
 
 test.describe('Navigation', () => {
 	test.beforeEach(async ({ page }) => {
-		// Mock all API endpoints to prevent errors
-		await page.route('**/api/**', async (route) => {
-			await route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({
-					items: [],
-					total: 0,
-					page: 1,
-					page_size: 20,
-					has_more: false,
-					open_investigations: 0,
-					pending_reviews: 0,
-					avg_time_to_triage_seconds: null,
-					avg_time_to_verdict_seconds: null,
-					investigations_created_today: 0,
-					investigations_closed_today: 0,
-					escalations_today: 0,
-					auto_closed_today: 0,
-					malicious_observables_today: 0,
-					verdict_breakdown: {},
-					severity_breakdown: {},
-					metrics: [],
-				}),
-			});
-		});
+		await mockData(page);
 	});
 
 	test('can navigate to dashboard', async ({ page }) => {
@@ -85,21 +96,7 @@ test.describe('Navigation', () => {
 
 test.describe('Page Structure', () => {
 	test.beforeEach(async ({ page }) => {
-		await page.route('**/api/**', async (route) => {
-			await route.fulfill({
-				status: 200,
-				contentType: 'application/json',
-				body: JSON.stringify({
-					items: [],
-					total: 0,
-					open_investigations: 0,
-					pending_reviews: 0,
-					verdict_breakdown: {},
-					severity_breakdown: {},
-					metrics: [],
-				}),
-			});
-		});
+		await mockData(page);
 	});
 
 	test('has app shell structure', async ({ page }) => {

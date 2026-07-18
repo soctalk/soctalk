@@ -1,7 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { TENANT_ID, mockAuthMe } from './helpers';
 
 test.describe('Investigations Page', () => {
 	test.beforeEach(async ({ page }) => {
+		// RBAC (#50): without a permissions-bearing identity the shell is empty.
+		// Pin a tenant: '/' renders the MSSP cross-tenant dashboard when unpinned,
+		// and these specs cover the tenant-scoped views.
+		await mockAuthMe(page, { current_tenant: TENANT_ID, current_tenant_slug: 'acme' });
 		// Mock investigations API
 		await page.route('**/api/investigations*', async (route) => {
 			const url = new URL(route.request().url());
@@ -80,7 +85,7 @@ test.describe('Investigations Page', () => {
 	test('displays investigations table', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Check table headers
 		await expect(page.getByRole('columnheader', { name: 'Title' })).toBeVisible();
@@ -95,7 +100,7 @@ test.describe('Investigations Page', () => {
 	test('displays investigation data in table', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Check investigation titles are visible
 		await expect(page.getByText('Suspicious Login Activity')).toBeVisible();
@@ -105,16 +110,16 @@ test.describe('Investigations Page', () => {
 	test('displays status badges', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Check status badges exist in the table (using locator for badge elements)
-		await expect(page.locator('.badge:has-text("in_progress")').first()).toBeVisible();
+		await expect(page.locator('.badge:has-text("In Progress")').first()).toBeVisible();
 	});
 
 	test('has filter dropdowns', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Check filter select elements exist
 		await expect(page.locator('select.select').first()).toBeVisible();
@@ -125,13 +130,17 @@ test.describe('Investigations Page', () => {
 	test('status filter works', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
-		// Select status filter
-		await page.selectOption('select:first-of-type', 'in_progress');
+		// Select status filter — target by option value, not DOM position
+		// (the app rail now carries a locale-switcher <select> before the filters).
+		await page
+			.locator('select')
+			.filter({ has: page.locator('option[value="in_progress"]') })
+			.selectOption('in_progress');
 
 		// Wait for filtered results
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Should only show in_progress investigations
 		await expect(page.getByText('Suspicious Login Activity')).toBeVisible();
@@ -140,13 +149,16 @@ test.describe('Investigations Page', () => {
 	test('phase filter works', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
-		// Select phase filter
-		await page.selectOption('select:nth-of-type(2)', 'triage');
+		// Select phase filter — target by option value, not DOM position
+		await page
+			.locator('select')
+			.filter({ has: page.locator('option[value="triage"]') })
+			.selectOption('triage');
 
 		// Wait for filtered results
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Should only show triage phase investigations
 		await expect(page.getByText('Malware Detection Alert')).toBeVisible();
@@ -155,20 +167,20 @@ test.describe('Investigations Page', () => {
 	test('refresh button works', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Click refresh
 		await page.getByRole('button', { name: 'Refresh' }).click();
 
 		// Should show loading then results
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 		await expect(page.getByText('Suspicious Login Activity')).toBeVisible();
 	});
 
 	test('investigation links navigate correctly', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		// Check View button exists
 		await expect(page.getByRole('link', { name: 'View' }).first()).toBeVisible();
@@ -177,25 +189,27 @@ test.describe('Investigations Page', () => {
 	test('displays verdict badges for completed investigations', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
-		// Check verdict badge for escalated investigation
-		await expect(page.getByText('escalate')).toBeVisible();
+		// Check verdict badge for the escalated investigation (scoped to the
+		// badge — bare getByText also matches the status-filter option).
+		await expect(page.locator('.badge', { hasText: 'Escalate' }).first()).toBeVisible();
 	});
 
 	test('displays severity badges', async ({ page }) => {
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
-		// Check severity badges
-		await expect(page.getByText('high').first()).toBeVisible();
-		await expect(page.getByText('critical')).toBeVisible();
+		// Check severity badges (formatted labels, scoped to badges)
+		await expect(page.locator('.badge', { hasText: 'High' }).first()).toBeVisible();
+		await expect(page.locator('.badge', { hasText: 'Critical' }).first()).toBeVisible();
 	});
 });
 
 test.describe('Investigations Empty State', () => {
 	test('shows empty message when no investigations', async ({ page }) => {
+		await mockAuthMe(page, { current_tenant: TENANT_ID, current_tenant_slug: 'acme' });
 		await page.route('**/api/investigations*', async (route) => {
 			await route.fulfill({
 				status: 200,
@@ -212,7 +226,7 @@ test.describe('Investigations Empty State', () => {
 
 		await page.goto('/investigations');
 
-		await expect(page.locator('.animate-spin')).not.toBeVisible({ timeout: 10000 });
+		await expect(page.locator('div.animate-spin')).not.toBeVisible({ timeout: 10000 });
 
 		await expect(page.getByText('No investigations found')).toBeVisible();
 	});

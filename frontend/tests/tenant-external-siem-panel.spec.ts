@@ -1,10 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
+import { msspAdminUser } from './helpers';
 
 /**
  * Tenant detail — "External SIEM" panel (feature tenant.external-siem.detail-panel).
  *
  * Covers:
- *  - the panel renders for a poc-profile tenant (it is profile-agnostic),
+ *  - the panel renders for a provided-profile tenant (BYO Wazuh; the only
+ *    profile that shows it),
  *  - the read view shows the masked GET .../external-siem fields,
  *  - the panel polls GET .../adapter-status and STOPS polling when the user
  *    navigates away (the page unmounts → the interval is cleared),
@@ -18,23 +20,19 @@ import { test, expect, type Page } from '@playwright/test';
 
 const TENANT_ID = '22222222-2222-2222-2222-222222222222';
 
-const MSSP_USER = {
-	user_id: '00000000-0000-0000-0000-000000000001',
-	email: 'admin@mssp.example',
-	user_type: 'mssp_admin',
-	role: 'mssp_admin',
-	tenant_id: null,
-	current_tenant: null
-};
+// RBAC (#50): panels gate on `permissions`, and user_type must be 'mssp'
+// (audience), not the role string.
+const MSSP_USER = msspAdminUser();
 
-// poc profile on purpose — the panel must be visible for ANY profile, not just
-// 'provided'.
+// 'provided' profile (BYO Wazuh) — the tenant detail page now renders the
+// External SIEM panel ONLY for provided tenants; poc/persistent hide it
+// (their SIEM is chart-managed, not customer-supplied).
 const TENANT = {
 	id: TENANT_ID,
 	slug: 'acme',
 	display_name: 'Acme Corp',
 	state: 'active',
-	profile: 'poc',
+	profile: 'provided',
 	created_at: '2026-01-01T00:00:00Z',
 	state_changed_at: '2026-01-01T00:00:00Z',
 	runtime: null
@@ -128,7 +126,7 @@ async function mockApi(page: Page): Promise<MockHandles> {
 }
 
 test.describe('Tenant detail — External SIEM panel', () => {
-	test('renders for a poc-profile tenant with the masked read fields', async ({ page }) => {
+	test('renders for a provided-profile tenant with the masked read fields', async ({ page }) => {
 		await mockApi(page);
 		await page.goto(`/tenants/${TENANT_ID}`);
 
