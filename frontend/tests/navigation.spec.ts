@@ -25,7 +25,7 @@ async function mockData(page: Page) {
 		verdict_breakdown: {},
 		severity_breakdown: {}
 	};
-	const json = (body) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+	const json = (body: unknown) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 	await page.route('**/api/metrics/overview*', (r) => r.fulfill(json(overview)));
 	await page.route('**/api/metrics/hourly*', (r) => r.fulfill(json({ metrics: [] })));
 	await page.route('**/api/investigations*', (r) => r.fulfill(json(empty)));
