@@ -124,7 +124,8 @@ def wait_ready(key: str, pod_id: str, url: str, vllm_key: str, timeout_s: int = 
             pass
         i += 1
         if i % 4 == 0:  # every ~60s, surface where the pod actually is
-            print(f"  [{int(time.time() - (deadline - timeout_s))}s] {_pod_status(key, pod_id)}", flush=True)
+            elapsed = int(time.time() - (deadline - timeout_s))
+            print(f"  [{elapsed}s] {_pod_status(key, pod_id)}", flush=True)
         time.sleep(15)
     raise TimeoutError(f"pod endpoint {url} not ready within {timeout_s}s")
 
