@@ -199,6 +199,15 @@ runsWorker:
   token: ""
   fastModel: ""       # optional override; falls back to llm.model
   reasoningModel: ""  # optional override; falls back to llm.model
+  # Concurrent in-flight investigations per worker process (issue #61). >1 lets
+  # a shared self-hosted vLLM/SGLang backend fill its continuous batch; keep at
+  # 1 for a per-tenant frontier-API worker. Bound it by the backend's max_inputs
+  # and available KV-cache/VRAM. Default 1 keeps the prior serial behaviour, and
+  # the rendered env is byte-identical to the pre-change chart at that default.
+  concurrency: 1
+  # Seconds to let in-flight runs finish on SIGTERM before cancelling stragglers
+  # (the server-side lease reaper then requeues any that were cancelled).
+  drainSeconds: 60
   # Declarative triage-policy files (issue #44): filename -> YAML content string.
   # Non-empty renders ConfigMap soctalk-triage-policies, mounts it read-only at
   # /etc/soctalk/triage-policies, sets SOCTALK_TRIAGE_POLICY_DIR, and stamps a

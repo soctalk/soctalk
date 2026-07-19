@@ -69,6 +69,18 @@ spec:
               {{- end }}
             - name: WORKER_TOKEN_PATH
               value: /run/secrets/runs-worker/token
+            {{- /*
+              Run-concurrency (issue #61): N in-flight investigations per process
+              so a shared self-hosted vLLM/SGLang backend fills its continuous
+              batch. Emitted only when >1 so the default (serial) render stays
+              byte-identical to the pre-change chart for --reuse-values upgrades.
+            */}}
+            {{- if gt (int (.Values.runsWorker.concurrency | default 1)) 1 }}
+            - name: WORKER_RUN_CONCURRENCY
+              value: {{ .Values.runsWorker.concurrency | quote }}
+            - name: WORKER_DRAIN_SECONDS
+              value: {{ .Values.runsWorker.drainSeconds | default 60 | quote }}
+            {{- end }}
             {{- if $tp }}
             - name: SOCTALK_TRIAGE_POLICY_DIR
               value: /etc/soctalk/triage-policies

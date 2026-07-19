@@ -356,6 +356,8 @@
         "token":          { "type": "string", "description": "Optional plaintext JWT used by the cross-cluster L2 path; chart materializes tokenSecretRef from this value when non-empty." },
         "fastModel":      { "type": "string" },
         "reasoningModel": { "type": "string" },
+        "concurrency": { "type": "integer", "minimum": 1, "description": "Concurrent in-flight investigations per runs-worker process (issue #61). >1 lets a shared self-hosted vLLM/SGLang backend fill its continuous batch (runs execute concurrently, each an independent claim under FOR UPDATE ... SKIP LOCKED). Bound by the backend's max_inputs and KV-cache/VRAM. Rendered as WORKER_RUN_CONCURRENCY only when >1, so the default (1) render is byte-identical to the pre-change chart." },
+        "drainSeconds": { "type": "integer", "minimum": 1, "description": "Seconds to let in-flight runs finish on SIGTERM before cancelling stragglers (the server-side lease reaper requeues any cancelled run). Rendered as WORKER_DRAIN_SECONDS only when concurrency >1." },
         "triagePolicies": {
           "type": "object",
           "description": "Declarative triage-policy files (issue #44): filename -> YAML content string. Rendered as ConfigMap soctalk-triage-policies, mounted read-only into the runs-worker, with SOCTALK_TRIAGE_POLICY_DIR pointing at the mount. Content is validated fail-closed by the worker's registry loader at startup (and again by render.py on the controller path); files default to status: shadow until explicitly activated. Empty map (default) renders nothing.",

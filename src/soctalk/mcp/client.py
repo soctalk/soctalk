@@ -5,6 +5,7 @@ Uses the official MCP Python SDK for reliable communication.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -51,6 +52,14 @@ class MCPClient:
         self._connected = False
         self._stdio_context = None
         self._session_context = None
+        # A single stdio ClientSession multiplexes one request/response stream
+        # and cannot be shared by concurrent callers: interleaved call_tool()
+        # coroutines corrupt the stream. The runs-worker now executes
+        # investigations concurrently (WORKER_RUN_CONCURRENCY), so serialize
+        # tool calls per client. Enrichment for a given integration serializes;
+        # LLM inference (never routed through MCP) stays concurrent, which is
+        # what fills vLLM/SGLang continuous batching.
+        self._call_lock = asyncio.Lock()
 
     @property
     def name(self) -> str:
@@ -214,7 +223,9 @@ class MCPClient:
         )
 
         try:
-            result = await self._session.call_tool(tool_name, arguments or {})
+            # Serialize concurrent callers on this session's single stdio stream.
+            async with self._call_lock:
+                result = await self._session.call_tool(tool_name, arguments or {})
 
             # Check for errors
             if result.isError:

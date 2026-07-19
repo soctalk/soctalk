@@ -515,12 +515,68 @@ async def _heartbeat_loop(
             logger.warning("heartbeat_failed run=%s err=%s", run_id, e)
 
 
+async def _post_complete(
+    client: httpx.AsyncClient, run_id: str, complete_payload: dict[str, Any]
+) -> None:
+    """POST the run completion, tolerant of transport blips and lost responses.
+
+    A transient failure on the complete POST must never crash the worker loop
+    (issue #61): with concurrent runs one dropped response would otherwise take
+    down a whole loop. A ``409`` always means "you no longer own this active
+    run" — either this lease already committed on a prior attempt whose response
+    was lost, or the lease expired and another worker took over. In both cases
+    the correct action is identical: stop touching the run, do not error. If the
+    server never committed, the lease reaper requeues the run.
+    """
+    token = _read_token()
+    url = f"{_api_url()}/api/internal/worker/runs/{run_id}/complete"
+    # ``findings``/``enrichments`` carry datetimes from the graph's final state;
+    # httpx's json= encoder can't serialize those, so stringify with default=str.
+    body = json.dumps(complete_payload, default=str)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    attempts = max(1, int(os.environ.get("WORKER_COMPLETE_RETRIES", "3")))
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = await client.post(url, headers=headers, content=body, timeout=15.0)
+        except Exception as e:  # noqa: BLE001 — transport error; may be pre- or post-commit
+            if attempt >= attempts:
+                logger.warning(
+                    "complete_unconfirmed run=%s err=%s "
+                    "(giving up; lease expiry requeues if uncommitted)",
+                    run_id,
+                    e,
+                )
+                return
+            await asyncio.sleep(min(2**attempt, 8))
+            continue
+        if resp.status_code == 409:
+            logger.info("complete_already_terminal run=%s (409, benign)", run_id)
+            return
+        if resp.status_code >= 400:
+            logger.warning(
+                "complete_failed run=%s status=%s body=%s",
+                run_id,
+                resp.status_code,
+                resp.text[:500],
+            )
+            return
+        logger.info(
+            "run_complete run=%s status=%s tokens=%d",
+            run_id,
+            complete_payload.get("status"),
+            int(complete_payload.get("tokens_used", 0)),
+        )
+        return
+
+
 async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
     from soctalk.graph.builder import build_secops_graph
 
     run_id = str(claim["run_id"])
     lease_id = str(claim["lease_id"])
-    token = _read_token()
 
     state = _build_state(claim)
     graph = build_secops_graph()
@@ -652,32 +708,7 @@ async def _run_one(client: httpx.AsyncClient, claim: dict[str, Any]) -> None:
         "findings": _verdict_findings(final),
         "enrichments": enrichments_payload,
     }
-    # ``findings``/``enrichments`` are built from the graph's final state,
-    # which carries datetime objects (Pydantic ``model_dump(mode="python")``
-    # keeps them as datetimes). httpx's ``json=`` encoder can't serialize
-    # those and the whole run crash-loops on "Object of type datetime is
-    # not JSON serializable" — most visible on the OpenAI-compatible path.
-    # Serialize here with ``default=str`` so any datetime is stringified.
-    resp = await client.post(
-        f"{_api_url()}/api/internal/worker/runs/{run_id}/complete",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        content=json.dumps(complete_payload, default=str),
-        timeout=15.0,
-    )
-    if resp.status_code >= 400:
-        logger.warning(
-            "complete_failed run=%s status=%s body=%s",
-            run_id,
-            resp.status_code,
-            resp.text[:500],
-        )
-    else:
-        logger.info(
-            "run_complete run=%s status=%s tokens=%d", run_id, status, used
-        )
+    await _post_complete(client, run_id, complete_payload)
 
 
 async def _claim_one(client: httpx.AsyncClient) -> dict[str, Any] | None:
@@ -697,9 +728,60 @@ async def _claim_one(client: httpx.AsyncClient) -> dict[str, Any] | None:
     return body if body else None
 
 
+async def _worker_loop(
+    client: httpx.AsyncClient,
+    stop: asyncio.Event,
+    idle_sleep: float,
+    busy_sleep: float,
+    slot: int,
+) -> None:
+    """One claim→run→complete loop. N of these run concurrently per process
+    (issue #61) so multiple investigations are in flight at once, which is what
+    fills a shared vLLM/SGLang backend's continuous batch. The claim endpoint is
+    concurrency-safe (FOR UPDATE ... SKIP LOCKED), so N loops never double-claim.
+
+    A single run's failure must never break the loop: it is caught here so the
+    slot keeps pulling work. Idle waits carry per-slot jitter so N loops don't
+    stampede the claim endpoint in lockstep when the queue is empty.
+    """
+    # Deterministic per-slot jitter (no RNG): stagger idle polls across slots.
+    jitter = (slot % 8) * 0.25
+    while not stop.is_set():
+        try:
+            claim = await _claim_one(client)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("claim_failed slot=%d err=%s", slot, e)
+            claim = None
+
+        if claim is None:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=idle_sleep + jitter)
+            except TimeoutError:
+                pass
+            continue
+
+        try:
+            await _run_one(client, claim)
+        except asyncio.CancelledError:
+            # Drain deadline exceeded: propagate so the run is cancelled and the
+            # server-side lease reaper requeues it. Do not swallow.
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.exception(
+                "run_one_failed slot=%d run=%s err=%s",
+                slot,
+                str(claim.get("run_id")),
+                e,
+            )
+        if busy_sleep > 0:
+            await asyncio.sleep(busy_sleep)
+
+
 async def main() -> int:
     idle_sleep = float(os.environ.get("WORKER_IDLE_SLEEP_SECONDS", "5"))
     busy_sleep = float(os.environ.get("WORKER_BUSY_SLEEP_SECONDS", "0"))
+    concurrency = max(1, int(os.environ.get("WORKER_RUN_CONCURRENCY", "1")))
+    drain_seconds = float(os.environ.get("WORKER_DRAIN_SECONDS", "60"))
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -707,7 +789,10 @@ async def main() -> int:
         loop.add_signal_handler(sig, stop.set)
 
     logger.info(
-        "runs_worker_start version=%s api=%s", VERSION, _api_url()
+        "runs_worker_start version=%s api=%s concurrency=%d",
+        VERSION,
+        _api_url(),
+        concurrency,
     )
 
     # Bind MCP clients so cortex_worker_node / misp_worker_node /
@@ -732,30 +817,43 @@ async def main() -> int:
     except Exception as e:  # noqa: BLE001
         logger.warning("mcp_bind_failed err=%s", e)
 
-    async with httpx.AsyncClient() as client:
-        while not stop.is_set():
-            try:
-                claim = await _claim_one(client)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("claim_failed err=%s", e)
-                claim = None
+    # Pool sized to concurrency so N loops' claims/heartbeats/completes don't
+    # serialize on the connection pool. Each run also spawns a heartbeat, so
+    # budget roughly 2 connections per slot plus headroom.
+    limits = httpx.Limits(
+        max_connections=max(10, concurrency * 2 + 4),
+        max_keepalive_connections=max(10, concurrency * 2 + 4),
+    )
+    async with httpx.AsyncClient(limits=limits) as client:
+        loops = [
+            asyncio.create_task(
+                _worker_loop(client, stop, idle_sleep, busy_sleep, slot),
+                name=f"worker-loop-{slot}",
+            )
+            for slot in range(concurrency)
+        ]
+        # Loops exit on their own once ``stop`` is set and their current run
+        # finishes — that is the graceful drain. Bound it: if a run outlives the
+        # drain deadline, cancel the stragglers and let lease expiry requeue.
+        await stop.wait()
+        logger.info("runs_worker_draining concurrency=%d timeout=%.0fs", concurrency, drain_seconds)
+        _done, pending = await asyncio.wait(loops, timeout=drain_seconds)
+        if pending:
+            logger.warning(
+                "runs_worker_drain_timeout cancelling=%d "
+                "(in-flight runs will be requeued by lease expiry)",
+                len(pending),
+            )
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
 
-            if claim is None:
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=idle_sleep)
-                except TimeoutError:
-                    pass
-                continue
-
-            await _run_one(client, claim)
-            if busy_sleep > 0:
-                await asyncio.sleep(busy_sleep)
     if mcp_bound:
         try:
-            from soctalk.mcp.bindings import unbind_clients
-            await unbind_clients()
+            from soctalk.mcp.bindings import cleanup_clients
+            await cleanup_clients()
         except Exception as e:  # noqa: BLE001
-            logger.warning("mcp_unbind_failed err=%s", e)
+            logger.warning("mcp_cleanup_failed err=%s", e)
     logger.info("runs_worker_stop")
     return 0
 
