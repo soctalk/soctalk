@@ -172,7 +172,7 @@ async def test_post_complete_retries_transport_error_then_succeeds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_complete_gives_up_quietly_after_retries(monkeypatch):
-    monkeypatch.setenv("WORKER_COMPLETE_RETRIES", "2")
+    monkeypatch.setenv("WORKER_COMPLETE_ATTEMPTS", "2")
     monkeypatch.setattr("soctalk.runs_worker.main.asyncio.sleep", _noop_sleep)
     client = _FakeClient(
         complete_result=[ConnectionError("x"), ConnectionError("y")]

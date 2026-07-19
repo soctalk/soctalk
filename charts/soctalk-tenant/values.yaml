@@ -206,7 +206,8 @@ runsWorker:
   # the rendered env is byte-identical to the pre-change chart at that default.
   concurrency: 1
   # Seconds to let in-flight runs finish on SIGTERM before cancelling stragglers
-  # (the server-side lease reaper then requeues any that were cancelled).
+  # (the server-side lease reaper then requeues any that were cancelled). Only
+  # rendered/applied when concurrency > 1; a serial worker uses the code default.
   drainSeconds: 60
   # Declarative triage-policy files (issue #44): filename -> YAML content string.
   # Non-empty renders ConfigMap soctalk-triage-policies, mounts it read-only at

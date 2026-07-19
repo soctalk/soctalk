@@ -537,7 +537,8 @@ async def _post_complete(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    attempts = max(1, int(os.environ.get("WORKER_COMPLETE_RETRIES", "3")))
+    # Total attempts (not retries-on-top-of-one), so 1 means "try once".
+    attempts = max(1, int(os.environ.get("WORKER_COMPLETE_ATTEMPTS", "3")))
     for attempt in range(1, attempts + 1):
         try:
             resp = await client.post(url, headers=headers, content=body, timeout=15.0)
@@ -553,7 +554,10 @@ async def _post_complete(
             await asyncio.sleep(min(2**attempt, 8))
             continue
         if resp.status_code == 409:
-            logger.info("complete_already_terminal run=%s (409, benign)", run_id)
+            # 409 = this worker no longer owns an active run: either it already
+            # committed (prior lost-response attempt) or the lease expired and
+            # another worker reclaimed it. Either way, stop; not an error.
+            logger.info("complete_not_owned run=%s (409, benign)", run_id)
             return
         if resp.status_code >= 400:
             logger.warning(
