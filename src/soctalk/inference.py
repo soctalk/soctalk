@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Generic, Protocol, TypeVar, cast
+from urllib.parse import urlsplit
 
 from langchain_core.messages import HumanMessage
 
@@ -695,27 +696,34 @@ def delivery_profile_for(resolved: ResolvedModel) -> DeliveryProfile:
     layers can reason about readiness and billing. The RunPod async-job backend
     is declared here but only driven in #64.
     """
-    base = _base_url_of(resolved).lower()
+    base = _base_url_of(resolved)
     engine = resolved.engine
-    served = engine in (ProviderEngine.VLLM, ProviderEngine.SGLANG,
-                        ProviderEngine.OPENAI_COMPATIBLE)
-    # A custom base_url means the request is not going to the canonical provider
-    # API. This is how a self-hosted endpoint is reached even with the default
-    # FRONTIER engine (provider=openai + OPENAI_BASE_URL, the #4 seam and the
-    # bench eval), so classify by the URL first and only fall to FRONTIER when
-    # there is no override or it points at the real provider host.
-    has_custom_base = bool(base) and not (
-        "api.openai.com" in base or "api.anthropic.com" in base
-    )
+    # Guided decoding (response_format JSON schema / EBNF) is only wired for vLLM
+    # and SGLang; a generic OpenAI-compatible gateway must not advertise it.
+    native_guided = engine in (ProviderEngine.VLLM, ProviderEngine.SGLANG)
 
-    if "modal.run" in base:
+    # Parse the URL rather than substring-match it: substrings would let
+    # api.openai.com.evil read as the real frontier, or a remote :11434 read as
+    # local Ollama. A custom host means the request is not going to the canonical
+    # provider API, which is how a self-hosted endpoint is reached even with the
+    # default FRONTIER engine (provider=openai + OPENAI_BASE_URL, the #4 seam).
+    host = ""
+    if base:
+        parts = urlsplit(base if "://" in base else f"http://{base}")
+        host = (parts.hostname or "").lower()
+    is_provider_host = host in ("api.openai.com", "api.anthropic.com")
+    has_custom_base = bool(host) and not is_provider_host
+
+    if host.endswith("proxy.runpod.net"):
+        kind = BackendKind.RUNPOD_POD          # always-on pod behind the proxy
+    elif host == "api.runpod.ai":
+        kind = BackendKind.RUNPOD_JOB          # serverless async-job endpoint (#64)
+    elif host.endswith(".modal.run"):
         kind = BackendKind.MODAL
-    elif "runpod" in base:
-        kind = BackendKind.RUNPOD_POD
-    elif ("localhost" in base or "127.0.0.1" in base
-          or ":11434" in base or "ollama" in base):
+    elif host in ("localhost", "127.0.0.1") or "ollama" in host:
         kind = BackendKind.OLLAMA
-    elif served or has_custom_base:
+    elif (engine in (ProviderEngine.VLLM, ProviderEngine.SGLANG,
+                     ProviderEngine.OPENAI_COMPATIBLE) or has_custom_base):
         kind = BackendKind.OPENAI_COMPAT
     else:
         kind = BackendKind.FRONTIER
@@ -743,8 +751,8 @@ def delivery_profile_for(resolved: ResolvedModel) -> DeliveryProfile:
     caps = CapabilitySet(
         tools=True,
         strict_json=True,
-        guided_json=served,
-        grammar=served,
+        guided_json=native_guided,
+        grammar=native_guided,
         streaming=True,
         prompt_cache=(resolved.provider == "anthropic"),
         batch_api=(kind == BackendKind.FRONTIER),

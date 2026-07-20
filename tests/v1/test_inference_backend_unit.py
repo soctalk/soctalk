@@ -95,6 +95,33 @@ def test_generic_openai_compatible():
     assert p.billing == "per_token"       # unknown gateway priced per-token
 
 
+def test_runpod_serverless_is_job_not_pod():
+    # api.runpod.ai is the serverless async-job endpoint (#64), which is
+    # scale-to-zero, not the always-on pod behind proxy.runpod.net.
+    p = delivery_profile_for(_resolved(
+        ProviderEngine.OPENAI_COMPATIBLE,
+        base_url="https://api.runpod.ai/v2/abc/openai/v1"))
+    assert p.kind is BackendKind.RUNPOD_JOB
+    assert p.readiness == "scale_to_zero" and p.billing == "per_gpu_second"
+
+
+def test_generic_openai_compat_does_not_advertise_guided():
+    # Guided decoding is only wired for vLLM/SGLang; a generic gateway must not
+    # claim it, or a capability consumer would pick a mode that then fails.
+    p = delivery_profile_for(_resolved(
+        ProviderEngine.OPENAI_COMPATIBLE, base_url="https://api.example.com/v1"))
+    assert p.capabilities.guided_json is False
+    assert p.capabilities.grammar is False
+
+
+def test_lookalike_host_is_not_frontier():
+    # Substring matching would read api.openai.com.evil as the real frontier.
+    p = delivery_profile_for(_resolved(
+        ProviderEngine.FRONTIER, provider="openai",
+        base_url="https://api.openai.com.evil.example/v1"))
+    assert p.kind is BackendKind.OPENAI_COMPAT
+
+
 def test_resolve_backend_carries_profile():
     cfg = LLMConfig(provider="anthropic", anthropic_api_key="ak")
     rb = resolve_backend(cfg, InferenceTier.REASONING)
