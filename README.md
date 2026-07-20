@@ -62,6 +62,22 @@ Then open `https://localhost:8443` and finish in the wizard. Other platforms
 **[Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm)** ·
 **[Downloads](https://soctalk.github.io/soctalk-docs/downloads)**.
 
+## Run an MSSP pilot
+
+When the single-box demo has shown you the loop,
+**[Launchpad](https://soctalk.github.io/soctalk-docs/launchpad)** takes you to
+a real multi-VM pilot: an MSSP control plane plus one or more customer
+tenants on your own infrastructure, joined over your Tailscale tailnet and
+installed from public sources. Driving it from the web console is about five
+minutes of form filling and 15 to 25 minutes of wall clock, most of it spent
+on downloads. The end state is the picture below: a fleet-scoped AI analyst
+answering questions across your pilot tenants. Prefer to understand every
+step before a tool runs it for you? The
+[do-it-yourself pilot](https://soctalk.github.io/soctalk-docs/mssp-pilot)
+walks the same install by hand.
+
+![Fleet-scoped chat answering a question across pilot tenants](docs/images/pilot-chat-mssp-reply.png)
+
 ## Features
 
 - **Two-tier LLM triage** — fast router + reasoning verdict, with Anthropic or any OpenAI-compatible provider
