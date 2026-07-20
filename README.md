@@ -31,8 +31,8 @@ me:
 There is no sales script and nothing to sign up for. Bring a technical
 question, a use case, or plain curiosity. Single-team deployments are as
 welcome as MSSP fleets. If a call is not your thing,
-[open an issue](https://github.com/soctalk/soctalk/issues) or write to
-hello@soctalk.ai.
+[open an issue](https://github.com/soctalk/soctalk/issues) or message me on
+Telegram: [@gbrigandi](https://t.me/gbrigandi).
 
 ## Try it in 5 minutes
 
