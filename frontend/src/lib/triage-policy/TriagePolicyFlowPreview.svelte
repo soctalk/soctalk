@@ -273,12 +273,24 @@
 <style>
 	.pb-flow :global(.svelte-flow) {
 		background: transparent;
+		/* Edge labels default to a white background (only darkened under a
+		   dark-mode class we don't set); pin the vars to theme surfaces so
+		   labels read on the dark canvas instead of as white boxes. Same fix
+		   as ResponseFlowPreview (d63445e). */
+		--xy-edge-label-background-color-default: rgb(var(--color-surface-700) / 1);
+		--xy-edge-label-color-default: rgb(var(--color-surface-100) / 1);
 	}
+	.pb-flow :global(.svelte-flow__edge-label) {
+		background: rgb(var(--color-surface-700) / 1);
+		color: rgb(var(--color-surface-100) / 1);
+		font-size: 9px;
+	}
+	/* Legacy SVG edge-label path, in case a build renders it that way. */
 	.pb-flow :global(.svelte-flow__edge-textbg) {
-		fill: rgb(var(--color-surface-800) / 1);
+		fill: rgb(var(--color-surface-700) / 1);
 	}
 	.pb-flow :global(.svelte-flow__edge-text) {
-		fill: rgb(var(--color-surface-200) / 1);
+		fill: rgb(var(--color-surface-100) / 1);
 		font-size: 9px;
 	}
 	/* Theme the zoom/pan controls for the dark UI — the library default is a
