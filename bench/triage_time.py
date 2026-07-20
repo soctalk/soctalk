@@ -33,14 +33,21 @@ from bench.run_bench import ENGINES, deploy, predownload, stop, wait_ready  # no
 GOLDEN = "evals/golden_alerts.yaml"
 
 
-def _count_cases() -> int:
+def _golden_path(golden: str) -> Path:
+    p = Path(golden)
+    return p if p.is_absolute() else REPO / golden
+
+
+def _count_cases(golden: str) -> int:
     import yaml
-    d = yaml.safe_load(open(REPO / GOLDEN))
+    d = yaml.safe_load(_golden_path(golden).read_text())
     cases = d.get("cases") if isinstance(d, dict) else d
     return len(cases) if hasattr(cases, "__len__") else 0
 
 
-def run_timed_eval(url: str, api_key: str, model: str, concurrency: int) -> None:
+def run_timed_eval(
+    url: str, api_key: str, model: str, concurrency: int, golden: str = GOLDEN,
+) -> None:
     # Same env recipe run_bench uses to point the eval at a served endpoint.
     env = {
         **os.environ,
@@ -69,7 +76,7 @@ def run_timed_eval(url: str, api_key: str, model: str, concurrency: int) -> None
     except Exception as e:  # noqa: BLE001
         print(f"  backend classification check failed: {e}", flush=True)
 
-    n_cases = _count_cases()
+    n_cases = _count_cases(golden)
     print(
         f"  triage eval: {n_cases} golden alerts, concurrency={concurrency}, model={model}",
         flush=True,
@@ -77,7 +84,7 @@ def run_timed_eval(url: str, api_key: str, model: str, concurrency: int) -> None
     t0 = time.monotonic()
     proc = subprocess.run(
         [sys.executable, "-m", "soctalk.evals.triage", "--json",
-         "--label", model, "--concurrency", str(concurrency), "--golden", GOLDEN],
+         "--label", model, "--concurrency", str(concurrency), "--golden", golden],
         env=env, capture_output=True, text=True, cwd=str(REPO),
     )
     wall = time.monotonic() - t0
@@ -100,6 +107,7 @@ def main() -> int:
     ap.add_argument("--provider", choices=["modal", "endpoint"], required=True)
     ap.add_argument("--model", default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
     ap.add_argument("--concurrency", type=int, default=8)
+    ap.add_argument("--golden", default=GOLDEN)
     # modal-only
     ap.add_argument("--engine", default="vllm", choices=list(ENGINES))
     ap.add_argument("--gpu", default="A10G")
@@ -113,7 +121,8 @@ def main() -> int:
         if not args.endpoint or not args.api_key:
             print("endpoint mode needs --endpoint and --api-key", file=sys.stderr)
             return 2
-        run_timed_eval(args.endpoint.rstrip("/"), args.api_key, args.model, args.concurrency)
+        run_timed_eval(args.endpoint.rstrip("/"), args.api_key, args.model,
+                       args.concurrency, args.golden)
         return 0
 
     # modal
@@ -126,7 +135,7 @@ def main() -> int:
     url = deploy(engine, args.model, api_key, gpu=args.gpu)
     try:
         wait_ready(engine, url, api_key)
-        run_timed_eval(url, api_key, args.model, args.concurrency)
+        run_timed_eval(url, api_key, args.model, args.concurrency, args.golden)
     finally:
         if not args.keep_up:
             stop(engine, args.model)
