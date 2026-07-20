@@ -14,7 +14,7 @@
 SocTalk turns raw Wazuh alerts into investigated, prioritized, and (when you
 allow it) auto-resolved cases. A two-tier LLM pipeline routes and reasons over
 each alert, a human-in-the-loop step keeps an analyst in control, and a built-in
-incident-response workflow records everything for audit and replay. And you can
+incident-response workflow records everything for audit. And you can
 just ask — a scope-aware chat answers questions about your SOC in plain English,
 across the whole MSSP fleet or scoped to a single tenant. Apache-2.0,
 Wazuh-powered, bring your own LLM, self-host anywhere.
@@ -70,10 +70,10 @@ hello@soctalk.ai.
 - **Continuous Wazuh polling** with correlation and prioritization into investigations
 - **Human-in-the-loop**: every AI escalation waits for an analyst decision in the dashboard review queue, recorded in an append-only audit log
 - **Triage policies**: no-code guardrails run by a deterministic interpreter; authored policies can only make triage stricter, never suppress a detection ([docs](https://soctalk.github.io/soctalk-docs/triage-policies))
-- **Response playbooks**: verdicts dispatch signed disposition envelopes to your SOAR webhook; containment actions are always analyst-approved proposals ([docs](https://soctalk.github.io/soctalk-docs/response-playbooks))
+- **Response playbooks**: final dispositions can dispatch signed disposition envelopes to your SOAR webhook; containment actions are always analyst-approved proposals ([docs](https://soctalk.github.io/soctalk-docs/response-playbooks))
 - **Built-in incident response** and case workflow; TheHive, Cortex, and MISP are optional integrations
 - **Service KPIs** — alert volume, time-to-verdict, time-to-review, and escalation rate, at both the MSSP (cross-tenant) and per-tenant level
-- **Event-sourced** for full auditability and replay, with a real-time dashboard
+- **Event-sourced**: investigations keep an append-only event history for audit, surfaced in the dashboard
 - **Multi-tenant** — isolated per-customer SOC stacks on k3s/k8s, Postgres row-level security, per-tenant LLM credentials and branding
 
 ## Multi-tenant (MSP / MSSP)
@@ -96,11 +96,11 @@ your own Wazuh stack, see **[soctalk.ai/compare](https://soctalk.ai/compare/)**.
 
 Full docs live at **[soctalk.github.io/soctalk-docs](https://soctalk.github.io/soctalk-docs/)**:
 
-- **Get started** — [Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm) · [Downloads](https://soctalk.github.io/soctalk-docs/downloads) · [Setup wizard](https://soctalk.github.io/soctalk-docs/setup-wizard) · [Production install](https://soctalk.github.io/soctalk-docs/install)
-- **Run on** — [Proxmox](https://soctalk.github.io/soctalk-docs/proxmox) · [AWS](https://soctalk.github.io/soctalk-docs/aws) · [Azure](https://soctalk.github.io/soctalk-docs/azure)
-- **Concepts** — [AI pipeline](https://soctalk.github.io/soctalk-docs/ai-pipeline) · [Triage policies](https://soctalk.github.io/soctalk-docs/triage-policies) · [Response playbooks](https://soctalk.github.io/soctalk-docs/response-playbooks) · [Tenant lifecycle](https://soctalk.github.io/soctalk-docs/tenant-lifecycle) · [Human review](https://soctalk.github.io/soctalk-docs/human-review)
-- **Guides** — [Multi-tenant Wazuh for MSSPs](https://soctalk.github.io/soctalk-docs/guides/multi-tenant-wazuh-mssp) · [AI triage for Wazuh alerts](https://soctalk.github.io/soctalk-docs/guides/ai-triage-wazuh-alerts) · [Onboarding a customer tenant](https://soctalk.github.io/soctalk-docs/guides/wazuh-tenant-onboarding) · [Open-source SOC stack](https://soctalk.github.io/soctalk-docs/guides/open-source-soc-stack)
-- **Reference** — [Architecture](https://soctalk.github.io/soctalk-docs/reference/architecture) · [Security model](https://soctalk.github.io/soctalk-docs/reference/security-model) · [REST API](https://soctalk.github.io/soctalk-docs/reference/api)
+- **Get started**: [Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm) · [Downloads](https://soctalk.github.io/soctalk-docs/downloads) · [Setup wizard](https://soctalk.github.io/soctalk-docs/setup-wizard) · [Production install](https://soctalk.github.io/soctalk-docs/install)
+- **Run on**: [Proxmox](https://soctalk.github.io/soctalk-docs/proxmox) · [AWS](https://soctalk.github.io/soctalk-docs/aws) · [Azure](https://soctalk.github.io/soctalk-docs/azure)
+- **Concepts**: [AI pipeline](https://soctalk.github.io/soctalk-docs/ai-pipeline) · [Triage policies](https://soctalk.github.io/soctalk-docs/triage-policies) · [Response playbooks](https://soctalk.github.io/soctalk-docs/response-playbooks) · [Tenant lifecycle](https://soctalk.github.io/soctalk-docs/tenant-lifecycle) · [Human review](https://soctalk.github.io/soctalk-docs/human-review)
+- **Guides**: [Multi-tenant Wazuh for MSSPs](https://soctalk.github.io/soctalk-docs/guides/multi-tenant-wazuh-mssp) · [AI triage for Wazuh alerts](https://soctalk.github.io/soctalk-docs/guides/ai-triage-wazuh-alerts) · [Onboarding a customer tenant](https://soctalk.github.io/soctalk-docs/guides/wazuh-tenant-onboarding) · [Open-source SOC stack](https://soctalk.github.io/soctalk-docs/guides/open-source-soc-stack)
+- **Reference**: [Architecture](https://soctalk.github.io/soctalk-docs/reference/architecture) · [Security model](https://soctalk.github.io/soctalk-docs/reference/security-model) · [REST API](https://soctalk.github.io/soctalk-docs/reference/api)
 
 Docs and the product site are available in seven languages: English,
 Português, Español, 简体中文, Français, Deutsch, Italiano.
