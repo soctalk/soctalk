@@ -70,13 +70,13 @@ a real multi-VM pilot: an MSSP control plane plus one or more customer
 tenants on your own infrastructure, joined over your Tailscale tailnet and
 installed from public sources. Driving it from the web console is about five
 minutes of form filling and 15 to 25 minutes of wall clock, most of it spent
-on downloads. The end state is the picture below: a fleet-scoped AI analyst
-answering questions across your pilot tenants. Prefer to understand every
-step before a tool runs it for you? The
+on downloads. The end state is a fleet-scoped AI analyst answering
+questions across your pilot tenants. Prefer to understand every step before
+a tool runs it for you? The
 [do-it-yourself pilot](https://soctalk.github.io/soctalk-docs/mssp-pilot)
 walks the same install by hand.
 
-![Fleet-scoped chat answering a question across pilot tenants](docs/images/pilot-chat-mssp-reply.png)
+![A Launchpad run provisioning the MSSP and a tenant VM, with the phase tracker and live event stream](docs/images/launchpad-ui-run.png)
 
 ## Features
 
