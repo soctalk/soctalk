@@ -76,6 +76,36 @@ hello@soctalk.ai.
 - **Event-sourced**: investigations keep an append-only event history for audit, surfaced in the dashboard
 - **Multi-tenant** — isolated per-customer SOC stacks on k3s/k8s, Postgres row-level security, per-tenant LLM credentials and branding
 
+## No-code editors for triage and response
+
+Both governance surfaces ship with visual editors. Policies and playbooks are
+data run by deterministic interpreters, so what you author is exactly what
+executes, and both start in shadow mode so you can watch them against live
+traffic before anything changes behavior.
+
+### Triage policy editor
+
+Build guardrails from typed conditions, watch the document project onto the
+triage pipeline as a live decision flow, and test a sample verdict in the
+built-in simulator before you ship. Authored policies can only make triage
+stricter: overrides raise decisions, interrupts hold them for human review,
+and suppression is not expressible.
+**[Triage policies docs](https://soctalk.github.io/soctalk-docs/triage-policies)**
+
+![Triage policy editor with guardrails, live decision flow, and simulator](docs/images/triage-policy-tutorial/11-complete.png)
+
+### Response playbook editor
+
+Bind final dispositions to vetted capabilities: annotate the investigation,
+deliver a signed disposition envelope to your SOAR webhook, or propose an
+external action such as isolating an endpoint. Playbooks match on Wazuh rule
+groups and ATT&CK techniques or tactics, the flow view shows what fires on
+close and on escalate, and gated actions always wait for an analyst before
+they execute.
+**[Response playbooks docs](https://soctalk.github.io/soctalk-docs/response-playbooks)**
+
+![Response playbook editor with ATT&CK matchers, gated external action, and live flow](docs/images/response-playbook-editor.png)
+
 ## Multi-tenant (MSP / MSSP)
 
 ![MSSP Dashboard](docs/images/soctalk-mssp-dashboard.png)
