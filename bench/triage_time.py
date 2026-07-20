@@ -54,6 +54,21 @@ def run_timed_eval(url: str, api_key: str, model: str, concurrency: int) -> None
         "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_BASE_URL": "",
     }
+    # Prove the #63 abstraction classifies the live endpoint before the eval runs
+    # through it (ainvoke_request -> resolve_backend -> select_backend -> dispatch).
+    try:
+        from soctalk.config import LLMConfig
+        from soctalk.inference import InferenceTier, resolve_backend
+        _cfg = LLMConfig(provider="openai", openai_api_key=api_key,
+                         openai_base_url=f"{url}/v1", fast_model=model,
+                         reasoning_model=model)
+        _rb = resolve_backend(_cfg, InferenceTier.REASONING)
+        print(f"  backend classified: kind={_rb.profile.kind.value} "
+              f"billing={_rb.profile.billing} readiness={_rb.profile.readiness}",
+              flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"  backend classification check failed: {e}", flush=True)
+
     n_cases = _count_cases()
     print(
         f"  triage eval: {n_cases} golden alerts, concurrency={concurrency}, model={model}",

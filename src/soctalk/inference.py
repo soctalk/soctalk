@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from langchain_core.messages import HumanMessage
 
@@ -141,6 +141,73 @@ class UsageDelta:
     output_tokens: int
 
 
+# ------------------------------------------------ model-consumption abstraction
+# (#63) A backend is a delivery model, not just a wire protocol. The Delivery
+# profile declares the per-backend semantics the scheduler and cost layers need
+# (readiness, scaling, billing, batching, capabilities) so InferenceRequest stays
+# uniform. Frontier and OpenAI-compatible (Modal served, RunPod pod, Ollama) run
+# through the same sync-chat driver here; the RunPod async-job driver and the
+# serverless scheduling/cost work land in #64.
+
+
+class BackendKind(str, Enum):
+    FRONTIER = "frontier"            # hosted Anthropic / OpenAI
+    OPENAI_COMPAT = "openai_compat"  # generic OpenAI-compatible gateway
+    MODAL = "modal"                  # self-deployed serverless GPU (OpenAI-compat)
+    RUNPOD_POD = "runpod_pod"        # always-on RunPod VM (OpenAI-compat)
+    RUNPOD_JOB = "runpod_job"        # RunPod serverless async-job API (#64)
+    OLLAMA = "ollama"                # local single-node
+
+
+@dataclass(frozen=True)
+class CapabilitySet:
+    tools: bool
+    strict_json: bool
+    guided_json: bool
+    grammar: bool
+    streaming: bool
+    prompt_cache: bool
+    batch_api: bool
+
+
+@dataclass(frozen=True)
+class DeliveryProfile:
+    backend_id: str
+    kind: BackendKind
+    invocation: str   # sync_chat | async_job | batch_api
+    readiness: str    # warm | scale_to_zero | local_load
+    lifecycle: str    # managed | self_deployed | local
+    scaling: str      # provider | fixed | scale_to_zero | single_instance
+    billing: str      # per_token | per_gpu_second | free
+    batching: str     # provider_managed | continuous_worker | none
+    capabilities: CapabilitySet
+
+
+@dataclass(frozen=True)
+class UsageRecord:
+    """Backend-agnostic usage/cost record (#63). Tokens are always populated;
+    the timing and GPU-second fields are filled by the serverless drivers in
+    #64 and stay None on the sync-chat path."""
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    backend_id: str
+    backend_kind: str
+    provider_job_id: str | None = None
+    queue_seconds: float | None = None
+    cold_start_seconds: float | None = None
+    compute_seconds: float | None = None
+    billable_seconds: float | None = None
+    estimated_dollars: float | None = None
+
+
+@dataclass(frozen=True)
+class ResolvedBackend:
+    resolved: ResolvedModel
+    profile: DeliveryProfile
+
+
 @dataclass
 class InferenceResult(Generic[T]):
     parsed: T | None
@@ -151,6 +218,8 @@ class InferenceResult(Generic[T]):
     resolved: ResolvedModel
     attempts: int
     parsing_error: str | None = None
+    # #63: richer, backend-tagged usage; None on legacy call paths.
+    usage_record: UsageRecord | None = None
 
 
 # ------------------------------------------------------------- tier resolution
@@ -523,26 +592,17 @@ async def _invoke_guided(
     )
 
 
-async def ainvoke_request(
-    req: InferenceRequest, *, cfg: LLMConfig,
-) -> InferenceResult:
-    """Execute an InferenceRequest through the single seam.
+async def _dispatch(
+    req: InferenceRequest, resolved: ResolvedModel, mode: DecodingMode,
+) -> InferenceResult[Any]:
+    """Invoke a resolved backend for a resolved decoding mode.
 
-    Resolves tier -> provider/model/engine/decoding, constructs the model,
-    builds prompt-cache-aware messages, applies the resolved decoding mode,
-    invokes (with the schema-validation retry when constrained), and funnels
-    every raw response through budget.track once.
+    This is the provider-facing dispatch: it constructs the model, builds
+    prompt-cache-aware messages, applies the decoding mode, invokes (with the
+    schema-validation retry when constrained), and funnels every raw response
+    through budget.track once. Tier resolution, mode resolution, and backend
+    selection happen in ainvoke_request (#63); behaviour here is unchanged.
     """
-    resolved = resolve_tier(cfg, req.tier, model_override=req.model_override)
-    # An explicit per-request mode wins; otherwise fall back to the tier's
-    # configured default_decoding_mode (carried on resolved) before AUTO.
-    requested_mode = req.decoding_mode
-    if requested_mode == DecodingMode.AUTO and resolved.decoding_mode != DecodingMode.AUTO:
-        requested_mode = resolved.decoding_mode
-    mode = resolve_decoding_mode(
-        requested_mode, engine=resolved.engine, provider=resolved.provider,
-        has_schema=req.output_schema is not None, has_grammar=req.grammar is not None,
-    )
     # Served-engine native guided decoding (SGLang / vLLM): the engine enforces
     # a JSON schema or EBNF grammar at decode time. Dispatched separately from
     # the frontier tool_use / json_schema_strict path below.
@@ -616,10 +676,172 @@ async def ainvoke_request(
     )
 
 
+# ------------------------------------------------ backend resolution + drivers
+
+
+def _base_url_of(resolved: ResolvedModel) -> str:
+    cfg = resolved.llm_config
+    if resolved.provider == "anthropic":
+        return cfg.anthropic_base_url or ""
+    return cfg.openai_base_url or ""
+
+
+def delivery_profile_for(resolved: ResolvedModel) -> DeliveryProfile:
+    """Classify a resolved tier into a DeliveryProfile (#63).
+
+    Frontier is warm/managed/per-token. Served engines (vLLM/SGLang) and generic
+    OpenAI-compatible endpoints are self-deployed; the concrete backend (Modal,
+    RunPod pod, Ollama) is inferred from the base URL so the cost and scheduling
+    layers can reason about readiness and billing. The RunPod async-job backend
+    is declared here but only driven in #64.
+    """
+    base = _base_url_of(resolved).lower()
+    engine = resolved.engine
+    served = engine in (ProviderEngine.VLLM, ProviderEngine.SGLANG,
+                        ProviderEngine.OPENAI_COMPATIBLE)
+    # A custom base_url means the request is not going to the canonical provider
+    # API. This is how a self-hosted endpoint is reached even with the default
+    # FRONTIER engine (provider=openai + OPENAI_BASE_URL, the #4 seam and the
+    # bench eval), so classify by the URL first and only fall to FRONTIER when
+    # there is no override or it points at the real provider host.
+    has_custom_base = bool(base) and not (
+        "api.openai.com" in base or "api.anthropic.com" in base
+    )
+
+    if "modal.run" in base:
+        kind = BackendKind.MODAL
+    elif "runpod" in base:
+        kind = BackendKind.RUNPOD_POD
+    elif ("localhost" in base or "127.0.0.1" in base
+          or ":11434" in base or "ollama" in base):
+        kind = BackendKind.OLLAMA
+    elif served or has_custom_base:
+        kind = BackendKind.OPENAI_COMPAT
+    else:
+        kind = BackendKind.FRONTIER
+
+    if kind == BackendKind.FRONTIER:
+        readiness, lifecycle, scaling, billing, batching = (
+            "warm", "managed", "provider", "per_token", "provider_managed")
+    elif kind == BackendKind.OLLAMA:
+        readiness, lifecycle, scaling, billing, batching = (
+            "local_load", "local", "single_instance", "free", "continuous_worker")
+    elif kind == BackendKind.MODAL:
+        readiness, lifecycle, scaling, billing, batching = (
+            "scale_to_zero", "self_deployed", "scale_to_zero", "per_gpu_second",
+            "continuous_worker")
+    else:  # RUNPOD_POD / RUNPOD_JOB / OPENAI_COMPAT
+        readiness = "warm" if kind == BackendKind.RUNPOD_POD else "scale_to_zero"
+        lifecycle = "self_deployed"
+        scaling = ("single_instance" if kind == BackendKind.RUNPOD_POD
+                   else "scale_to_zero")
+        billing = ("per_gpu_second"
+                   if kind in (BackendKind.RUNPOD_POD, BackendKind.RUNPOD_JOB)
+                   else "per_token")
+        batching = "continuous_worker"
+
+    caps = CapabilitySet(
+        tools=True,
+        strict_json=True,
+        guided_json=served,
+        grammar=served,
+        streaming=True,
+        prompt_cache=(resolved.provider == "anthropic"),
+        batch_api=(kind == BackendKind.FRONTIER),
+    )
+    return DeliveryProfile(
+        backend_id=f"{kind.value}:{resolved.model}",
+        kind=kind, invocation="sync_chat", readiness=readiness,
+        lifecycle=lifecycle, scaling=scaling, billing=billing,
+        batching=batching, capabilities=caps,
+    )
+
+
+def resolve_backend(
+    cfg: LLMConfig, tier: InferenceTier, *, model_override: str | None = None,
+) -> ResolvedBackend:
+    """resolve_tier plus a DeliveryProfile (#63). The uniform envelope stays
+    InferenceRequest; the profile carries the per-backend semantics."""
+    resolved = resolve_tier(cfg, tier, model_override=model_override)
+    return ResolvedBackend(resolved=resolved, profile=delivery_profile_for(resolved))
+
+
+class InferenceBackend(Protocol):
+    profile: DeliveryProfile
+
+    async def invoke(
+        self, req: InferenceRequest, resolved: ResolvedModel, mode: DecodingMode,
+    ) -> InferenceResult[Any]: ...
+
+
+class SyncChatBackend:
+    """Synchronous request/response driver over the OpenAI/Anthropic wire:
+    frontier, generic OpenAI-compatible, Modal served endpoints, RunPod pods, and
+    Ollama. All delegate to the shared _dispatch, so behaviour is identical to the
+    pre-#63 path; the driver carries the profile and gives #64's async-job driver
+    a seam to slot beside."""
+
+    def __init__(self, profile: DeliveryProfile) -> None:
+        self.profile = profile
+
+    async def invoke(
+        self, req: InferenceRequest, resolved: ResolvedModel, mode: DecodingMode,
+    ) -> InferenceResult[Any]:
+        return await _dispatch(req, resolved, mode)
+
+
+def select_backend(rb: ResolvedBackend) -> InferenceBackend:
+    """Pick the driver for a resolved backend. Every kind uses SyncChatBackend
+    today; #64 registers an async-job driver for kind == RUNPOD_JOB."""
+    return SyncChatBackend(rb.profile)
+
+
+def _usage_record(result: InferenceResult, profile: DeliveryProfile) -> UsageRecord:
+    return UsageRecord(
+        input_tokens=result.usage.input_tokens,
+        output_tokens=result.usage.output_tokens,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        backend_id=profile.backend_id,
+        backend_kind=profile.kind.value,
+    )
+
+
+async def ainvoke_request(
+    req: InferenceRequest, *, cfg: LLMConfig,
+) -> InferenceResult[Any]:
+    """Execute an InferenceRequest through the single seam (#63).
+
+    Resolves the tier to a backend (provider/model/engine/decoding plus a
+    DeliveryProfile), resolves the decoding mode, selects the backend driver,
+    invokes, and tags the result with a backend-aware UsageRecord. The frontier
+    and served paths are unchanged; the abstraction adds the profile, the driver
+    seam, and the usage record.
+    """
+    rb = resolve_backend(cfg, req.tier, model_override=req.model_override)
+    resolved = rb.resolved
+    # An explicit per-request mode wins; otherwise fall back to the tier's
+    # configured default_decoding_mode (carried on resolved) before AUTO.
+    requested_mode = req.decoding_mode
+    if requested_mode == DecodingMode.AUTO and resolved.decoding_mode != DecodingMode.AUTO:
+        requested_mode = resolved.decoding_mode
+    mode = resolve_decoding_mode(
+        requested_mode, engine=resolved.engine, provider=resolved.provider,
+        has_schema=req.output_schema is not None, has_grammar=req.grammar is not None,
+    )
+    backend = select_backend(rb)
+    result = await backend.invoke(req, resolved, mode)
+    result.usage_record = _usage_record(result, rb.profile)
+    return result
+
+
 __all__ = [
     "InferenceTier", "ProviderEngine", "DecodingMode", "ExtractionPolicy",
     "SamplingParams", "ToolSpec", "InferenceAccounting", "InferenceRequest",
     "ResolvedModel", "UsageDelta", "InferenceResult",
+    "BackendKind", "CapabilitySet", "DeliveryProfile", "UsageRecord",
+    "ResolvedBackend", "InferenceBackend", "SyncChatBackend",
     "resolve_tier", "resolve_tier_sampling", "resolve_decoding_mode",
+    "resolve_backend", "delivery_profile_for", "select_backend",
     "guided_request_kwargs", "ainvoke_request",
 ]
