@@ -19,6 +19,21 @@ just ask — a scope-aware chat answers questions about your SOC in plain Englis
 across the whole MSSP fleet or scoped to a single tenant. Apache-2.0,
 Wazuh-powered, bring your own LLM, self-host anywhere.
 
+## Talk with the maintainer
+
+I'm Gianluca, and I build SocTalk. If you're evaluating it for your own team
+or for your customers, hit a wall in the setup wizard, want a second opinion
+on an architecture, or are thinking about contributing, book 30 minutes with
+me:
+
+**[calendly.com/gianluca_brigandi/soctalk-adopter-intro](https://calendly.com/gianluca_brigandi/soctalk-adopter-intro)**
+
+There is no sales script and nothing to sign up for. Bring a technical
+question, a use case, or plain curiosity. Single-team deployments are as
+welcome as MSSP fleets. If a call is not your thing,
+[open an issue](https://github.com/soctalk/soctalk/issues) or write to
+hello@soctalk.ai.
+
 ## Try it in 5 minutes
 
 The demo VM is **batteries-included** — Ubuntu, K3s, the SocTalk charts, and a
@@ -46,21 +61,6 @@ Then open `https://localhost:8443` and finish in the wizard. Other platforms
 (VMware, Hyper-V, Proxmox, AWS, Azure) and the full walkthrough:
 **[Quickstart](https://soctalk.github.io/soctalk-docs/quickstart-vm)** ·
 **[Downloads](https://soctalk.github.io/soctalk-docs/downloads)**.
-
-## Talk with the maintainer
-
-I'm Gianluca, and I build SocTalk. If you're evaluating it for your own team
-or for your customers, hit a wall in the setup wizard, want a second opinion
-on an architecture, or are thinking about contributing, book 30 minutes with
-me:
-
-**[calendly.com/gianluca_brigandi/soctalk-adopter-intro](https://calendly.com/gianluca_brigandi/soctalk-adopter-intro)**
-
-There is no sales script and nothing to sign up for. Bring a technical
-question, a use case, or plain curiosity. Single-team deployments are as
-welcome as MSSP fleets. If a call is not your thing,
-[open an issue](https://github.com/soctalk/soctalk/issues) or write to
-hello@soctalk.ai.
 
 ## Features
 
