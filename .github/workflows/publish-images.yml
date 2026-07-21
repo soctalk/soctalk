@@ -1,17 +1,20 @@
 name: Publish Images and Charts
 
-# Builds and publishes:
-#   - Four container images at ghcr.io/soctalk/soctalk-*
-#     tagged `latest` + short SHA (+ release version on `v*` tags).
-#   - Three Helm charts (soctalk-system, soctalk-tenant, wazuh) as OCI
-#     artifacts at ghcr.io/soctalk/charts/<chart>, tagged with the
+# Continuous publish on main. Builds and publishes:
+#   - Five container images at ghcr.io/soctalk/soctalk-* tagged `latest`
+#     + short SHA. Versioned (X.Y.Z) release images are cut separately by
+#     `cut-k8s-release.yml`.
+#   - Four Helm charts (soctalk-system, soctalk-tenant, wazuh, linux-ep)
+#     as OCI artifacts at ghcr.io/soctalk/charts/<chart>, tagged with the
 #     Chart.yaml version. Helm OCI doesn't have a `latest` tag — to
 #     publish a new chart version, bump `version:` in Chart.yaml.
 #
 # Triggered on:
-#   - push to main         → publishes images (charts only if Chart.yaml version is new)
-#   - push of a `v*` tag   → adds the release version as an image tag
+#   - push to main         → publishes `latest`+sha images (charts only if Chart.yaml version is new)
 #   - workflow_dispatch    → manual button; useful for the first publish
+#
+# Versioned releases (images + charts + GitHub Release): use the
+# `cut-k8s-release.yml` action. Demo VM images: `build-packer-images.yml`.
 #
 # First-time setup: after the first successful run, flip each ghcr package
 # to public visibility at https://github.com/orgs/soctalk/packages
@@ -20,7 +23,12 @@ name: Publish Images and Charts
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # Versioned releases (X.Y.Z-tagged images + charts + GitHub Release)
+    # are cut by the dedicated `cut-k8s-release.yml` action, NOT by a tag
+    # push here — so cutting a k8s release stays decoupled from the Packer
+    # VM build. This workflow only publishes the moving `latest` + short-
+    # sha images and the current Chart.yaml chart versions on every main
+    # push (which is what auto-updates demo via deploy-demo.yml).
     # Skip image rebuilds when the change touches only docs, tests, or
     # the soctalk-docs site. Saves CI minutes and avoids re-publishing
     # the same image bits on a doc tweak.
@@ -40,7 +48,7 @@ on:
         default: ""
 
 permissions:
-  contents: write   # needed by the ``release`` job to create the GH Release
+  contents: read
   packages: write
 
 concurrency:
@@ -94,10 +102,6 @@ jobs:
           image="ghcr.io/soctalk/${{ matrix.image }}"
           short_sha="${GITHUB_SHA::7}"
           tags=("$image:latest" "$image:$short_sha")
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            ver="${GITHUB_REF#refs/tags/v}"
-            tags+=("$image:$ver")
-          fi
           if [[ -n "${{ inputs.tag }}" ]]; then
             tags+=("$image:${{ inputs.tag }}")
           fi
@@ -165,82 +169,4 @@ jobs:
             helm push "$tgz" oci://ghcr.io/soctalk/charts
             echo "::endgroup::"
           done
-
-  release:
-    # Cuts a GitHub Release for every ``v*`` tag push, after the image
-    # matrix + chart push both succeed. Without this the tag exists on
-    # GitHub and the images ship to ghcr.io, but ``gh release view`` is
-    # empty and the /releases page has no entry — confusing for anyone
-    # who lands there expecting the published artifact manifest. Body
-    # lists each image's pull ref + the chart OCI refs at this version
-    # so consumers don't have to grep `ghcr.io` manually.
-    name: GitHub Release
-    needs: [build, charts]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so release notes can diff vs prior tag
-
-      - name: Compose release body
-        id: body
-        run: |
-          set -euo pipefail
-          ver="${GITHUB_REF#refs/tags/v}"
-
-          # Previous v* tag for the auto-generated change log range.
-          prev_tag="$(
-            git tag -l 'v*' --sort=-v:refname \
-              | grep -v "^v${ver}\$" \
-              | head -n1 \
-            || true
-          )"
-
-          {
-            echo "## Container images"
-            echo
-            echo "All published to \`ghcr.io/soctalk\` and tagged \`${ver}\`, \`<short-sha>\`, and \`latest\`."
-            echo
-            for img in soctalk-api soctalk-app-ui soctalk-adapter soctalk-orchestrator soctalk-linux-ep; do
-              echo "- \`ghcr.io/soctalk/${img}:${ver}\`"
-            done
-            echo
-            echo "## Helm charts (OCI)"
-            echo
-            echo "Pulled via \`helm pull oci://ghcr.io/soctalk/charts/<chart> --version <ver>\`."
-            echo
-            for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
-              chart_ver="$(grep -E '^version:' "charts/${chart}/Chart.yaml" | awk '{print $2}')"
-              echo "- \`oci://ghcr.io/soctalk/charts/${chart}\` @ \`${chart_ver}\`"
-            done
-            echo
-            if [[ -n "${prev_tag}" ]]; then
-              echo "## Changes since ${prev_tag}"
-              echo
-              git log --no-merges --pretty=format:'- %s (%h)' "${prev_tag}..v${ver}" \
-                | head -n 200
-              echo
-            fi
-          } > body.md
-          echo "path=body.md" >> "$GITHUB_OUTPUT"
-
-      - name: Create / update GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          ver="${GITHUB_REF#refs/tags/v}"
-          # Idempotent: ``gh release create`` errors if the release
-          # already exists, so fall back to ``edit`` to refresh the
-          # body when the tag is re-pushed or the workflow is replayed.
-          if gh release view "v${ver}" --json tagName >/dev/null 2>&1; then
-            gh release edit "v${ver}" \
-              --title "v${ver}" \
-              --notes-file body.md
-          else
-            gh release create "v${ver}" \
-              --title "v${ver}" \
-              --notes-file body.md
-          fi
 

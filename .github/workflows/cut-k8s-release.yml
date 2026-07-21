@@ -1,0 +1,214 @@
+name: Cut k8s Release
+
+# Cuts a k3s/k8s release — the container images + Helm charts + GitHub
+# Release — WITHOUT building demo VM images. This is the deliberate
+# "publish the Kubernetes artifacts" button, decoupled from the (heavy)
+# Packer VM build so you can cut and validate the k8s release on demo
+# first, then build VM images separately (see build-packer-images.yml,
+# now dispatch-only).
+#
+# Flow:
+#   1. Bump all version strings to X.Y.Z on main (charts, install.sh,
+#      package metadata) and let publish-images.yml publish the moving
+#      `latest` images + the X.Y.Z charts on that push.
+#   2. Run this action with version = X.Y.Z. It re-builds the images from
+#      the current ref and tags them `X.Y.Z` (the immutable release tag),
+#      re-pushes the charts (idempotent), and creates tag vX.Y.Z + the
+#      GitHub Release.
+#   3. Once demo (which tracks `latest`) looks good, run
+#      build-packer-images.yml with the same version to attach VM images.
+#
+# Dispatch-only on purpose: creating the vX.Y.Z tag here must not
+# re-trigger a tag-driven build (no infinite loop), and a release is a
+# deliberate human action, not a side effect of pushing a tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, no leading v (e.g. 0.2.0). Must match charts/soctalk-system/Chart.yaml."
+        required: true
+      create_release:
+        description: "Create the vX.Y.Z git tag + GitHub Release."
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # create the git tag + GitHub Release
+  packages: write   # push images + charts to ghcr.io
+
+concurrency:
+  group: cut-k8s-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    # Fail fast if the requested version doesn't match what the charts
+    # actually declare — a mismatched cut would publish images tagged
+    # X.Y.Z next to a chart that references a different version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Chart version matches requested version
+        run: |
+          set -euo pipefail
+          want="${{ inputs.version }}"
+          have="$(awk '/^version:/ {print $2; exit}' charts/soctalk-system/Chart.yaml)"
+          echo "requested=$want  soctalk-system Chart.yaml=$have"
+          if [[ "$want" != "$have" ]]; then
+            echo "::error::version mismatch — bump charts/soctalk-system/Chart.yaml to $want (and run the coordinated bump) before cutting."
+            exit 1
+          fi
+
+  images:
+    needs: guard
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: soctalk-api
+            dockerfile: Dockerfile
+            context: .
+          - image: soctalk-app-ui
+            dockerfile: Dockerfile.app
+            context: .
+          - image: soctalk-orchestrator
+            dockerfile: Dockerfile.orchestrator
+            context: .
+          - image: soctalk-adapter
+            dockerfile: Dockerfile.adapter
+            context: .
+          - image: soctalk-linux-ep
+            dockerfile: attack-simulator/Dockerfile
+            context: attack-simulator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          image="ghcr.io/soctalk/${{ matrix.image }}"
+          short_sha="${GITHUB_SHA::7}"
+          # The immutable X.Y.Z release tag, plus latest + short-sha so the
+          # release ref and the moving demo ref point at identical bits.
+          tags=("$image:${{ inputs.version }}" "$image:latest" "$image:$short_sha")
+          printf '%s\n' "${tags[@]}"
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          provenance: false
+
+  charts:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Log in to ghcr.io (Helm)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Package and push charts
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/helm-out
+          # soctalk-tenant depends on wazuh + linux-ep via file:// refs;
+          # resolve them into charts/ before packaging.
+          helm dependency update charts/soctalk-tenant
+          for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
+            helm package "charts/$chart" --destination /tmp/helm-out
+          done
+          for tgz in /tmp/helm-out/*.tgz; do
+            # Idempotent: pushing an existing chart version is a no-op.
+            helm push "$tgz" oci://ghcr.io/soctalk/charts
+          done
+
+  release:
+    name: GitHub Release
+    needs: [images, charts]
+    if: ${{ inputs.create_release }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for the change log range
+      - name: Compose release body
+        id: body
+        run: |
+          set -euo pipefail
+          ver="${{ inputs.version }}"
+          prev_tag="$(
+            git tag -l 'v*' --sort=-v:refname \
+              | grep -v "^v${ver}\$" \
+              | head -n1 \
+            || true
+          )"
+          {
+            echo "## Container images"
+            echo
+            echo "All published to \`ghcr.io/soctalk\` and tagged \`${ver}\`, \`<short-sha>\`, and \`latest\`."
+            echo
+            for img in soctalk-api soctalk-app-ui soctalk-adapter soctalk-orchestrator soctalk-linux-ep; do
+              echo "- \`ghcr.io/soctalk/${img}:${ver}\`"
+            done
+            echo
+            echo "## Helm charts (OCI)"
+            echo
+            echo "Pulled via \`helm pull oci://ghcr.io/soctalk/charts/<chart> --version <ver>\`."
+            echo
+            for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
+              chart_ver="$(grep -E '^version:' "charts/${chart}/Chart.yaml" | awk '{print $2}')"
+              echo "- \`oci://ghcr.io/soctalk/charts/${chart}\` @ \`${chart_ver}\`"
+            done
+            echo
+            echo "> Demo VM images are built separately via the **Build Packer Demo Images** action."
+            echo
+            if [[ -n "${prev_tag}" ]]; then
+              echo "## Changes since ${prev_tag}"
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' "${prev_tag}..${GITHUB_SHA}" \
+                | head -n 200
+              echo
+            fi
+          } > body.md
+          echo "path=body.md" >> "$GITHUB_OUTPUT"
+      - name: Create / update tag + GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ inputs.version }}"
+          # Idempotent: refresh the body if the release already exists,
+          # otherwise create it (which also creates the vX.Y.Z tag at the
+          # current SHA — this workflow has no tag trigger, so no loop).
+          if gh release view "v${ver}" --json tagName >/dev/null 2>&1; then
+            gh release edit "v${ver}" --title "v${ver}" --notes-file body.md
+          else
+            gh release create "v${ver}" \
+              --target "${GITHUB_SHA}" \
+              --title "v${ver}" \
+              --notes-file body.md
+          fi

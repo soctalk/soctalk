@@ -4,28 +4,27 @@ name: Build Packer Demo Images
 # (QCOW2) source is built in CI — the AWS AMI source needs AWS creds
 # wired up separately.
 #
-# Triggers:
-#   * Push of a ``v*`` tag — automatic release builds. The compressed
-#     qcow2/vmdk/vhdx/vhd/raw + SHA256SUMS get attached to the matching
-#     GitHub Release alongside the container-image + chart manifest from
-#     ``publish-images.yml``.
-#   * workflow_dispatch — manual ad-hoc builds (e.g. testing a Packer
-#     change against ``main`` without cutting a tag).
+# Trigger:
+#   * workflow_dispatch ONLY — VM image builds are a deliberate, separate
+#     step from cutting the k8s release. Cut + validate the k8s artifacts
+#     first (see cut-k8s-release.yml, which auto-updates demo), then run
+#     this action with the SAME version to build the demo VM images and
+#     attach the compressed qcow2/vmdk/vhdx/vhd/raw + SHA256SUMS to the
+#     matching vX.Y.Z GitHub Release.
 #
 # Image builds are expensive (~10-15 min + nontrivial CI minutes +
-# multi-GB artifacts), so this workflow stays OFF for ``main`` pushes.
+# multi-GB artifacts) and must never race the chart publish, so this
+# workflow is manual-only — never fires on a push or tag.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
-        description: "Image version tag (e.g. 0.1.0). Used in filename + AMI name."
+        description: "Image version tag (e.g. 0.2.0). Used in filename + AMI name; also the vX.Y.Z release to attach artifacts to."
         required: false
         default: "dev"
       soctalk_chart_version:
-        description: "soctalk-system chart version to pre-pull into the image. Leave blank on a v* tag build to track the tag."
+        description: "soctalk-system chart version to pre-pull into the image. Blank = the version in Chart.yaml."
         required: false
         default: ""
 
@@ -261,10 +260,15 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-      - name: Attach all formats to GitHub Release (on v* tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Attach all formats to the vX.Y.Z GitHub Release
+        # Only for a real versioned build (not ad-hoc `dev`). Targets the
+        # release cut by cut-k8s-release.yml explicitly by tag_name, since
+        # this workflow is dispatch-only and github.ref is a branch, not
+        # the tag. Creates the release if it doesn't exist yet.
+        if: ${{ inputs.version != '' && inputs.version != 'dev' }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.ver.outputs.version }}
           files: |
             infra/packer/build/dist/*.xz
             infra/packer/build/dist/SHA256SUMS.txt
