@@ -23,18 +23,24 @@ LLM_KEY=/etc/soctalk/llm.key
 WIZARD_SENTINEL=/var/lib/soctalk-wizard.done
 INSTALL_SENTINEL=/var/lib/soctalk-firstboot.done
 
-# Wait up to 30 min for the wizard to finish, polled at 5s. The wizard
+# Wait up to 60 min for the wizard to finish, polled at 5s. The wizard
 # unit has Before this unit (set via firstboot.service [Unit] section),
 # so this loop is normally a no-op for the cloud-init path; it only
 # matters when the wizard is the source of values.
 #
+# 60 min (not 30): on slow / nested hardware the wizard itself is sluggish
+# to come up and the operator needs headroom to fill the form. This budget
+# is the real wait gate — the systemd unit is TimeoutStartSec=infinity so
+# it never kills us mid-wait (a 20m unit timeout used to fire before this
+# budget even elapsed).
+#
 # Count elapsed time by summing the sleeps, NOT by reading the wall
 # clock: an appliance VM frequently boots with a stale RTC (frozen at
 # image-build time) and corrects forward by hours once systemd-timesyncd
-# syncs. A wall-clock deadline ($(date +%s)+1800) trips instantly on
+# syncs. A wall-clock deadline ($(date +%s)+3600) trips instantly on
 # that jump, failing first boot before the operator can finish the
 # wizard. A sleep-counted budget is immune to clock steps.
-WAIT_BUDGET_SECONDS=1800
+WAIT_BUDGET_SECONDS=3600
 WAIT_POLL_SECONDS=5
 waited=0
 while [[ ! -s "$VALUES" || ! -s "$LLM_KEY" ]]; do

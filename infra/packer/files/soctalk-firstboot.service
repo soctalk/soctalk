@@ -13,7 +13,15 @@ ExecStart=/usr/local/bin/soctalk-firstboot
 RemainAfterExit=true
 StandardOutput=journal+console
 StandardError=journal+console
-TimeoutStartSec=20m
+# No systemd start-timeout: this unit spends most of its time WAITING for the
+# operator to finish the browser setup wizard (soctalk-setup-wizard.service is
+# itself TimeoutStartSec=infinity — human-paced), then runs the k3s + helm
+# install (helm has its own --wait --timeout). A fixed 20m start-timeout was
+# SHORTER than firstboot.sh's own wait budget, so on slow/nested hardware
+# systemd killed this unit mid-wait before the wizard was even submitted,
+# leaving k3s up but SocTalk uninstalled. Let the script's internal budget +
+# helm's timeout be the real gates.
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=cloud-init.target
