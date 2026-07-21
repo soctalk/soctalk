@@ -128,6 +128,11 @@ tenantProvisioning:
   # ``python -m soctalk.runs_worker.main``.
   runsWorkerImageRepo: ''
   runsWorkerImageTag: '0.2.0'
+  # linux-ep attack-simulator image tag for provisioned 'poc' tenants.
+  # Pinned to the release version so a release install pulls a published
+  # tag; demo overrides to `latest`. Empty falls back to the render.py
+  # default (`latest`).
+  linuxEpImageTag: '0.2.0'
   # Master switch for the tenant chart's networkPolicies (rendered as
   # SOCTALK_TENANT_NETWORK_POLICIES_ENABLED on the api pod). Set false on
   # clusters whose CNI cannot serve them — e.g. no Cilium CRDs (the

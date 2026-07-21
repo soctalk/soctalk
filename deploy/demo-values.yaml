@@ -76,3 +76,8 @@ preInstallCheck:
 tenantProvisioning:
   adapterImageTag: latest
   runsWorkerImageTag: latest
+  # linux-ep too: demo tracks head, and the chart default now points at
+  # the (unpublished-until-release) pinned tag. Without this, a freshly
+  # provisioned demo tenant's linuxep-0 pod ImagePullBackOffs and
+  # wait_workloads times out (caught by the deploy smoke test).
+  linuxEpImageTag: latest

@@ -724,6 +724,20 @@ def render_linux_ep_values(
     """
     return {
         "replicas": replicas,
+        "image": {
+            "repository": os.getenv(
+                "SOCTALK_TENANT_LINUX_EP_IMAGE_REPO",
+                "ghcr.io/soctalk/soctalk-linux-ep",
+            ),
+            "tag": (_linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG", "latest")),
+            # Moving `latest` must pull Always (same reason as the adapter /
+            # runs-worker above); a pinned release tag is immutable so
+            # IfNotPresent is fine. Without an override the tenant would fall
+            # to the linux-ep subchart default, which on a release cut points
+            # at soctalk-linux-ep:<version> — unpublished until cut-k8s-release
+            # runs, so demo (which tracks `latest`) must pin this to latest.
+            "pullPolicy": "Always" if _linuxep_tag == "latest" else "IfNotPresent",
+        },
         # Auto-run the attack simulator. linux-ep only installs on the 'poc'
         # profile (its endpoints ARE simulators), so a pilot demos live Wazuh
         # detections immediately — no manual /opt/scripts/run-attack.sh step.

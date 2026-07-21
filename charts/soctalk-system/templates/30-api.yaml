@@ -410,6 +410,10 @@ spec:
             - name: SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG
               value: {{ .Values.tenantProvisioning.runsWorkerImageTag | quote }}
             {{- end }}
+            {{- if .Values.tenantProvisioning.linuxEpImageTag }}
+            - name: SOCTALK_TENANT_LINUX_EP_IMAGE_TAG
+              value: {{ .Values.tenantProvisioning.linuxEpImageTag | quote }}
+            {{- end }}
             {{- /*
                 Master switch for tenant-chart NetworkPolicies. "0" lets
                 clusters without Cilium CRDs (or with broken NP

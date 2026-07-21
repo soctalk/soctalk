@@ -410,6 +410,9 @@
         "runsWorkerImageTag": {
           "type": "string"
         },
+        "linuxEpImageTag": {
+          "type": "string"
+        },
         "tenantNetworkPoliciesEnabled": {
           "type": "boolean"
         }
