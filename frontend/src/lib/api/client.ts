@@ -352,7 +352,6 @@ export interface ExecutiveKPIs {
 export interface ConfidenceBucket {
 	range_label: string;
 	count: number;
-	percentage: number;
 }
 
 export interface DecisionTrend {
