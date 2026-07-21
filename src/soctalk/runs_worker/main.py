@@ -24,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 HEARTBEAT_INTERVAL_SECONDS = 20
 
 

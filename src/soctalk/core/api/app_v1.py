@@ -219,7 +219,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
         description=(
             "MSSP-deployed SOC control plane. See docs/multi-tenant/ for architecture."
         ),
-        version="0.1.0",
+        version="0.2.0",
         lifespan=_lifespan,
         # Serve the OpenAPI schema + interactive docs UNDER ``/api/`` so they
         # are reachable through the public ingress, which routes ``/api/*`` to

@@ -18,7 +18,7 @@ install:
     existingSecret: ''
 image:
   registry: ghcr.io/soctalk
-  tag: 0.1.0
+  tag: 0.2.0
   pullPolicy: IfNotPresent
   pullSecrets: []
 postgres:
@@ -95,7 +95,7 @@ llm:
 # air-gapped install where the api + agent share a cluster.
 tenantProvisioning:
   tenantChartRef: oci://ghcr.io/soctalk/charts/soctalk-tenant
-  tenantChartVersion: 0.1.9
+  tenantChartVersion: 0.2.0
   # Cloud-agent chart the L2 tenant operator helm-installs after
   # :issue-agent returns the bootstrap token. Same override pattern as
   # tenantChartRef — point at a lab OCI registry while validating a
@@ -122,12 +122,12 @@ tenantProvisioning:
   l1VerifySsl: ""
   wazuhChartPath: /app/charts/wazuh
   adapterImageRepo: ''
-  adapterImageTag: ''
+  adapterImageTag: '0.2.0'
   # runs-worker image (per-tenant L2 LangGraph worker). Same Python
   # build as the L1 orchestrator; entrypoint flips to
   # ``python -m soctalk.runs_worker.main``.
   runsWorkerImageRepo: ''
-  runsWorkerImageTag: ''
+  runsWorkerImageTag: '0.2.0'
   # Master switch for the tenant chart's networkPolicies (rendered as
   # SOCTALK_TENANT_NETWORK_POLICIES_ENABLED on the api pod). Set false on
   # clusters whose CNI cannot serve them — e.g. no Cilium CRDs (the
