@@ -735,7 +735,10 @@ async def _ai_behavior(session, days: int) -> dict[str, Any]:
         bucket = trends_by_day.setdefault(
             key,
             {
-                "day": key,
+                # ``period`` matches the DecisionTrend client contract; the
+                # frontend parses it as a date for the x-axis. Emitting ``day``
+                # here left that axis reading undefined -> "Invalid Date".
+                "period": key,
                 "close": 0,
                 "escalate": 0,
                 "needs_more_info": 0,
