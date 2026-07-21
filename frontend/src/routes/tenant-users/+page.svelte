@@ -136,15 +136,15 @@
 		<div class="card p-4 rounded border space-y-3">
 			<label class="block text-sm">
 				<span class="opacity-70">{m.adm_field_email()}</span>
-				<input class="w-full border rounded p-2 mt-1" type="email" bind:value={email} placeholder="analyst@your-org.com" />
+				<input class="input mt-1" type="email" bind:value={email} placeholder="analyst@your-org.com" />
 			</label>
 			<label class="block text-sm">
 				<span class="opacity-70">{m.adm_field_display_name()}</span>
-				<input class="w-full border rounded p-2 mt-1" bind:value={displayName} placeholder="Jordan Rivera" />
+				<input class="input mt-1" bind:value={displayName} placeholder="Jordan Rivera" />
 			</label>
 			<label class="block text-sm">
 				<span class="opacity-70">{m.adm_field_role()}</span>
-				<select class="w-full border rounded p-2 mt-1" bind:value={role}>
+				<select class="select mt-1" bind:value={role}>
 					{#each ROLES as r (r.value)}
 						<option value={r.value}>{r.label()}</option>
 					{/each}
@@ -186,7 +186,7 @@
 							<td class="px-3 py-2">{u.display_name ?? '—'}</td>
 							<td class="px-3 py-2">
 								{#if $canManageTenantUsers && u.active}
-									<select class="border rounded p-1 text-xs" value={u.role} on:change={(e) => changeRole(u, e.currentTarget.value)}>
+									<select class="select select-sm w-auto text-xs" value={u.role} on:change={(e) => changeRole(u, e.currentTarget.value)}>
 										{#each ROLES as r (r.value)}
 											<option value={r.value}>{roleLabel(r.value)}</option>
 										{/each}
