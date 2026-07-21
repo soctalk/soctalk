@@ -1,0 +1,65 @@
+{
+  "id": "prod-critical-ioc-hardline",
+  "version": 1,
+  "priority": 64,
+  "applies_to": {
+    "rule_groups": [
+      "ids",
+      "web",
+      "authentication_failed"
+    ]
+  },
+  "guardrails": [
+    {
+      "when": {
+        "==": [
+          {
+            "var": "enrichment.ioc"
+          },
+          true
+        ]
+      },
+      "effect": "override",
+      "to": "escalate",
+      "reason": "A known malicious indicator is present. Escalate for a human."
+    },
+    {
+      "when": {
+        "==": [
+          {
+            "var": "correlation.active_incident"
+          },
+          true
+        ]
+      },
+      "effect": "override",
+      "to": "escalate",
+      "reason": "Alert correlates with an active incident. Do not close it in isolation."
+    },
+    {
+      "when": {
+        "and": [
+          {
+            "==": [
+              {
+                "var": "asset.environment"
+              },
+              "production"
+            ]
+          },
+          {
+            "<": [
+              {
+                "var": "verdict_confidence"
+              },
+              0.6
+            ]
+          }
+        ]
+      },
+      "effect": "interrupt",
+      "to": "human_review",
+      "reason": "Low-confidence verdict on a production asset. Hold for review."
+    }
+  ]
+}

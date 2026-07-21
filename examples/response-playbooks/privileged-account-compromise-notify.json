@@ -1,0 +1,44 @@
+{
+  "id": "privileged-account-compromise-notify",
+  "version": 1,
+  "priority": 110,
+  "applies_to": {
+    "rule_groups": [
+      "sudo",
+      "su"
+    ],
+    "mitre_techniques": [
+      "T1078"
+    ]
+  },
+  "response": {
+    "on_escalate": [
+      {
+        "capability": "notify_webhook"
+      },
+      {
+        "capability": "external_action",
+        "params": {
+          "endpoint": "iam",
+          "action": "disable_account"
+        },
+        "when": {
+          ">=": [
+            {
+              "var": "severity"
+            },
+            12
+          ]
+        }
+      }
+    ],
+    "on_close": [
+      {
+        "capability": "annotate_investigation",
+        "params": {
+          "note": "Privileged-account alert closed at triage."
+        }
+      }
+    ]
+  }
+}

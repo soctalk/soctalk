@@ -1,0 +1,49 @@
+{
+  "id": "lateral-movement-endpoint-isolation",
+  "version": 1,
+  "priority": 100,
+  "applies_to": {
+    "mitre_techniques": [
+      "T1021"
+    ],
+    "mitre_tactics": [
+      "Lateral Movement"
+    ]
+  },
+  "response": {
+    "on_escalate": [
+      {
+        "capability": "annotate_investigation",
+        "params": {
+          "note": "Lateral movement (T1021) escalated. See the gated isolation proposal."
+        }
+      },
+      {
+        "capability": "notify_webhook"
+      },
+      {
+        "capability": "external_action",
+        "params": {
+          "endpoint": "edr",
+          "action": "isolate_endpoint"
+        },
+        "when": {
+          ">=": [
+            {
+              "var": "severity"
+            },
+            10
+          ]
+        }
+      }
+    ],
+    "on_close": [
+      {
+        "capability": "annotate_investigation",
+        "params": {
+          "note": "Closed at triage. No lateral-movement confirmation."
+        }
+      }
+    ]
+  }
+}

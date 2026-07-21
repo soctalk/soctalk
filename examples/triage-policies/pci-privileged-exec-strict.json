@@ -1,0 +1,86 @@
+{
+  "id": "pci-privileged-exec-strict",
+  "version": 1,
+  "priority": 62,
+  "applies_to": {
+    "rule_groups": [
+      "sudo",
+      "su",
+      "sudoers"
+    ],
+    "authorization_tracks": [
+      "account"
+    ]
+  },
+  "required_steps": [
+    "gather_authorization_context"
+  ],
+  "decision_modules": [
+    "authorization_engine"
+  ],
+  "legal_actions": {
+    "decide": [
+      "ENRICH",
+      "CONTEXTUALIZE",
+      "INVESTIGATE",
+      "VERDICT"
+    ]
+  },
+  "close_signoff_data_classes": [
+    "pci",
+    "phi"
+  ],
+  "guardrails": [
+    {
+      "when": {
+        "and": [
+          {
+            "==": [
+              {
+                "var": "authz.class"
+              },
+              "contradicted"
+            ]
+          },
+          {
+            "==": [
+              {
+                "var": "asset.criticality"
+              },
+              "critical"
+            ]
+          }
+        ]
+      },
+      "effect": "override",
+      "to": "escalate",
+      "reason": "Contradicted authorization on a critical asset. Never auto-close."
+    },
+    {
+      "when": {
+        "<": [
+          {
+            "var": "verdict_confidence"
+          },
+          0.7
+        ]
+      },
+      "effect": "override",
+      "to": "needs_more_info",
+      "reason": "Low-confidence draft on privileged execution. Gather more before deciding."
+    },
+    {
+      "when": {
+        "==": [
+          {
+            "var": "asset.data_classification"
+          },
+          "pci"
+        ]
+      },
+      "effect": "interrupt",
+      "to": "human_review",
+      "reason": "PCI-scoped asset. A human signs off before any close."
+    }
+  ]
+}
