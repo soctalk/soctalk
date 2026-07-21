@@ -1,0 +1,63 @@
+# SOCTalk
+
+> SOCTalk is an open-source (Apache 2.0), LLM-driven Security Operations Center automation platform for MSPs and MSSPs. It continuously triages, investigates, and escalates Wazuh alerts through a two-tier AI pipeline with human-in-the-loop review, multi-tenant isolation, and built-in incident response workflows. There are no feature gates, no licensing fees, and no vendor lock-in on the SIEM layer.
+
+## What SOCTalk Does
+
+SOCTalk sits on top of a Wazuh SIEM deployment and transforms raw security alerts into investigated, prioritized cases that analysts can act on. A fast LLM routing layer classifies and prioritizes each incoming alert; a reasoning verdict tier then produces a full investigation with evidence and a proposed disposition. Every decision is recorded in an append-only audit log. Human analysts review the AI proposals and approve or reject escalations before any external action fires.
+
+The platform supports two operating modes. In single-tenant mode it serves one security team. In MSSP mode it operates as a control plane that provisions dedicated SOC stacks per customer, each running in its own Kubernetes namespace with isolated credentials, branding, LLM configuration, and Postgres row-level security.
+
+## Who It Is For
+
+SOCTalk targets MSPs and MSSPs delivering SOC services to SMB clients. The core value proposition is ownership: the provider keeps full control of infrastructure, customer relationships, and margins without paying commercial SIEM licensing costs (Splunk, Microsoft Sentinel, and similar) or routing customer data through a third-party SOC desk. Atricore Inc., the maintainer, runs its own MSSP production environment on SOCTalk.
+
+## Architecture
+
+The technology stack is Wazuh for SIEM, LangGraph for LLM workflow orchestration, PostgreSQL with row-level security for multi-tenant data isolation, and Kubernetes (K3s in demo and pilot deployments, or any CNCF-conformant cluster in production). The frontend is built with Svelte and TypeScript, using SvelteFlow for the visual policy and playbook editors. The backend is primarily Python.
+
+LLM providers are pluggable per tenant. Supported options include Anthropic Claude (models through Claude 4.7 and later), any OpenAI-compatible endpoint, Gemini, Ollama, vLLM, and SGLang. Operators configure fast and reasoning model tiers independently per tenant.
+
+External integrations use MCP servers for Wazuh, Cortex, MISP, and TheHive. All integrations are optional and fully open-source.
+
+Two Helm charts manage deployment: soctalk-system for the control plane and soctalk-tenant for per-customer stacks. Container images are published to ghcr.io/soctalk with version tags.
+
+## Key Features (v0.2)
+
+Triage Policy Editor: a no-code visual editor for building deterministic guardrails over the AI pipeline. Triage policies can only strengthen detection decisions (interrupt or override) and can never suppress an alert. Policies run in shadow mode for safe rollout before going live.
+
+Response Playbook Editor: a no-code SvelteFlow diagram interface that maps dispositions to response capabilities using ATT&CK technique and tactic matching. Playbooks bind to SOAR webhooks and external actions, all of which require analyst approval before execution. Playbooks also support shadow mode.
+
+Authorization Flow (M3): a human-in-the-loop approval system with reusable authorization memory and SIEM-routine shadow scoring.
+
+RBAC: role-based access control includes an MSSP operator role, a tenant administrator role, and a tenant analyst role. The tenant analyst role enables co-managed SOC deployments where a customer's own analyst works within their dedicated tenant.
+
+Conversational Interface: a scope-aware natural language chat interface that answers questions about alert patterns, investigation history, and KPIs across the full MSSP fleet or scoped to a single tenant.
+
+Service KPIs: cross-tenant dashboards tracking alert volume, time-to-verdict, and escalation rates.
+
+Internationalization: the full application is localized in seven languages including English, Portuguese, Spanish, Chinese, French, German, and Italian.
+
+## Deployment Paths
+
+Evaluation (approximately 5 minutes): a pre-built demo VM (VMDK for VirtualBox, QCOW2 for KVM) ships with Ubuntu, K3s, all SOCTalk Helm charts, and a first-boot setup wizard at https://localhost:8443. The wizard configures the LLM provider, Wazuh integration, and initial tenant.
+
+Pilot (approximately 20 to 25 minutes): the Launchpad tool provisions a multi-VM environment with a control plane and one to three customer tenants connected over a Tailscale mesh VPN.
+
+Production (approximately 1 hour): a hardened K3s cluster with Cilium, cert-manager, and Helm. Supported cloud and on-premise targets include Proxmox, AWS, and Azure.
+
+## Commercial Model
+
+The self-hosted version is Apache 2.0 and free forever with no feature gates. SOCTalk Cloud is a managed offering where Atricore operates the control plane while the customer retains the Wazuh data plane in their own infrastructure. Official Support pricing is set in a direct consultation call.
+
+## Links
+
+- [GitHub Repository](https://github.com/soctalk/soctalk)
+- [Documentation](https://soctalk.github.io/soctalk-docs/)
+- [Main Website](https://soctalk.ai)
+- [Comparison with Commercial Alternatives](https://soctalk.ai/compare)
+
+## Optional
+
+- [Booking a Consultation with the Maintainer](https://calendly.com/gianluca_brigandi/soctalk-adopter-intro)
+- [Operations Guide](https://soctalk.github.io/soctalk-docs/operations.html)
