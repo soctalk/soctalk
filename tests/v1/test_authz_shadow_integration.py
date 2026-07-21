@@ -29,7 +29,12 @@ pytestmark = [
 
 _DECODER = "sshd"
 _THASH = "tmpl-abc123"
-_NOW = datetime(2026, 7, 20, 3, 0, 12, tzinfo=UTC)
+# Real-"now" anchor: correlation keys expire on the wall clock (record_keys sets
+# expires_at = occurred_at + window; find_correlated_investigation filters
+# `expires_at > now()`). A hardcoded past _NOW let the recorded keys expire once
+# real time moved past _NOW + window, breaking test_active_incident_correlation_
+# preempts_scoring days after it was written. Anchor to a recent relative time.
+_NOW = datetime.now(UTC) - timedelta(minutes=1)
 
 
 @pytest.fixture(autouse=True)

@@ -34,7 +34,14 @@ pytestmark = [
     pytest.mark.skipif(SKIP_INTEGRATION, reason="needs Postgres"),
 ]
 
-_NOW = datetime(2026, 7, 20, 22, 40, 0, tzinfo=UTC)
+# Anchor all timestamps (alert occurred_at + engagement windows) to real "now":
+# correlation keys carry a wall-clock expiry (record_keys sets expires_at =
+# occurred_at + window, and find_correlated_investigation filters
+# `expires_at > now()` against the DB clock). A hardcoded past _NOW made the
+# recorded keys expire once real time passed _NOW + window, silently breaking
+# the correlation-wins assertions (a time-bomb: green when run near _NOW, red
+# days later). A recent, relative anchor keeps windows consistent and keys live.
+_NOW = datetime.now(UTC) - timedelta(minutes=1)
 SCOPE_IP = "203.0.113.5"          # inside 203.0.113.0/24
 OFF_SCOPE_IP = "198.51.100.7"     # outside the tester scope
 
