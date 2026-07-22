@@ -44,7 +44,7 @@ def _auth_label(path: str, dependant) -> str:
         joined = " / ".join(roles)
         if scope == "tenant":
             return f"tenant session ({joined})"
-        return f"session — roles: {joined}"
+        return f"session (roles: {joined})"
     # No role guard: classify by prefix.
     if path.startswith("/api/internal/adapter"):
         return "service JWT (adapter token)"
