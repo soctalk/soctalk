@@ -21,17 +21,15 @@
 		detectSlugFromHostname
 	} from '$lib/stores';
 	import Toast from '$lib/components/Toast.svelte';
+	import LocaleSwitcher from '$lib/components/LocaleSwitcher.svelte';
 	import { AppShell, AppBar, AppRail, AppRailAnchor } from '@skeletonlabs/skeleton';
 	import { m } from '$lib/paraglide/messages';
 	import type { Locale } from '$lib/paraglide/runtime';
 	import {
-		LOCALE_LABELS,
-		SUPPORTED_LOCALES,
 		currentLocale,
 		localizeHref,
 		localizedGoto,
-		stripLocale,
-		switchLocale
+		stripLocale
 	} from '$lib/i18n';
 
 	// Navigation items. `label` holds the message FUNCTION (called at render
@@ -146,11 +144,6 @@
 		}
 	}
 
-	function onLocaleChange(e: Event) {
-		const next = (e.currentTarget as HTMLSelectElement).value as Locale;
-		switchLocale(next, $page.url.pathname, $page.url.search);
-	}
-
 	$: visibleNavItems = navItems.filter((item) => {
 		if (item.review && !$canReview) return false;
 		if (item.chat && !$canChat) return false;
@@ -235,17 +228,7 @@
 			<!-- Locale switcher + SSE status -->
 			<svelte:fragment slot="trail">
 				<div class="p-2 flex flex-col items-center gap-2">
-					<select
-						class="select text-xs !py-0.5 max-w-[5rem]"
-						data-testid="locale-switcher"
-						title={m.language()}
-						value={locale}
-						on:change={onLocaleChange}
-					>
-						{#each SUPPORTED_LOCALES as loc}
-							<option value={loc}>{LOCALE_LABELS[loc]}</option>
-						{/each}
-					</select>
+					<LocaleSwitcher {locale} />
 					<div
 						class="w-3 h-3 rounded-full {$sseStatus.connected
 							? 'bg-green-500 status-indicator-active'

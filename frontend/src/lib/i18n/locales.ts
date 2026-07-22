@@ -25,6 +25,18 @@ export const LOCALE_LABELS: Record<Locale, string> = {
 	'it-IT': 'Italiano'
 };
 
+/** Compact codes for the collapsed switcher trigger in the narrow nav rail
+ *  (the full endonyms above are shown untruncated in the open menu). */
+export const LOCALE_SHORT: Record<Locale, string> = {
+	'en-US': 'EN',
+	'pt-BR': 'PT',
+	'es-419': 'ES',
+	'zh-CN': '中文',
+	'fr-FR': 'FR',
+	'de-DE': 'DE',
+	'it-IT': 'IT'
+};
+
 export const SUPPORTED_LOCALES = Object.values(SEGMENT_TO_LOCALE) as Locale[];
 
 export function segmentOf(pathname: string): string | null {
