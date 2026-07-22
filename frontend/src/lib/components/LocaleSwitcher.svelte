@@ -54,7 +54,7 @@
 
 	{#if open}
 		<ul
-			class="absolute z-50 bottom-full mb-1 left-0 min-w-[12rem]
+			class="absolute z-50 bottom-full mb-1 left-0 w-max
 			       rounded-md border border-surface-500/40 bg-surface-700 shadow-xl py-1"
 			role="listbox"
 			aria-label={m.language()}
