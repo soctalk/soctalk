@@ -187,9 +187,9 @@ jobs:
       - name: Verify all formats produced + sizes
         run: |
           ls -lh build/dist/
-          # The post-processor emits qcow2, vmdk, vhdx, vhd, raw.
+          # The post-processor emits qcow2, vmdk, vhdx, vhd, raw + an ova.
           # Fail fast if any one is missing so we don't ship a partial release.
-          for ext in qcow2 vmdk vhdx vhd raw; do
+          for ext in qcow2 vmdk vhdx vhd raw ova; do
             test -f "build/dist/soctalk-demo-${{ steps.ver.outputs.version }}.${ext}" \
               || { echo "::error::missing build/dist/*.${ext}"; exit 1; }
           done
@@ -200,6 +200,9 @@ jobs:
           # streamOptimized is already deflate-compressed but xz still
           # gains ~5-10% — worth it for download size.
           cd build/dist
+          # NB: the .ova is left uncompressed — its vmdk is already
+          # streamOptimized-compressed and OVAs deploy as-is (an .ova.xz would
+          # force a manual decompress before "Deploy OVF Template").
           for f in *.qcow2 *.vmdk *.vhdx *.vhd *.raw; do
             echo "==> compressing $f"
             xz -T0 -9 "$f"
@@ -209,7 +212,7 @@ jobs:
       - name: Compute SHA256 sums
         run: |
           cd build/dist
-          sha256sum *.xz > SHA256SUMS.txt
+          sha256sum *.xz *.ova > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Upload qcow2 artifact (KVM / Proxmox / libvirt)
@@ -225,6 +228,14 @@ jobs:
         with:
           name: soctalk-demo-vmdk
           path: infra/packer/build/dist/*.vmdk.xz
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload ova artifact (VMware ESXi / vSphere, one-step deploy)
+        uses: actions/upload-artifact@v4
+        with:
+          name: soctalk-demo-ova
+          path: infra/packer/build/dist/*.ova
           retention-days: 1
           if-no-files-found: error
 
@@ -271,6 +282,7 @@ jobs:
           tag_name: v${{ steps.ver.outputs.version }}
           files: |
             infra/packer/build/dist/*.xz
+            infra/packer/build/dist/*.ova
             infra/packer/build/dist/SHA256SUMS.txt
           fail_on_unmatched_files: true
 

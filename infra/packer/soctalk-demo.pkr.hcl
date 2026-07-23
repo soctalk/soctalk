@@ -149,6 +149,11 @@ build {
       "qemu-img convert -p -O raw \"$SRC\" \"$DST/soctalk-demo-${var.version}.raw\"",
       "echo '==> copying qcow2 to dist'",
       "cp \"$SRC\" \"$DST/soctalk-demo-${var.version}.qcow2\"",
+      # Wrap the streamOptimized vmdk in an OVA so ESXi / vSphere can deploy it
+      # in one step (Deploy OVF Template / ovftool / govc import.ova) with no
+      # manual `govc import.vmdk` conversion. Runs after the vmdk exists.
+      "echo '==> building OVA (VMware/vSphere one-step deploy)'",
+      "bash scripts/make-ova.sh \"${var.version}\" \"$DST\"",
       "echo '==> dist/'",
       "ls -lh \"$DST\"/",
     ]
