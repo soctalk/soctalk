@@ -293,7 +293,10 @@ jobs:
           set -euo pipefail
           ver="${{ steps.ver.outputs.version }}"
           shopt -s nullglob
-          files=(infra/packer/build/dist/*.xz infra/packer/build/dist/*.ova infra/packer/build/dist/SHA256SUMS.txt)
+          # Paths are relative to the job's working-directory (infra/packer);
+          # the upload-artifact steps above take workspace-root paths because
+          # action inputs ignore that default, but `run:` steps do not.
+          files=(build/dist/*.xz build/dist/*.ova build/dist/SHA256SUMS.txt)
           echo "attaching ${#files[@]} assets to v${ver}:"; printf '  %s\n' "${files[@]}"
           gh release upload "v${ver}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
