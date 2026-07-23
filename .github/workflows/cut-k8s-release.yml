@@ -195,8 +195,10 @@ jobs:
             if [[ -n "${prev_tag}" ]]; then
               echo "## Changes since ${prev_tag}"
               echo
-              git log --no-merges --pretty=format:'- %s (%h)' "${prev_tag}..${GITHUB_SHA}" \
-                | head -n 200
+              # --max-count instead of `| head`: under pipefail, head closing
+              # the pipe at 200 lines kills git log with SIGPIPE (exit 141).
+              git log --no-merges --max-count=200 \
+                --pretty=format:'- %s (%h)' "${prev_tag}..${GITHUB_SHA}"
               echo
             fi
           } > body.md
