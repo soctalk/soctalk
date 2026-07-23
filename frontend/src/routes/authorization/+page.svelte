@@ -187,17 +187,17 @@
 	{/if}
 
 	{#if editorOpen}
-		<div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
-			<div class="bg-white rounded shadow-lg w-full max-w-2xl p-4">
+		<div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+			<div class="card w-full max-w-2xl p-4">
 				<h2 class="text-lg font-semibold mb-2">{m.adm_modal_new_fact_title()}</h2>
-				<p class="text-xs text-gray-500 mb-2">
+				<p class="text-xs opacity-60 mb-2">
 					{m.adm_modal_new_fact_hint()}
 				</p>
 				<textarea
-					class="w-full h-72 font-mono text-xs border rounded p-2"
+					class="w-full h-72 font-mono text-xs border border-surface-500 rounded p-2 bg-surface-800 text-surface-50"
 					bind:value={editorText}
 				></textarea>
-				{#if editorError}<p class="text-red-600 text-sm mt-1">{editorError}</p>{/if}
+				{#if editorError}<p class="text-red-400 text-sm mt-1">{editorError}</p>{/if}
 				<div class="flex justify-end gap-2 mt-3">
 					<button class="px-3 py-2 text-sm" on:click={() => (editorOpen = false)}>{m.common_cancel()}</button>
 					<button
