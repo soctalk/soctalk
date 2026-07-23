@@ -97,7 +97,11 @@ case "$cmd" in
   uninstall)
     need_root uninstall
     purge=0
-    [ "${1:-}" = "--purge" ] && purge=1
+    case "${1:-}" in
+      "") ;;
+      --purge) purge=1 ;;
+      *) echo "soctalk uninstall: unknown argument '$1' (use --purge to also remove k3s)" >&2; exit 1 ;;
+    esac
     helm_bin="$(resolve helm)"
     if [ -n "$helm_bin" ]; then
       KUBECONFIG="$KUBECONFIG_PATH" "$helm_bin" -n "$NAMESPACE" uninstall "$RELEASE" || true
@@ -106,7 +110,9 @@ case "$cmd" in
       echo "soctalk: purging k3s…"
       /usr/local/bin/k3s-uninstall.sh
     fi
-    echo "soctalk: uninstalled${purge:+ (cluster purged)}"
+    # NB: purge=0 is a non-empty string, so ${purge:+…} would ALWAYS expand —
+    # branch explicitly instead.
+    if [ "$purge" -eq 1 ]; then echo "soctalk: uninstalled (cluster purged)"; else echo "soctalk: uninstalled"; fi
     ;;
 
   version|-v|--version)
