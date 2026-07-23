@@ -6,10 +6,20 @@
 		type TenantEngagement
 	} from '$lib/api/client';
 	import {
+		authSession,
 		canAssertTenantAuthorization,
-		canDeclareTenantEngagement
+		canDeclareTenantEngagement,
+		isMsspUser
 	} from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
+	import { localizedGoto } from '$lib/i18n';
+
+	// Tenant-side (/api/tenant/*) area. An MSSP-side user who reaches it by
+	// URL is denied by the audience wall, so bounce them to the MSSP-side
+	// authorization review rather than surface a raw permission error.
+	$: if ($authSession.user && $isMsspUser) {
+		localizedGoto('/authorization');
+	}
 
 	// Two kinds of authorization for your environment: standing FACTS (an approved change, a
 	// service account's routine work) and time-boxed ENGAGEMENTS (an authorized pentest/red-team

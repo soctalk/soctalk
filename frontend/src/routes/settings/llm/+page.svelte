@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TenantLlmConfig } from '$lib/api/client';
-	import { addToast, authSession, isMsspScope } from '$lib/stores';
+	import { addToast, authSession, isMsspUser } from '$lib/stores';
 	import { goto } from '$app/navigation';
 	import { m } from '$lib/paraglide/messages';
 	import { localizeHref, localizedGoto } from '$lib/i18n';
@@ -36,12 +36,14 @@
 		}
 	});
 
-	// MSSP users can land here if they navigate by URL — bounce them
-	// to the MSSP-side per-tenant LLM page rather than show a
-	// permission error. Tenant-pinned MSSP users (Open SOC) DO see
-	// this page and can paste a key on the tenant's behalf — that's
-	// the legitimate use case for the wholesale model.
-	$: if ($authSession.user && $isMsspScope) {
+	// This is a tenant-side (/api/tenant/*) page. Any MSSP-side user who
+	// reaches it by URL — whether at MSSP-wide scope OR pinned into a
+	// tenant — is denied by the audience wall, so bounce them instead of
+	// letting the tenant-LLM fetch surface a raw "MSSP-side user denied"
+	// error. Letting a tenant-pinned MSSP operator manage this on the
+	// tenant's behalf (the Open-SOC wholesale flow) needs backend support
+	// for impersonated /api/tenant/* access and is tracked separately.
+	$: if ($authSession.user && $isMsspUser) {
 		localizedGoto('/tenants');
 	}
 

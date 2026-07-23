@@ -162,6 +162,16 @@
 </script>
 
 {#if currentPath === '/login'}
+	<!-- Locale switcher on the sign-in screen: the app chrome (which
+	     normally hosts it) is hidden here, so a non-English user has no
+	     other way to switch language before logging in. Anchored bottom-LEFT
+	     to match the nav-rail mount the switcher popover was built for: it
+	     opens upward and grows rightward from the trigger's left edge, so a
+	     bottom-left anchor keeps the menu on-screen (bottom-right would push
+	     it off the right of the viewport). -->
+	<div class="fixed bottom-4 left-4 z-50">
+		<LocaleSwitcher {locale} />
+	</div>
 	<slot />
 {:else}
 <AppShell>

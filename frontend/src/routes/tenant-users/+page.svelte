@@ -1,8 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, type TenantUser, type TenantUserCreated } from '$lib/api/client';
-	import { canManageTenantUsers } from '$lib/stores';
+	import { authSession, canManageTenantUsers, isMsspUser } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
+	import { localizedGoto } from '$lib/i18n';
+
+	// Tenant-side (/api/tenant/*) page. An MSSP-side user who reaches it by
+	// URL is denied by the audience wall, so bounce them rather than surface
+	// a raw permission error. MSSP staff manage their own users at /mssp-users.
+	$: if ($authSession.user && $isMsspUser) {
+		localizedGoto('/tenants');
+	}
 
 	let users: TenantUser[] = [];
 	let loading = true;
