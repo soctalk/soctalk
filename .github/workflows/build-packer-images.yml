@@ -279,19 +279,23 @@ jobs:
           if-no-files-found: error
 
       - name: Attach all formats to the vX.Y.Z GitHub Release
-        # Only for a real versioned build (not ad-hoc `dev`). Targets the
-        # release cut by cut-k8s-release.yml explicitly by tag_name, since
-        # this workflow is dispatch-only and github.ref is a branch, not
-        # the tag. Creates the release if it doesn't exist yet.
+        # Only for a real versioned build (not ad-hoc `dev`). Upload with the
+        # gh CLI (same path cut-k8s-release.yml uses to create the release with
+        # the default GITHUB_TOKEN — proven to work). softprops/action-gh-release
+        # was resolving the ref to refs/heads/main on this dispatch-only workflow
+        # and 403'ing ("Resource not accessible by integration"); addressing the
+        # release by its explicit vX.Y.Z tag via gh avoids that. --clobber lets a
+        # re-run replace existing assets.
         if: ${{ inputs.version != '' && inputs.version != 'dev' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.ver.outputs.version }}
-          files: |
-            infra/packer/build/dist/*.xz
-            infra/packer/build/dist/*.ova
-            infra/packer/build/dist/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="${{ steps.ver.outputs.version }}"
+          shopt -s nullglob
+          files=(infra/packer/build/dist/*.xz infra/packer/build/dist/*.ova infra/packer/build/dist/SHA256SUMS.txt)
+          echo "attaching ${#files[@]} assets to v${ver}:"; printf '  %s\n' "${files[@]}"
+          gh release upload "v${ver}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
   boot-test:
     # Boot the qcow2 in a fresh KVM VM, wait for soctalk-firstboot to
