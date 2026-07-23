@@ -2,13 +2,14 @@
 	import { api, type AuthorizationFact } from '$lib/api/client';
 	import { currentTenantId, canManageAuthorization } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
+	import AuthorizationFactForm from '$lib/components/authz/AuthorizationFactForm.svelte';
+	import { factSummary } from '$lib/authz/display';
 
 	let facts: AuthorizationFact[] = [];
 	let loading = false;
 	let error: string | null = null;
 
 	let editorOpen = false;
-	let editorText = '';
 	let editorSaving = false;
 	let editorError: string | null = null;
 
@@ -28,43 +29,17 @@
 		}
 	}
 
-	function scopeText(f: AuthorizationFact): string {
-		const s = f.scope ?? {};
-		const parts = [s.subject, s.target, s.action].filter(Boolean);
-		return parts.length ? parts.join(' · ') : '—';
-	}
-
 	function openCreate() {
 		editorError = null;
-		editorText = JSON.stringify(
-			{
-				kind: 'grant',
-				id: 'CHG-1001',
-				track: 'account',
-				grant_class: 'change_ticket',
-				scope: { subject: 'svc-deploy', target: 'db-01', action: 'sudo-exec' },
-				valid_until: '2026-12-31T00:00:00Z'
-			},
-			null,
-			2
-		);
 		editorOpen = true;
 	}
 
-	async function save() {
+	async function save(fact: Record<string, unknown>) {
 		if (!tenantId) return;
 		editorSaving = true;
 		editorError = null;
-		let parsed: Record<string, unknown>;
 		try {
-			parsed = JSON.parse(editorText);
-		} catch {
-			editorError = m.adm_not_valid_json();
-			editorSaving = false;
-			return;
-		}
-		try {
-			await api.authorizationFacts.create(tenantId, parsed);
+			await api.authorizationFacts.create(tenantId, fact);
 			editorOpen = false;
 			await load(tenantId);
 		} catch (e) {
@@ -147,7 +122,7 @@
 							<td class="px-3 py-2 font-mono">{f.id}</td>
 							<td class="px-3 py-2">{f.kind}</td>
 							<td class="px-3 py-2">{f.track}</td>
-							<td class="px-3 py-2">{scopeText(f)}</td>
+							<td class="px-3 py-2">{factSummary(f)}</td>
 							<td class="px-3 py-2">{f.source_type}</td>
 							<td class="px-3 py-2">{f.trust}</td>
 							<td class="px-3 py-2">
@@ -187,27 +162,16 @@
 	{/if}
 
 	{#if editorOpen}
-		<div class="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-			<div class="card w-full max-w-2xl p-4">
-				<h2 class="text-lg font-semibold mb-2">{m.adm_modal_new_fact_title()}</h2>
-				<p class="text-xs opacity-60 mb-2">
-					{m.adm_modal_new_fact_hint()}
-				</p>
-				<textarea
-					class="w-full h-72 font-mono text-xs border border-surface-500 rounded p-2 bg-surface-800 text-surface-50"
-					bind:value={editorText}
-				></textarea>
-				{#if editorError}<p class="text-red-400 text-sm mt-1">{editorError}</p>{/if}
-				<div class="flex justify-end gap-2 mt-3">
-					<button class="px-3 py-2 text-sm" on:click={() => (editorOpen = false)}>{m.common_cancel()}</button>
-					<button
-						class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
-						on:click={save}
-						disabled={editorSaving}
-					>
-						{editorSaving ? m.common_saving() : m.adm_create()}
-					</button>
-				</div>
+		<div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
+			<div class="card w-full max-w-2xl p-5 my-8">
+				<h2 class="h4 mb-3">{m.adm_modal_new_fact_title()}</h2>
+				<AuthorizationFactForm
+					mode="mssp"
+					saving={editorSaving}
+					error={editorError}
+					on:submit={(e) => save(e.detail)}
+					on:cancel={() => (editorOpen = false)}
+				/>
 			</div>
 		</div>
 	{/if}

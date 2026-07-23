@@ -966,16 +966,22 @@ export interface TenantUserCreated extends TenantUser {
 	temporary_password: string;
 }
 
+// Mirrors the server EngagementDTO. Note: there is NO `status` field on the
+// wire — lifecycle (scheduled/active/expired/revoked) is derived client-side
+// from starts_at/ends_at/revoked_at (see $lib/authz/display:engagementStatus).
 export interface TenantEngagement {
 	id: string;
 	name: string;
 	kind: string;
-	status: string;
 	starts_at: string;
 	ends_at: string;
-	scope_source_ips?: string[];
-	scope_hosts?: string[];
-	scope_techniques?: string[];
+	scope_source_ips: string[];
+	scope_hosts: string[];
+	scope_techniques: string[];
+	revoked_at: string | null;
+	created_at: string;
+	declared_test_count: number;
+	out_of_scope_count: number;
 }
 
 export interface TenantEngagementDeclare {

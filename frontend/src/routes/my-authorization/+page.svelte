@@ -13,6 +13,8 @@
 	} from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
 	import { localizedGoto } from '$lib/i18n';
+	import AuthorizationFactForm from '$lib/components/authz/AuthorizationFactForm.svelte';
+	import { engagementStatus, engagementStatusVariant, factSummary } from '$lib/authz/display';
 
 	// Tenant-side (/api/tenant/*) area. An MSSP-side user who reaches it by
 	// URL is denied by the audience wall, so bounce them to the MSSP-side
@@ -36,19 +38,6 @@
 	let factsLoaded = false;
 	let factFormOpen = false;
 	let savingFact = false;
-	let factText = '';
-
-	const EXAMPLE = JSON.stringify(
-		{
-			kind: 'grant',
-			id: 'ignored-server-generates-one',
-			track: 'account',
-			grant_class: 'standing_baseline',
-			scope: { subject: 'svc-deploy', target: 'db-01', action: 'sudo-exec' }
-		},
-		null,
-		2
-	);
 
 	async function loadFacts() {
 		factsLoading = true;
@@ -62,23 +51,11 @@
 		}
 	}
 
-	function openFactForm() {
-		factText = EXAMPLE;
-		factFormOpen = true;
-	}
-
-	async function assertFact() {
-		let parsed: Record<string, unknown>;
-		try {
-			parsed = JSON.parse(factText);
-		} catch {
-			error = m.adm_invalid_json();
-			return;
-		}
+	async function assertFact(fact: Record<string, unknown>) {
 		savingFact = true;
 		error = null;
 		try {
-			await api.tenantAuthzFacts.assert(parsed);
+			await api.tenantAuthzFacts.assert(fact);
 			factFormOpen = false;
 			await loadFacts();
 		} catch (e) {
@@ -88,11 +65,6 @@
 		}
 	}
 
-	function scopeText(f: AuthorizationFact): string {
-		const s = f.scope;
-		if (!s) return '—';
-		return [s.subject, s.target, s.action].filter(Boolean).join(' · ') || '—';
-	}
 
 	// ---- engagements ----
 	let engagements: TenantEngagement[] = [];
@@ -106,12 +78,59 @@
 	let endsAt = '';
 	let sourceIps = '';
 	let hosts = '';
+	let techniques = '';
+	let engError: string | null = null;
 
 	function csv(s: string): string[] {
 		return s
 			.split(',')
 			.map((v) => v.trim())
 			.filter((v) => v.length > 0);
+	}
+
+	// IPv4/IPv6/CIDR shape check. The server does authoritative validation; this
+	// mirrors it closely enough to catch obvious mistakes before the round-trip
+	// (rejects out-of-range octets and CIDR bits; accepts IPv4-mapped IPv6).
+	function looksLikeIp(v: string): boolean {
+		const slash = v.indexOf('/');
+		const addr = slash >= 0 ? v.slice(0, slash) : v;
+		const cidr = slash >= 0 ? v.slice(slash + 1) : undefined;
+		const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+		if (v4) {
+			if (!v4.slice(1).every((o) => Number(o) <= 255)) return false;
+			return cidr === undefined || (/^\d+$/.test(cidr) && Number(cidr) <= 32);
+		}
+		if (addr.includes(':') && /^[0-9a-fA-F:.]+$/.test(addr)) {
+			return cidr === undefined || (/^\d+$/.test(cidr) && Number(cidr) <= 128);
+		}
+		return false;
+	}
+
+	// Mirror the server-side declare validation (campaign.py) so users get inline
+	// feedback instead of a raw 400.
+	function validateEngagement(): string | null {
+		if (!name.trim()) return m.authz_err_eng_name();
+		const start = new Date(startsAt).getTime();
+		const end = new Date(endsAt).getTime();
+		if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return m.authz_err_eng_window();
+		if (end - start > 90 * 24 * 60 * 60 * 1000) return m.authz_err_eng_max_days();
+		const ips = csv(sourceIps);
+		if (!ips.length || !ips.every(looksLikeIp)) return m.authz_err_eng_source_ip();
+		const techs = csv(techniques).map((t) => t.toUpperCase());
+		if (!csv(hosts).length && !techs.length) return m.authz_err_eng_target();
+		if (techs.length && !techs.every((t) => /^T\d{4}(\.\d{3})?$/.test(t)))
+			return m.authz_err_eng_technique();
+		return null;
+	}
+
+	function engStatusLabel(st: 'scheduled' | 'active' | 'expired' | 'revoked'): string {
+		return st === 'active'
+			? m.authz_eng_status_active()
+			: st === 'scheduled'
+				? m.authz_eng_status_scheduled()
+				: st === 'expired'
+					? m.authz_eng_status_expired()
+					: m.authz_eng_status_revoked();
 	}
 
 	async function loadEngagements() {
@@ -126,7 +145,22 @@
 		}
 	}
 
+	function openEngForm(clone?: TenantEngagement) {
+		engError = null;
+		// Always reset the window; carry scope/name/kind only when cloning.
+		startsAt = '';
+		endsAt = '';
+		name = clone?.name ?? '';
+		kind = clone?.kind ?? 'pentest';
+		sourceIps = (clone?.scope_source_ips ?? []).join(', ');
+		hosts = (clone?.scope_hosts ?? []).join(', ');
+		techniques = (clone?.scope_techniques ?? []).join(', ');
+		engFormOpen = true;
+	}
+
 	async function declare() {
+		engError = validateEngagement();
+		if (engError) return;
 		savingEng = true;
 		error = null;
 		try {
@@ -137,12 +171,13 @@
 				ends_at: new Date(endsAt).toISOString(),
 				scope_source_ips: csv(sourceIps),
 				scope_hosts: csv(hosts),
-				scope_techniques: []
+				scope_techniques: csv(techniques).map((t) => t.toUpperCase())
 			});
 			engFormOpen = false;
 			name = '';
 			sourceIps = '';
 			hosts = '';
+			techniques = '';
 			await loadEngagements();
 		} catch (e) {
 			error = e instanceof Error ? e.message : m.adm_eng_declare_failed();
@@ -209,7 +244,7 @@
 			{#if $canAssertTenantAuthorization}
 				<button
 					class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 shrink-0"
-					on:click={openFactForm}
+					on:click={() => (factFormOpen = true)}
 				>
 					{m.adm_assert_fact()}
 				</button>
@@ -217,19 +252,14 @@
 		</div>
 
 		{#if factFormOpen && $canAssertTenantAuthorization}
-			<div class="card p-4 rounded border space-y-2">
-				<p class="text-sm opacity-70">
-					{m.adm_fact_form_hint_1()}
-					<span class="font-medium">{m.adm_status_awaiting_review()}</span>
-					{m.adm_fact_form_hint_2()}
-				</p>
-				<textarea class="textarea w-full font-mono text-xs h-56" bind:value={factText}></textarea>
-				<div class="flex justify-end gap-2">
-					<button class="px-3 py-2 text-sm" on:click={() => (factFormOpen = false)}>{m.common_cancel()}</button>
-					<button class="px-3 py-2 rounded bg-blue-600 text-white text-sm" on:click={assertFact} disabled={savingFact}>
-						{savingFact ? m.adm_submitting() : m.adm_submit_for_review()}
-					</button>
-				</div>
+			<div class="card p-4 rounded border">
+				<AuthorizationFactForm
+					mode="tenant"
+					saving={savingFact}
+					{error}
+					on:submit={(e) => assertFact(e.detail)}
+					on:cancel={() => (factFormOpen = false)}
+				/>
 			</div>
 		{/if}
 
@@ -254,7 +284,7 @@
 							<tr class="border-t">
 								<td class="px-3 py-2 font-mono truncate max-w-[16rem]">{f.id}</td>
 								<td class="px-3 py-2">{f.kind}</td>
-								<td class="px-3 py-2">{scopeText(f)}</td>
+								<td class="px-3 py-2">{factSummary(f)}</td>
 								<td class="px-3 py-2">{f.source_type}</td>
 								<td class="px-3 py-2">
 									{#if f.review_status === 'pending'}
@@ -279,7 +309,7 @@
 			{#if $canDeclareTenantEngagement}
 				<button
 					class="px-3 py-2 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 shrink-0"
-					on:click={() => (engFormOpen = !engFormOpen)}
+					on:click={() => openEngForm()}
 				>
 					{m.adm_declare_engagement()}
 				</button>
@@ -317,7 +347,14 @@
 						<span class="opacity-70">{m.adm_field_hosts()}</span>
 						<input class="input font-mono" bind:value={hosts} placeholder="web-01, db-01" />
 					</label>
+					<label class="flex flex-col gap-1 sm:col-span-2">
+						<span class="opacity-70">{m.authz_field_techniques()}</span>
+						<input class="input font-mono" bind:value={techniques} placeholder="T1078, T1110.001" />
+					</label>
 				</div>
+				{#if engError}
+					<div class="alert variant-filled-error text-sm"><span>{engError}</span></div>
+				{/if}
 				<div class="flex justify-end gap-2">
 					<button type="button" class="px-3 py-2 text-sm" on:click={() => (engFormOpen = false)}>{m.common_cancel()}</button>
 					<button type="submit" class="px-3 py-2 rounded bg-blue-600 text-white text-sm" disabled={savingEng}>
@@ -334,27 +371,31 @@
 		{:else}
 			<div class="space-y-2">
 				{#each engagements as e (e.id)}
+					{@const st = engagementStatus(e)}
 					<div class="card p-3 rounded border flex items-center justify-between gap-3">
 						<div class="min-w-0">
-							<div class="flex items-center gap-2">
+							<div class="flex items-center gap-2 flex-wrap">
 								<span class="font-semibold truncate">{e.name}</span>
-								<span class="text-xs px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700">{e.kind}</span>
-								<span
-									class="text-xs px-2 py-0.5 rounded {e.status === 'active'
-										? 'bg-green-200 text-green-900'
-										: 'bg-gray-200 text-gray-700'}">{e.status}</span
-								>
+								<span class="badge variant-soft text-xs">{e.kind}</span>
+								<span class="badge {engagementStatusVariant(st)} text-xs">{engStatusLabel(st)}</span>
+								{#if e.out_of_scope_count}
+									<span class="badge variant-soft-warning text-xs">{m.authz_eng_out_of_scope({ count: e.out_of_scope_count })}</span>
+								{/if}
 							</div>
 							<div class="text-xs opacity-70 mt-0.5">
 								{e.starts_at} → {e.ends_at}
 								{#if e.scope_source_ips?.length}· {e.scope_source_ips.join(', ')}{/if}
+								{#if e.scope_techniques?.length}· {e.scope_techniques.join(', ')}{/if}
 							</div>
 						</div>
-						{#if $canDeclareTenantEngagement && e.status !== 'revoked'}
-							<button class="text-red-400 hover:underline text-sm shrink-0" on:click={() => revoke(e)}>
-								{m.adm_revoke()}
-							</button>
-						{/if}
+						<div class="flex gap-3 shrink-0">
+							{#if $canDeclareTenantEngagement}
+								<button class="text-sm opacity-70 hover:opacity-100" on:click={() => openEngForm(e)}>{m.authz_eng_clone()}</button>
+							{/if}
+							{#if $canDeclareTenantEngagement && st !== 'revoked'}
+								<button class="text-red-400 hover:underline text-sm" on:click={() => revoke(e)}>{m.adm_revoke()}</button>
+							{/if}
+						</div>
 					</div>
 				{/each}
 			</div>
