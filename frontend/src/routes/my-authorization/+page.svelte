@@ -223,7 +223,7 @@
 					<span class="font-medium">{m.adm_status_awaiting_review()}</span>
 					{m.adm_fact_form_hint_2()}
 				</p>
-				<textarea class="w-full border rounded p-2 font-mono text-xs h-56" bind:value={factText}></textarea>
+				<textarea class="textarea w-full font-mono text-xs h-56" bind:value={factText}></textarea>
 				<div class="flex justify-end gap-2">
 					<button class="px-3 py-2 text-sm" on:click={() => (factFormOpen = false)}>{m.common_cancel()}</button>
 					<button class="px-3 py-2 rounded bg-blue-600 text-white text-sm" on:click={assertFact} disabled={savingFact}>
@@ -291,11 +291,11 @@
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_name()}</span>
-						<input class="border rounded px-2 py-1" bind:value={name} required placeholder={m.adm_placeholder_engagement_name()} />
+						<input class="input" bind:value={name} required placeholder={m.adm_placeholder_engagement_name()} />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_kind()}</span>
-						<select class="border rounded px-2 py-1" bind:value={kind}>
+						<select class="select" bind:value={kind}>
 							<option value="pentest">pentest</option>
 							<option value="red_team">red_team</option>
 							<option value="vuln_scan">vuln_scan</option>
@@ -303,19 +303,19 @@
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_starts()}</span>
-						<input class="border rounded px-2 py-1" type="datetime-local" bind:value={startsAt} required />
+						<input class="input" type="datetime-local" bind:value={startsAt} required />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_ends()}</span>
-						<input class="border rounded px-2 py-1" type="datetime-local" bind:value={endsAt} required />
+						<input class="input" type="datetime-local" bind:value={endsAt} required />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_source_ips()}</span>
-						<input class="border rounded px-2 py-1 font-mono" bind:value={sourceIps} placeholder="203.0.113.0/24" />
+						<input class="input font-mono" bind:value={sourceIps} placeholder="203.0.113.0/24" />
 					</label>
 					<label class="flex flex-col gap-1">
 						<span class="opacity-70">{m.adm_field_hosts()}</span>
-						<input class="border rounded px-2 py-1 font-mono" bind:value={hosts} placeholder="web-01, db-01" />
+						<input class="input font-mono" bind:value={hosts} placeholder="web-01, db-01" />
 					</label>
 				</div>
 				<div class="flex justify-end gap-2">
