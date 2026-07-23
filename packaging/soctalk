@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# soctalk — manage a SocTalk install on this host.
+#
+# Thin wrapper (installed at /usr/bin/soctalk by the rpm/deb/apk package) around
+# the packaged installer and k3s/helm. SocTalk itself runs on Kubernetes; this
+# CLI just drives install.sh and the cluster. Run `soctalk install` after the
+# package is installed to bring up the SOC stack.
+set -euo pipefail
+
+# Version comes from the file the package ships (written to the release version
+# at build time); env override or "dev" for a source run.
+VERSION="${SOCTALK_CLI_VERSION:-$(cat /usr/libexec/soctalk/VERSION 2>/dev/null || echo dev)}"
+
+INSTALLER="${SOCTALK_INSTALLER:-/usr/libexec/soctalk/install.sh}"
+NAMESPACE="${SOCTALK_NAMESPACE:-soctalk-system}"
+RELEASE="${SOCTALK_RELEASE:-soctalk-system}"
+KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+
+# Prefer standalone kubectl; fall back to the one k3s bundles.
+kube() {
+  if command -v kubectl >/dev/null 2>&1; then
+    KUBECONFIG="$KUBECONFIG_PATH" kubectl "$@"
+  elif command -v k3s >/dev/null 2>&1; then
+    k3s kubectl "$@"
+  else
+    echo "soctalk: neither kubectl nor k3s found — is SocTalk installed? run: soctalk install" >&2
+    return 1
+  fi
+}
+
+need_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "soctalk $1: run as root (sudo soctalk $1 …)" >&2
+    exit 1
+  fi
+}
+
+usage() {
+  cat <<EOF
+soctalk $VERSION — manage a SocTalk install
+
+Usage: soctalk <command> [args]
+
+Commands:
+  install [args…]   Bring up SocTalk on this host (installs k3s + helm if
+                    missing, then helm-installs soctalk-system). Passes args
+                    through to the installer, e.g.:
+                      soctalk install --demo
+                      soctalk install --values-file /etc/soctalk/values.yaml
+                    See 'soctalk install --help' for all installer flags.
+  upgrade [args…]   Re-run the installer against the current chart (idempotent
+                    helm upgrade --install). Same args as install.
+  status            Show the SocTalk pods and their readiness.
+  logs [component]  Tail logs (default: api). e.g. soctalk logs adapter
+  uninstall [--purge]
+                    Remove the SocTalk helm release. --purge also runs
+                    k3s-uninstall.sh (tears down the whole cluster).
+  version           Print the CLI version.
+
+Docs: https://soctalk.github.io/soctalk-docs/
+EOF
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] && shift || true
+
+case "$cmd" in
+  install|upgrade)
+    if [ ! -x "$INSTALLER" ]; then
+      echo "soctalk: installer not found at $INSTALLER (reinstall the package)" >&2
+      exit 1
+    fi
+    # install.sh handles its own privilege escalation (sudo) and k3s/helm setup.
+    exec bash "$INSTALLER" "$@"
+    ;;
+
+  status)
+    kube -n "$NAMESPACE" get pods -o wide
+    ;;
+
+  logs)
+    comp="${1:-api}"
+    kube -n "$NAMESPACE" logs -l "app.kubernetes.io/name=soctalk-${comp}" --tail=200 -f
+    ;;
+
+  uninstall)
+    need_root uninstall
+    purge=0
+    [ "${1:-}" = "--purge" ] && purge=1
+    if command -v helm >/dev/null 2>&1; then
+      KUBECONFIG="$KUBECONFIG_PATH" helm -n "$NAMESPACE" uninstall "$RELEASE" || true
+    fi
+    if [ "$purge" -eq 1 ] && [ -x /usr/local/bin/k3s-uninstall.sh ]; then
+      echo "soctalk: purging k3s…"
+      /usr/local/bin/k3s-uninstall.sh
+    fi
+    echo "soctalk: uninstalled${purge:+ (cluster purged)}"
+    ;;
+
+  version|-v|--version)
+    echo "soctalk $VERSION"
+    ;;
+
+  ""|-h|--help|help)
+    usage
+    ;;
+
+  *)
+    echo "soctalk: unknown command '$cmd'" >&2
+    usage
+    exit 1
+    ;;
+esac

@@ -1,0 +1,57 @@
+# nFPM spec for the `soctalk` OS package (rpm / deb / apk) — see issue #70.
+# One spec -> yum/dnf, apt, and Alpine. Build:
+#   VERSION=0.2.0 nfpm pkg -f packaging/nfpm.yaml -p rpm -t dist/
+# (run from the repo root; paths below are repo-root-relative). ${VERSION} and
+# ${ARCH} are expanded from the environment by nfpm.
+name: soctalk
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: admin
+priority: optional
+maintainer: "Gianluca Brigandi <gbrigand@gmail.com>"
+vendor: "SocTalk"
+homepage: "https://soctalk.ai"
+license: "Apache-2.0"
+description: |
+  Open-source, LLM-driven SOC automation — continuously triages, investigates,
+  and escalates Wazuh alerts, single-host or multi-tenant for MSPs/MSSPs.
+
+  SocTalk runs on Kubernetes (k3s). This package installs the `soctalk` CLI and
+  the installer; run `soctalk install` to bring up the SOC stack on this host.
+
+# deb "Depends" / rpm "Requires" — the installer fetches k3s + helm itself.
+depends:
+  - curl
+  - tar
+
+contents:
+  - src: ./packaging/soctalk
+    dst: /usr/bin/soctalk
+    file_info:
+      mode: 0755
+  - src: ./install.sh
+    dst: /usr/libexec/soctalk/install.sh
+    file_info:
+      mode: 0755
+  - src: ./packaging/VERSION
+    dst: /usr/libexec/soctalk/VERSION
+    file_info:
+      mode: 0644
+  - src: ./packaging/soctalk.env.example
+    dst: /etc/soctalk/soctalk.env.example
+    type: config|noreplace
+  - src: ./LICENSE
+    dst: /usr/share/doc/soctalk/LICENSE
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+
+overrides:
+  apk:
+    depends:
+      - curl
+      - tar
+      - bash

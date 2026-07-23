@@ -1,0 +1,66 @@
+name: Build OS Packages
+
+# Builds the `soctalk` OS packages (rpm / deb / apk) with nFPM and attaches
+# them to the matching vX.Y.Z GitHub Release. Phase 1 of #70: install-directly
+# packages (`rpm -i` / `dpkg -i` / `apk add`); signed hosted repos come later.
+#
+# Dispatch-only + version input, same deliberate pattern as build-packer-images:
+# cut the release first (cut-k8s-release.yml), then run this with the SAME
+# version to attach the packages. amd64 only for now (matches the amd64 image
+# build); arm64 is a follow-up.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version, no leading v (e.g. 0.2.0). Attaches to the vX.Y.Z release."
+        required: true
+
+permissions:
+  contents: write   # attach packages to the release
+
+concurrency:
+  group: packages-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nFPM
+        run: |
+          set -euo pipefail
+          NFPM_VER=2.41.3
+          curl -sfL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin nfpm
+          sudo chmod +x /usr/local/bin/nfpm
+          nfpm --version
+
+      - name: Stamp CLI version
+        # The shipped /usr/libexec/soctalk/VERSION drives `soctalk version`.
+        run: echo "${{ inputs.version }}" > packaging/VERSION
+
+      - name: Build rpm / deb / apk
+        env:
+          VERSION: ${{ inputs.version }}
+          ARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist/pkg
+          for fmt in rpm deb apk; do
+            echo "==> building $fmt"
+            nfpm pkg -f packaging/nfpm.yaml -p "$fmt" -t dist/pkg/
+          done
+          ls -lh dist/pkg/
+
+      - name: Attach packages to the vX.Y.Z GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/pkg/*.rpm dist/pkg/*.deb dist/pkg/*.apk)
+          echo "attaching ${#files[@]} packages to v${{ inputs.version }}:"; printf '  %s\n' "${files[@]}"
+          gh release upload "v${{ inputs.version }}" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
