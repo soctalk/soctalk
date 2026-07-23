@@ -101,7 +101,7 @@
 	<div class="flex items-center justify-between mb-4">
 		<div>
 			<h1 class="text-2xl font-semibold">{m.adm_facts_title()}</h1>
-			<p class="text-sm text-gray-500">
+			<p class="text-sm text-gray-400">
 				{m.adm_facts_intro()}
 			</p>
 		</div>
@@ -117,17 +117,17 @@
 	</div>
 
 	{#if !tenantId}
-		<p class="text-gray-500">{m.adm_select_tenant()}</p>
+		<p class="text-gray-400">{m.adm_select_tenant()}</p>
 	{:else if loading}
-		<p class="text-gray-500">{m.common_loading()}</p>
+		<p class="text-gray-400">{m.common_loading()}</p>
 	{:else if error}
-		<p class="text-red-600">{error}</p>
+		<p class="text-red-400">{error}</p>
 	{:else if facts.length === 0}
-		<p class="text-gray-500">{m.adm_facts_empty()}</p>
+		<p class="text-gray-400">{m.adm_facts_empty()}</p>
 	{:else}
 		<div class="overflow-x-auto border rounded">
 			<table class="min-w-full text-sm">
-				<thead class="bg-gray-50 text-left text-gray-600">
+				<thead class="bg-gray-50 dark:bg-gray-800 text-left text-gray-600 dark:text-gray-300">
 					<tr>
 						<th class="px-3 py-2">{m.adm_th_id()}</th>
 						<th class="px-3 py-2">{m.adm_th_kind()}</th>
@@ -162,19 +162,19 @@
 								{/if}
 							</td>
 							<td class="px-3 py-2">{f.valid_until ?? '—'}</td>
-							<td class="px-3 py-2 text-gray-500">
+							<td class="px-3 py-2 text-gray-400">
 								{f.provenance?.api_caller ?? f.created_by ?? '—'}
 							</td>
 							<td class="px-3 py-2 text-right whitespace-nowrap">
 								{#if $canManageAuthorization && f.review_status === 'pending'}
-									<button class="text-green-700 hover:underline mr-2" on:click={() => review(f, 'approve')}>
+									<button class="text-green-400 hover:underline mr-2" on:click={() => review(f, 'approve')}>
 										{m.adm_approve()}
 									</button>
-									<button class="text-red-600 hover:underline" on:click={() => review(f, 'reject')}>
+									<button class="text-red-400 hover:underline" on:click={() => review(f, 'reject')}>
 										{m.adm_reject()}
 									</button>
 								{:else if $canManageAuthorization}
-									<button class="text-red-600 hover:underline" on:click={() => revoke(f)}>
+									<button class="text-red-400 hover:underline" on:click={() => revoke(f)}>
 										{m.adm_revoke()}
 									</button>
 								{/if}

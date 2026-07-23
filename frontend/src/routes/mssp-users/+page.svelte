@@ -193,9 +193,9 @@
 							<td class="px-3 py-2 text-right">
 								{#if $canManageUsers}
 									{#if u.active}
-										<button class="text-xs text-red-700 hover:underline" on:click={() => setActive(u, false)}>{m.adm_deactivate()}</button>
+										<button class="text-xs text-red-400 hover:underline" on:click={() => setActive(u, false)}>{m.adm_deactivate()}</button>
 									{:else}
-										<button class="text-xs text-blue-700 hover:underline" on:click={() => setActive(u, true)}>{m.adm_reactivate()}</button>
+										<button class="text-xs text-blue-400 hover:underline" on:click={() => setActive(u, true)}>{m.adm_reactivate()}</button>
 									{/if}
 								{/if}
 							</td>

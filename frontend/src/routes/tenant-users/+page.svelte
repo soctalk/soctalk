@@ -213,11 +213,11 @@
 							<td class="px-3 py-2 text-right">
 								{#if $canManageTenantUsers}
 									{#if u.active}
-										<button class="text-xs text-red-700 hover:underline" on:click={() => deactivate(u)}>
+										<button class="text-xs text-red-400 hover:underline" on:click={() => deactivate(u)}>
 											{m.adm_deactivate()}
 										</button>
 									{:else}
-										<button class="text-xs text-blue-700 hover:underline" on:click={() => reactivate(u)}>
+										<button class="text-xs text-blue-400 hover:underline" on:click={() => reactivate(u)}>
 											{m.adm_reactivate()}
 										</button>
 									{/if}

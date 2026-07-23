@@ -319,7 +319,7 @@
 						<div class="flex items-center gap-2 text-sm py-3">
 							<a
 								href={localizeHref(`/investigations/${review.investigation_id}`)}
-								class="text-primary-500 hover:underline flex items-center gap-1"
+								class="text-primary-400 hover:underline flex items-center gap-1"
 								on:click|stopPropagation
 							>
 								<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

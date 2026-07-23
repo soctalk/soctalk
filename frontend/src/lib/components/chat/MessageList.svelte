@@ -94,8 +94,8 @@
 	{#if messages.length === 0 && !pending}
 		<div class="text-xs opacity-60 italic text-center py-4">
 			Ask anything about this investigation — try
-			<code class="text-primary-500">"why did this escalate?"</code>
-			or <code class="text-primary-500">"any related alerts in the last hour?"</code>
+			<code class="text-primary-400">"why did this escalate?"</code>
+			or <code class="text-primary-400">"any related alerts in the last hour?"</code>
 		</div>
 	{/if}
 </div>

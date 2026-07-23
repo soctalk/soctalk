@@ -351,7 +351,7 @@
 							</div>
 						</div>
 						{#if $canDeclareTenantEngagement && e.status !== 'revoked'}
-							<button class="text-red-600 hover:underline text-sm shrink-0" on:click={() => revoke(e)}>
+							<button class="text-red-400 hover:underline text-sm shrink-0" on:click={() => revoke(e)}>
 								{m.adm_revoke()}
 							</button>
 						{/if}
