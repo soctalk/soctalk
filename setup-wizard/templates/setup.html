@@ -16,6 +16,8 @@
       it below.
     </p>
 
+    {{ if .AuthError }}<div class="err" role="alert">{{ .AuthError }}</div>{{ end }}
+
     {{ if not .Authenticated }}
     <form method="POST" action="/auth" id="auth-form">
       <fieldset>
@@ -75,48 +77,119 @@
     </form>
 
     <section id="status" hidden>
-      <h2>Saving config…</h2>
+      <h2 id="status-title">Saving config…</h2>
       <p id="status-msg">Working…</p>
-      <pre id="status-err"></pre>
+      <p class="err" id="status-recovery" role="alert" hidden></p>
+      <button type="button" id="reload-btn" hidden onclick="location.reload()">Reload &amp; re-enter token</button>
       <a id="ui-link" hidden>Open SocTalk →</a>
       <p class="hint" id="install-hint" hidden>
         The wizard has handed off. The installer is now running in the
-        background — give it ~3 minutes, then open the link above.
+        background — give it ~3 minutes, then open the link above. If the URL
+        doesn't come up, check:  sudo journalctl -u soctalk-firstboot -f
       </p>
     </section>
 
     <script>
       const form = document.getElementById('setup-form');
       const statusBox = document.getElementById('status');
+      const title = document.getElementById('status-title');
       const msg = document.getElementById('status-msg');
-      const errBox = document.getElementById('status-err');
+      const recoveryEl = document.getElementById('status-recovery');
+      const reloadBtn = document.getElementById('reload-btn');
       const link = document.getElementById('ui-link');
       const hint = document.getElementById('install-hint');
       const submit = document.getElementById('submit');
+      let lastPhase = '';
+
+      // Render a failure with a human message, optional recovery steps, and —
+      // for an expired session — a reload button (the only way back, since the
+      // token itself changed).
+      function showError(message, recovery, offerReload) {
+        title.textContent = 'Setup could not continue';
+        msg.textContent = message || 'Something went wrong.';
+        recoveryEl.textContent = recovery || '';
+        recoveryEl.hidden = !recovery;
+        reloadBtn.hidden = !offerReload;
+        link.hidden = true;
+        hint.hidden = true;
+        // For fixable errors (validation, rate-limit) let them retry inline.
+        // For an expired session the cookies/token are stale — reload instead.
+        if (!offerReload) {
+          form.hidden = false;
+          submit.disabled = false;
+        }
+      }
+
+      function showHandedOff(uiUrl, message) {
+        title.textContent = 'Setup submitted';
+        msg.textContent = message || 'Config saved. The installer is finishing in the background.';
+        recoveryEl.hidden = true;
+        reloadBtn.hidden = true;
+        if (uiUrl) {
+          link.href = uiUrl;
+          link.textContent = 'Open SocTalk: ' + uiUrl;
+          link.hidden = false;
+        }
+        hint.hidden = false;
+      }
+
+      // Poll the real install status (cookie-authed) so config-write errors and
+      // the actual "installer running" message + UI URL surface — not a
+      // hardcoded "Config saved". The wizard exits ~3s after it reports
+      // success, so a connection drop AFTER we've seen success is a clean
+      // hand-off, not a failure.
+      async function pollStatus() {
+        title.textContent = 'Setting up…';
+        let tries = 0;
+        const tick = async () => {
+          tries++;
+          let s;
+          try {
+            const rs = await fetch('/status', { credentials: 'same-origin' });
+            if (!rs.ok) throw new Error('status ' + rs.status);
+            s = await rs.json();
+          } catch (e) {
+            if (lastPhase === 'success' || tries > 4) { showHandedOff(); return; }
+            setTimeout(tick, 1500);
+            return;
+          }
+          lastPhase = s.phase;
+          if (s.phase === 'error') {
+            showError(s.message || 'The install step failed.',
+              s.error ? ('Details: ' + s.error + '\nLogs:  sudo journalctl -u soctalk-firstboot') : '', false);
+            return;
+          }
+          if (s.phase === 'success') { showHandedOff(s.ui_url, s.message); return; }
+          if (s.message) msg.textContent = s.message;
+          setTimeout(tick, 1500);
+        };
+        tick();
+      }
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         submit.disabled = true;
         form.hidden = true;
         statusBox.hidden = false;
-        const body = new FormData(form);
-        const r = await fetch('/submit', { method: 'POST', body, credentials: 'same-origin' });
-        if (!r.ok) {
-          msg.textContent = 'submit failed';
-          errBox.textContent = await r.text();
-          submit.disabled = false;
-          form.hidden = false;
-          statusBox.hidden = true;
+        title.textContent = 'Saving config…';
+        msg.textContent = 'Working…';
+        recoveryEl.hidden = true; reloadBtn.hidden = true; link.hidden = true; hint.hidden = true;
+
+        let r;
+        try {
+          r = await fetch('/submit', { method: 'POST', body: new FormData(form), credentials: 'same-origin' });
+        } catch (e) {
+          showError('Could not reach the setup service.',
+            'Check the VM is still running, then reload this page.', true);
           return;
         }
-        const s = await r.json();
-        msg.textContent = s.message || 'Config saved.';
-        if (s.ui_url) {
-          link.href = s.ui_url;
-          link.textContent = 'Open SocTalk: ' + s.ui_url;
-          link.hidden = false;
+        if (!r.ok) {
+          let data;
+          try { data = await r.json(); } catch (_) { data = { message: await r.text() }; }
+          showError(data.message, data.recovery, data.error === 'session_expired');
+          return;
         }
-        hint.hidden = false;
+        pollStatus();
       });
     </script>
     {{ end }}

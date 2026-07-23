@@ -86,7 +86,24 @@ func (s *serverState) handleRoot(w http.ResponseWriter, r *http.Request) {
 		"Authenticated": authenticated,
 		"CSRF":          csrf,
 		"Providers":     []string{"anthropic", "openai"},
+		"AuthError":     authErrorMessage(r.URL.Query().Get("err")),
 	})
+}
+
+// authErrorMessage maps an ?err= code (set by handleAuth on a failed token
+// submit) to a human-readable, recovery-oriented message rendered above the
+// token form. Empty for no error.
+func authErrorMessage(code string) string {
+	switch code {
+	case "invalid_token":
+		return "That setup token was not recognized. The token changes every time the wizard restarts — re-copy the current one with:  sudo cat /var/log/soctalk-setup-token"
+	case "rate_limited":
+		return "Too many attempts in a short time. Wait about a minute, then try again."
+	case "bad_form":
+		return "The form could not be read. Please try again."
+	default:
+		return ""
+	}
 }
 
 // handleAuth processes the token-entry form. On success, sets a session
@@ -97,21 +114,23 @@ func (s *serverState) handleAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	// The token form is a plain POST->redirect (no JS), so on failure we
+	// redirect back to "/" with an ?err= code that handleRoot renders as a
+	// friendly inline message above the form — never a bare 401/429 page.
 	ip := clientIP(r)
-	ok, retry := s.rateLimit.allowAttempt(ip)
+	ok, _ := s.rateLimit.allowAttempt(ip)
 	if !ok {
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds()+1)))
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		http.Redirect(w, r, "/?err=rate_limited", http.StatusSeeOther)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+		http.Redirect(w, r, "/?err=bad_form", http.StatusSeeOther)
 		return
 	}
 	presented := r.FormValue("token")
 	if !tokenMatch(s.token, presented) {
 		s.rateLimit.recordFailure(ip)
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+		http.Redirect(w, r, "/?err=invalid_token", http.StatusSeeOther)
 		return
 	}
 	s.rateLimit.recordSuccess(ip)
@@ -154,22 +173,27 @@ func (s *serverState) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	ok, _ := s.rateLimit.allowAttempt(ip)
 	if !ok {
-		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		writeJSONError(w, http.StatusTooManyRequests, "rate_limited",
+			"Too many attempts in a short time.", "Wait about a minute, then submit again.")
 		return
 	}
 
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "bad_request",
+			"The form could not be read.", "Reload this page and try again.")
 		return
 	}
-	// Session must be valid (token-form was completed) AND CSRF must match.
+	// Session + CSRF must be valid. Both break the same way — the wizard
+	// regenerates its token and CSRF key on every (re)start, so a page opened
+	// before a restart submits stale cookies. Report that plainly with the
+	// exact recovery steps instead of a bare 401/403.
 	if !s.checkAuthCookie(r) {
-		http.Error(w, "auth required", http.StatusUnauthorized)
+		writeJSONError(w, http.StatusUnauthorized, "session_expired", sessionExpiredMsg, sessionExpiredRecovery)
 		return
 	}
 	cookie, err := r.Cookie("soctalk_csrf")
 	if err != nil || !csrfMatch(s.csrfKey, s.token, cookie.Value) || cookie.Value != r.FormValue("csrf") {
-		http.Error(w, "csrf check failed", http.StatusForbidden)
+		writeJSONError(w, http.StatusForbidden, "session_expired", sessionExpiredMsg, sessionExpiredRecovery)
 		return
 	}
 
@@ -182,7 +206,8 @@ func (s *serverState) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		LLMAPIKey:   strings.TrimSpace(r.FormValue("llm_api_key")),
 	}
 	if err := req.validate(); err != nil {
-		http.Error(w, "validation: "+err.Error(), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "validation",
+			err.Error(), "Correct that detail in the form and submit again.")
 		return
 	}
 
@@ -191,7 +216,9 @@ func (s *serverState) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.installCh <- req:
 	default:
-		http.Error(w, "install already running", http.StatusConflict)
+		writeJSONError(w, http.StatusConflict, "in_progress",
+			"Setup was already submitted and is running.",
+			"Watch the status below — no need to submit again.")
 		return
 	}
 
@@ -204,8 +231,10 @@ func (s *serverState) handleSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *serverState) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if presented := r.URL.Query().Get("token"); !tokenMatch(s.token, presented) {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+	// Authorize by the session cookie (so the in-page poller needs no token in
+	// the DOM) OR an explicit ?token= (for SSH/curl checks).
+	if !s.checkAuthCookie(r) && !tokenMatch(s.token, r.URL.Query().Get("token")) {
+		writeJSONError(w, http.StatusUnauthorized, "session_expired", sessionExpiredMsg, sessionExpiredRecovery)
 		return
 	}
 	s.mu.RLock()
@@ -218,6 +247,28 @@ func (s *serverState) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *serverState) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
+}
+
+// The session/CSRF failure the operator most often hits: the wizard restarted
+// (its unit is Restart=on-failure, first-boot may retry, or the VM rebooted),
+// which regenerates the token + CSRF key, so a page opened earlier now carries
+// stale cookies. Same message + recovery for the 401 (session) and 403 (CSRF)
+// forms, since the cause and fix are identical.
+const (
+	sessionExpiredMsg      = "Your setup session expired — the wizard restarted since this page was opened."
+	sessionExpiredRecovery = "Reload this page and re-enter the current setup token. The token changes each time the wizard restarts — get it with:  sudo cat /var/log/soctalk-setup-token"
+)
+
+// writeJSONError sends a structured, human-readable error the browser renders
+// as message + recovery guidance (never a bare status-code page).
+func writeJSONError(w http.ResponseWriter, status int, code, message, recovery string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":    code,
+		"message":  message,
+		"recovery": recovery,
+	})
 }
 
 func (s *serverState) updateStatus(phase, msg, ui, errStr string) {

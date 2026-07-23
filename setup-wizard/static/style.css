@@ -67,7 +67,18 @@ button {
 }
 button:disabled { opacity: .6; cursor: wait; }
 #status { margin-top: 1rem; }
-#status-err { color: var(--error); font-size: .85em; white-space: pre-wrap; word-break: break-all; }
+.err {
+  color: var(--error);
+  background: rgba(248, 113, 113, .1);
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  padding: .6rem .8rem;
+  margin: .6rem 0;
+  font-size: .9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#reload-btn { margin-top: .4rem; }
 #ui-link {
   display: inline-block;
   margin-top: 1rem;
