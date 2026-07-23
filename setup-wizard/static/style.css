@@ -67,6 +67,11 @@ button {
 }
 button:disabled { opacity: .6; cursor: wait; }
 #status { margin-top: 1rem; }
+/* Author display rules (e.g. #ui-link: inline-block) otherwise beat the UA
+   [hidden] rule, leaving toggled elements visible when JS sets .hidden. Make
+   the attribute authoritative so showError/showHandedOff hide cleanly. */
+[hidden] { display: none !important; }
+
 .err {
   color: var(--error);
   background: rgba(248, 113, 113, .1);
