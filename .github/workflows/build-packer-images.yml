@@ -9,8 +9,15 @@ name: Build Packer Demo Images
 #     step from cutting the k8s release. Cut + validate the k8s artifacts
 #     first (see cut-k8s-release.yml, which auto-updates demo), then run
 #     this action with the SAME version to build the demo VM images and
-#     attach the compressed qcow2/vmdk/vhdx/vhd/raw + SHA256SUMS to the
-#     matching vX.Y.Z GitHub Release.
+#     attach them to the matching vX.Y.Z GitHub Release.
+#
+# Deliverables (EVERY run — the verify gate fails the build if any is
+# missing, so a release can never ship a partial set):
+#   * compressed disks: qcow2, vmdk, vhdx, vhd, raw (+ SHA256SUMS)
+#   * soctalk-demo-<ver>.ova — VMware/vSphere one-step deploy (Deploy OVF
+#     Template / ovftool / govc import.ova); built unconditionally from the
+#     streamOptimized vmdk by scripts/make-ova.sh in the packer
+#     post-processor. Running build-packer for a release ALWAYS yields an OVA.
 #
 # Image builds are expensive (~10-15 min + nontrivial CI minutes +
 # multi-GB artifacts) and must never race the chart publish, so this
