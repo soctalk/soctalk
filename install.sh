@@ -19,6 +19,14 @@
 # Run with --help for the full flag/env reference.
 set -euo pipefail
 
+# k3s / helm install their binaries (and the `kubectl` symlink) into
+# /usr/local/bin. That directory is NOT on the sudo secure_path on RHEL-family
+# distros, so when this installer runs via `sudo soctalk install`, bare
+# `kubectl`/`helm`/`k3s` calls 404 — which made the k3s readiness probe below
+# fail for its whole window and wrongly report "k3s did not become ready".
+# Put it on PATH up front so every downstream tool call resolves.
+case ":$PATH:" in *":/usr/local/bin:"*) ;; *) export PATH="/usr/local/bin:$PATH" ;; esac
+
 # --------------------------------------------------------------------- #
 # Defaults (override via flags or SOCTALK_* env). CHART_VERSION tracks
 # the release this installer shipped with; pin the installer by fetching
@@ -247,8 +255,10 @@ REG
   until [[ -f "$KUBECONFIG_PATH" ]]; do sleep 1; done
   export KUBECONFIG="$KUBECONFIG_PATH"
   chmod 600 "$KUBECONFIG_PATH" 2>/dev/null || true
+  # Up to 5 min: a first k3s boot pulls its system images + inits containerd,
+  # which is slower on constrained / first-boot hosts (120s was too tight).
   local i
-  for i in $(seq 1 60); do kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done
+  for i in $(seq 1 150); do kubectl get nodes >/dev/null 2>&1 && break; sleep 2; done
   kubectl get nodes >/dev/null 2>&1 || die "k3s did not become ready"
 }
 

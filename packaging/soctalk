@@ -16,12 +16,23 @@ NAMESPACE="${SOCTALK_NAMESPACE:-soctalk-system}"
 RELEASE="${SOCTALK_RELEASE:-soctalk-system}"
 KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
+# Resolve a binary by name, then by the /usr/local/bin path k3s/helm install to
+# — RHEL's sudo secure_path excludes /usr/local/bin, so a bare `k3s`/`kubectl`/
+# `helm` 404s under `sudo soctalk …`. Prints nothing if not found.
+resolve() {
+  if command -v "$1" >/dev/null 2>&1; then command -v "$1"
+  elif [ -x "/usr/local/bin/$1" ]; then echo "/usr/local/bin/$1"
+  fi
+}
+
 # Prefer standalone kubectl; fall back to the one k3s bundles.
 kube() {
-  if command -v kubectl >/dev/null 2>&1; then
-    KUBECONFIG="$KUBECONFIG_PATH" kubectl "$@"
-  elif command -v k3s >/dev/null 2>&1; then
-    k3s kubectl "$@"
+  local kubectl k3s
+  kubectl="$(resolve kubectl)"; k3s="$(resolve k3s)"
+  if [ -n "$kubectl" ]; then
+    KUBECONFIG="$KUBECONFIG_PATH" "$kubectl" "$@"
+  elif [ -n "$k3s" ]; then
+    "$k3s" kubectl "$@"
   else
     echo "soctalk: neither kubectl nor k3s found — is SocTalk installed? run: soctalk install" >&2
     return 1
@@ -87,8 +98,9 @@ case "$cmd" in
     need_root uninstall
     purge=0
     [ "${1:-}" = "--purge" ] && purge=1
-    if command -v helm >/dev/null 2>&1; then
-      KUBECONFIG="$KUBECONFIG_PATH" helm -n "$NAMESPACE" uninstall "$RELEASE" || true
+    helm_bin="$(resolve helm)"
+    if [ -n "$helm_bin" ]; then
+      KUBECONFIG="$KUBECONFIG_PATH" "$helm_bin" -n "$NAMESPACE" uninstall "$RELEASE" || true
     fi
     if [ "$purge" -eq 1 ] && [ -x /usr/local/bin/k3s-uninstall.sh ]; then
       echo "soctalk: purging k3s…"
