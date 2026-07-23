@@ -1,26 +1,26 @@
 name: Cut k8s Release
 
-# Cuts a k3s/k8s release — the container images + Helm charts + GitHub
-# Release — WITHOUT building demo VM images. This is the deliberate
-# "publish the Kubernetes artifacts" button, decoupled from the (heavy)
-# Packer VM build so you can cut and validate the k8s release on demo
-# first, then build VM images separately (see build-packer-images.yml,
-# now dispatch-only).
+# Cuts a full release in ONE action: container images + Helm charts + GitHub
+# Release + OS packages (rpm/deb/apk), and it kicks off the demo VM image + OVA
+# build. So a release always carries every artifact — nothing to remember to
+# run separately.
 #
 # Flow:
 #   1. Bump all version strings to X.Y.Z on main (charts, install.sh,
 #      package metadata) and let publish-images.yml publish the moving
 #      `latest` images + the X.Y.Z charts on that push.
-#   2. Run this action with version = X.Y.Z. It re-builds the images from
-#      the current ref and tags them `X.Y.Z` (the immutable release tag),
-#      re-pushes the charts (idempotent), and creates tag vX.Y.Z + the
-#      GitHub Release.
-#   3. Once demo (which tracks `latest`) looks good, run
-#      build-packer-images.yml with the same version to attach VM images.
+#   2. Run this action with version = X.Y.Z. It:
+#      - re-builds the images from the current ref and tags them `X.Y.Z`,
+#      - re-pushes the charts (idempotent),
+#      - creates tag vX.Y.Z + the GitHub Release,
+#      - builds + attaches the rpm/deb/apk packages (fast, inline), and
+#      - dispatches build-packer-images.yml (async) for the VM images + OVA,
+#        which attach to the same release when the ~50-min build finishes.
 #
-# Dispatch-only on purpose: creating the vX.Y.Z tag here must not
-# re-trigger a tag-driven build (no infinite loop), and a release is a
-# deliberate human action, not a side effect of pushing a tag.
+# Dispatch-only on purpose: creating the vX.Y.Z tag here must not re-trigger a
+# tag-driven build (no infinite loop), and a release is a deliberate human
+# action. The VM build is fired via workflow_dispatch (an allowed GITHUB_TOKEN
+# trigger), async so the k8s release + packages don't wait on it.
 
 on:
   workflow_dispatch:
@@ -36,6 +36,7 @@ on:
 permissions:
   contents: write   # create the git tag + GitHub Release
   packages: write   # push images + charts to ghcr.io
+  actions: write    # dispatch the VM-image build (build-packer-images.yml)
 
 concurrency:
   group: cut-k8s-release-${{ inputs.version }}
@@ -184,7 +185,12 @@ jobs:
               echo "- \`oci://ghcr.io/soctalk/charts/${chart}\` @ \`${chart_ver}\`"
             done
             echo
-            echo "> Demo VM images are built separately via the **Build Packer Demo Images** action."
+            echo "## OS packages"
+            echo
+            echo "Attached below: \`soctalk-<ver>.rpm\` (dnf/yum), \`.deb\` (apt), \`.apk\` (Alpine)."
+            echo "Install: e.g. \`sudo dnf install ./soctalk-${ver}.rpm && sudo soctalk install\`."
+            echo
+            echo "> Demo VM images (qcow2/vmdk/ova/…) build automatically and attach here when ready."
             echo
             if [[ -n "${prev_tag}" ]]; then
               echo "## Changes since ${prev_tag}"
@@ -212,3 +218,37 @@ jobs:
               --title "v${ver}" \
               --notes-file body.md
           fi
+
+  # OS packages (rpm/deb/apk) — built + attached to the release on EVERY cut
+  # so a release always carries them. Fast (~1 min); reuses packages.yml.
+  packages:
+    name: OS packages
+    needs: [release]
+    if: ${{ inputs.create_release }}
+    uses: ./.github/workflows/packages.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets: inherit
+
+  # VM images + OVA — kicked off automatically on every cut so the release
+  # always gets them too, but ASYNC (the build is ~50 min + boot-tested): the
+  # k8s release + OS packages don't wait on it. build-packer-images attaches
+  # the disks/OVA to the same vX.Y.Z release when it finishes. workflow_dispatch
+  # via GITHUB_TOKEN is an allowed trigger (unlike push/tag), so this fires.
+  vm-images:
+    name: Trigger VM image build
+    needs: [release]
+    if: ${{ inputs.create_release }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch build-packer-images (async)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-packer-images.yml \
+            -f version="${{ inputs.version }}" \
+            -f soctalk_chart_version="${{ inputs.version }}" \
+            --repo "$GITHUB_REPOSITORY"
+          echo "::notice::Triggered VM image + OVA build for v${{ inputs.version }} (async, ~50 min; attaches to the release when done)."

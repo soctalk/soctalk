@@ -10,11 +10,18 @@ name: Build OS Packages
 # build); arm64 is a follow-up.
 
 on:
+  # Standalone (backfill an existing release) …
   workflow_dispatch:
     inputs:
       version:
         description: "Package version, no leading v (e.g. 0.2.0). Attaches to the vX.Y.Z release."
         required: true
+  # … and called by cut-k8s-release.yml so every release gets the packages.
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
 
 permissions:
   contents: write   # attach packages to the release
