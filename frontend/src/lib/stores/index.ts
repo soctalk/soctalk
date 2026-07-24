@@ -113,6 +113,8 @@ export const canEditSettings: Readable<boolean> = derived(authSession, ($session
 export const canManageTriagePolicies: Readable<boolean> = hasPermission('manage_triage_policies');
 // curate authorization facts (SOC-manager tier)
 export const canManageAuthorization: Readable<boolean> = hasPermission('manage_authorization_facts');
+// see a customer tenant's engagements (analyst tier and up)
+export const canViewEngagements: Readable<boolean> = hasPermission('view_engagements');
 // declare/revoke engagements (SOC-manager tier)
 export const canAuthorizeEngagements: Readable<boolean> = hasPermission('authorize_engagement');
 // tenant self-service: view / declare own engagements (tenant viewer / tenant_manager)

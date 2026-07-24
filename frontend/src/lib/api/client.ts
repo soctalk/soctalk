@@ -895,6 +895,25 @@ export const api = {
 				{ method: 'POST', body: JSON.stringify(body) }
 			)
 	},
+	// MSSP-side engagements — declared on a customer tenant's behalf (tenant in the path).
+	// Same window+scope contract as the tenant self-service route below; the MSSP audience
+	// needs authorize_engagement (SOC-manager tier) to declare or revoke.
+	engagements: {
+		list: (tenantId: string, includeRevoked = false) =>
+			request<TenantEngagement[]>(
+				`/mssp/tenants/${tenantId}/engagements${includeRevoked ? '?include_revoked=true' : ''}`
+			),
+		declare: (tenantId: string, body: TenantEngagementDeclare) =>
+			request<{ id: string }>(`/mssp/tenants/${tenantId}/engagements`, {
+				method: 'POST',
+				body: JSON.stringify(body)
+			}),
+		revoke: (tenantId: string, engagementId: string, reason: string | null) =>
+			request<{ ok: string }>(
+				`/mssp/tenants/${tenantId}/engagements/${encodeURIComponent(engagementId)}/revoke`,
+				{ method: 'POST', body: JSON.stringify({ reason }) }
+			)
+	},
 	// Tenant self-service engagements — the caller's own tenant (from the token). Declaring a
 	// pentest/red-team window+scope lets the SOC deconflict it.
 	tenantEngagements: {
