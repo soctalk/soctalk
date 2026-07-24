@@ -1347,5 +1347,22 @@
 	"authz_err_eng_max_days": "Una finestra di ingaggio non può superare i 90 giorni.",
 	"authz_err_eng_source_ip": "È richiesto almeno un IP di origine o CIDR valido.",
 	"authz_err_eng_target": "Delimita almeno un host o una tecnica.",
-	"authz_err_eng_technique": "Le tecniche devono avere la forma T1078 o T1078.001."
+	"authz_err_eng_technique": "Le tecniche devono avere la forma T1078 o T1078.001.",
+	"mitre_card_title": "MITRE ATT&CK",
+	"mitre_mapped_tactics": "Tattiche mappate",
+	"mitre_rule_mappings_across": "Mappature delle regole tra gli alert",
+	"mitre_from_rule_meta": "Dai metadati della regola · ATT&CK v{version}",
+	"mitre_not_narrative": "Non è una narrativa di attacco osservata",
+	"mitre_chip_via": "{tactic} via {technique}",
+	"mitre_source_rules": "Regole di origine",
+	"mitre_mapping": "Mappatura",
+	"mitre_mapping_rule_metadata": "Metadati della regola Wazuh (non comportamento osservato)",
+	"mitre_attack_version": "Versione ATT&CK",
+	"mitre_deprecated_technique": "Deprecata o revocata in questa versione di ATT&CK",
+	"mitre_unknown_technique": "Non presente in ATT&CK v{version}: mostrata come ricevuta dalla regola",
+	"mitre_other_alerts": "Altri alert con questa tecnica",
+	"mitre_no_related": "Nessun altro alert condivide questa tecnica",
+	"mitre_related_load_failed": "Impossibile caricare gli alert correlati",
+	"mitre_view_on_site": "Vedi su attack.mitre.org",
+	"mitre_unmatched_tactics": "Nomi di tattiche non riconosciuti nei metadati della regola: {names}"
 }

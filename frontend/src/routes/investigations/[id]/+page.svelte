@@ -2,17 +2,19 @@
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { api, type Investigation, type InvestigationTimelineEvent } from '$lib/api/client';
+	import { api, type Investigation, type InvestigationAlert, type InvestigationTimelineEvent } from '$lib/api/client';
 	import { addToast, isCustomerScope } from '$lib/stores';
 	import { formatStatus, formatPhase, formatSeverity, formatDecision, formatDuration, formatEventType } from '$lib/utils/formatters';
 	import { m } from '$lib/paraglide/messages';
 	import { localizeHref } from '$lib/i18n';
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
+	import MitreCard from '$lib/components/mitre/MitreCard.svelte';
 
 	let chatOpen = false;
 
 	let investigation: Investigation | null = null;
 	let events: InvestigationTimelineEvent[] = [];
+	let alerts: InvestigationAlert[] = [];
 	let loading = true;
 	let eventsLoading = true;
 	let error: string | null = null;
@@ -150,8 +152,18 @@
 	onMount(async () => {
 		if (!investigationId) return;
 		await loadInvestigation();
-		await loadEvents();
+		await Promise.all([loadEvents(), loadAlerts()]);
 	});
+
+	async function loadAlerts() {
+		if (!investigationId) return;
+		try {
+			alerts = (await api.investigations.getAlerts(investigationId)).alerts;
+		} catch (e) {
+			// MITRE context is additive — a failure here never blocks the page.
+			console.error('Failed to load alerts:', e);
+		}
+	}
 
 	async function refreshInvestigation() {
 		if (!investigationId) return;
@@ -384,6 +396,10 @@
 			<p class="text-2xl font-bold">{formatDuration(investigation.time_to_verdict_seconds)}</p>
 		</div>
 	</div>
+
+	<!-- MITRE ATT&CK context (issue #71) — renders only when a member
+	     alert carries a rule mapping. -->
+	<MitreCard {alerts} investigationId={investigation.id} />
 
 	<!-- Main Content Grid -->
 	<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">

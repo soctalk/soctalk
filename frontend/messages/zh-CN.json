@@ -1347,5 +1347,22 @@
 	"verr_unknown_cap": "未知能力：{cap}",
 	"when_advanced": "高级条件",
 	"when_cmp": "{field} {op} {value}",
-	"when_contains": "{field} 包含 {value}"
+	"when_contains": "{field} 包含 {value}",
+	"mitre_card_title": "MITRE ATT&CK",
+	"mitre_mapped_tactics": "映射的战术",
+	"mitre_rule_mappings_across": "跨告警的规则映射",
+	"mitre_from_rule_meta": "来自规则元数据 · ATT&CK v{version}",
+	"mitre_not_narrative": "并非观测到的攻击过程",
+	"mitre_chip_via": "{tactic} · {technique}",
+	"mitre_source_rules": "来源规则",
+	"mitre_mapping": "映射",
+	"mitre_mapping_rule_metadata": "Wazuh 规则元数据（非观测到的行为）",
+	"mitre_attack_version": "ATT&CK 版本",
+	"mitre_deprecated_technique": "在此 ATT&CK 版本中已弃用或撤销",
+	"mitre_unknown_technique": "不在 ATT&CK v{version} 中：按规则原样显示",
+	"mitre_other_alerts": "使用此技术的其他告警",
+	"mitre_no_related": "没有其他告警使用此技术",
+	"mitre_related_load_failed": "无法加载相关告警",
+	"mitre_view_on_site": "在 attack.mitre.org 查看",
+	"mitre_unmatched_tactics": "规则元数据中无法识别的战术名称：{names}"
 }

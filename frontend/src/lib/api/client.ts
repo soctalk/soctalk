@@ -195,6 +195,48 @@ export interface ActionResponse {
 	investigation_id: string;
 }
 
+// MITRE contextualization (issue #71)
+export interface AlertMitre {
+	ids: string[];
+	tactics: string[];
+	techniques: string[];
+}
+
+export interface InvestigationAlert {
+	id: string;
+	rule_id: string | null;
+	description: string | null;
+	severity: string | null;
+	event_count: number;
+	first_event_at: string;
+	last_event_at: string;
+	mitre: AlertMitre;
+}
+
+export interface InvestigationAlerts {
+	investigation_id: string;
+	alerts: InvestigationAlert[];
+}
+
+export interface TechniqueAlert {
+	id: string;
+	rule_id: string | null;
+	description: string | null;
+	severity: string | null;
+	event_count: number;
+	last_event_at: string;
+	investigation_id: string | null;
+	investigation_title: string | null;
+	tenant_slug: string | null;
+	tenant_display_name: string | null;
+}
+
+export interface TechniqueAlerts {
+	attack_id: string;
+	total: number;
+	alerts: TechniqueAlert[];
+}
+
 export interface EventTimelineResponse {
 	investigation_id: string;
 	events: InvestigationTimelineEvent[];
@@ -535,6 +577,8 @@ export const api = {
 
 		get: (id: string) => request<Investigation>(`/investigations/${id}`),
 
+		getAlerts: (id: string) => request<InvestigationAlerts>(`/investigations/${id}/alerts`),
+
 		getEvents: async (id: string, limit?: number): Promise<InvestigationTimelineEvent[]> => {
 			const query = limit ? `?limit=${limit}` : '';
 			const response = await request<EventTimelineResponse>(`/investigations/${id}/events${query}`);
@@ -549,6 +593,22 @@ export const api = {
 				method: 'POST',
 				body: JSON.stringify({ reason })
 			})
+	},
+
+	// MITRE contextualization (issue #71)
+	mitre: {
+		alertsByTechnique: (
+			attackId: string,
+			opts?: { excludeInvestigationId?: string; limit?: number }
+		) => {
+			const query = new URLSearchParams();
+			if (opts?.excludeInvestigationId)
+				query.set('exclude_investigation_id', opts.excludeInvestigationId);
+			query.set('limit', String(opts?.limit ?? 25));
+			return request<TechniqueAlerts>(
+				`/mitre/techniques/${encodeURIComponent(attackId)}/alerts?${query}`
+			);
+		}
 	},
 
 	// Human Review

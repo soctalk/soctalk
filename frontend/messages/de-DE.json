@@ -1347,5 +1347,22 @@
 	"authz_err_eng_max_days": "Ein Engagement-Fenster darf 90 Tage nicht überschreiten.",
 	"authz_err_eng_source_ip": "Mindestens eine gültige Quell-IP oder ein CIDR ist erforderlich.",
 	"authz_err_eng_target": "Nehmen Sie mindestens einen Host oder eine Technik in den Scope auf.",
-	"authz_err_eng_technique": "Techniken müssen wie T1078 oder T1078.001 aussehen."
+	"authz_err_eng_technique": "Techniken müssen wie T1078 oder T1078.001 aussehen.",
+	"mitre_card_title": "MITRE ATT&CK",
+	"mitre_mapped_tactics": "Zugeordnete Taktiken",
+	"mitre_rule_mappings_across": "Regelzuordnungen über alle Alerts",
+	"mitre_from_rule_meta": "Aus Regel-Metadaten · ATT&CK v{version}",
+	"mitre_not_narrative": "Kein beobachteter Angriffsverlauf",
+	"mitre_chip_via": "{tactic} via {technique}",
+	"mitre_source_rules": "Quellregeln",
+	"mitre_mapping": "Zuordnung",
+	"mitre_mapping_rule_metadata": "Wazuh-Regel-Metadaten (kein beobachtetes Verhalten)",
+	"mitre_attack_version": "ATT&CK-Version",
+	"mitre_deprecated_technique": "In dieser ATT&CK-Version veraltet oder zurückgezogen",
+	"mitre_unknown_technique": "Nicht in ATT&CK v{version}: Anzeige wie von der Regel geliefert",
+	"mitre_other_alerts": "Weitere Alerts mit dieser Technik",
+	"mitre_no_related": "Keine weiteren Alerts mit dieser Technik",
+	"mitre_related_load_failed": "Zugehörige Alerts konnten nicht geladen werden",
+	"mitre_view_on_site": "Auf attack.mitre.org ansehen",
+	"mitre_unmatched_tactics": "Unbekannte Taktiknamen aus Regel-Metadaten: {names}"
 }

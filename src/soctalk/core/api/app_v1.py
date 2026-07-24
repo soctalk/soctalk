@@ -277,6 +277,7 @@ def create_app(db_session_middleware: type | None = None) -> FastAPI:
     # investigation_runs into that contract so the dashboard works on
     # multi-tenant L1 without a frontend rewrite.
     app.include_router(investigations_bridge_routes.router)
+    app.include_router(investigations_bridge_routes.mitre_router)
     app.include_router(metrics_bridge_routes.router)
     # MSSP fleet dashboard (cross-tenant queries; rendered on the L1
     # ``/`` homepage when the operator is in MSSP scope, hidden under

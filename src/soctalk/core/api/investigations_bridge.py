@@ -18,6 +18,7 @@ Tenant scoping flows from the session:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -34,6 +35,14 @@ from soctalk.core.tenancy.decorators import require_role
 from soctalk.core.tenancy.models import Role
 
 router = APIRouter(prefix="/api/investigations", tags=["investigations-bridge"])
+
+# MITRE contextualization (issue #71): technique-centric pivots live under
+# their own prefix — they are tenant-wide queries, not investigation-scoped.
+mitre_router = APIRouter(prefix="/api/mitre", tags=["mitre"])
+
+# Wazuh rule metadata caps technique ids at T####(.###); reject anything else
+# before it reaches a LIKE pattern.
+_ATTACK_ID_RE = re.compile(r"^T\d{4}(?:\.\d{3})?$")
 
 
 class InvestigationSummary(BaseModel):
@@ -454,4 +463,221 @@ async def post_cancel_investigation(
         success=True,
         message="Investigation cancelled",
         investigation_id=str(investigation_id),
+    )
+
+
+# ---------------------------------------------------------------------------
+# MITRE contextualization (issue #71)
+#
+# Alerts carry ``mitre`` (ids/tactics/techniques arrays from the Wazuh rule)
+# on their source events (#17). These endpoints surface that to the UI:
+# member alerts with a per-alert union of the arrays, and the technique
+# pivot ("other alerts sharing this technique") across the RLS-visible
+# scope. Technique->tactic pairing happens client-side against the static
+# ATT&CK lookup — the wire arrays are flat and unpaired.
+# ---------------------------------------------------------------------------
+
+
+class AlertMitre(BaseModel):
+    ids: list[str]
+    tactics: list[str]
+    techniques: list[str]
+
+
+class InvestigationAlert(BaseModel):
+    id: str
+    rule_id: str | None
+    description: str | None
+    severity: str | None
+    event_count: int
+    first_event_at: str
+    last_event_at: str
+    mitre: AlertMitre
+
+
+class InvestigationAlerts(BaseModel):
+    investigation_id: str
+    alerts: list[InvestigationAlert]
+
+
+def _union_mitre(rows: list[dict[str, Any]]) -> AlertMitre:
+    """Union the per-event mitre dicts, preserving first-seen order."""
+    out: dict[str, list[str]] = {"ids": [], "tactics": [], "techniques": []}
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        for key in out:
+            for v in m.get(key) or []:
+                if isinstance(v, str) and v and v not in out[key]:
+                    out[key].append(v)
+    return AlertMitre(**out)
+
+
+@router.get("/{investigation_id}/alerts", response_model=InvestigationAlerts)
+async def get_investigation_alerts(
+    investigation_id: UUID, request: Request
+) -> InvestigationAlerts:
+    identity = current_identity(request)
+    if identity is None:
+        raise HTTPException(401, "authentication required")
+
+    db = _db(request)
+    # 404 on unknown/invisible investigations (RLS hides other tenants).
+    await _resolve_tenant(db, investigation_id)
+
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT a.id, a.rule_id, a.description, a.severity,
+                       a.event_count, a.first_event_at, a.last_event_at,
+                       coalesce(
+                         jsonb_agg(e.mitre ORDER BY e.ingested_at)
+                           FILTER (WHERE e.mitre IS NOT NULL AND e.mitre != '{}'::jsonb),
+                         '[]'::jsonb
+                       ) AS mitre_events
+                FROM alerts a
+                LEFT JOIN alert_source_events e
+                       ON e.alert_id = a.id AND e.tenant_id = a.tenant_id
+                WHERE a.investigation_id = :c
+                GROUP BY a.id
+                ORDER BY a.first_event_at
+                """
+            ),
+            {"c": str(investigation_id)},
+        )
+    ).mappings().all()
+
+    return InvestigationAlerts(
+        investigation_id=str(investigation_id),
+        alerts=[
+            InvestigationAlert(
+                id=str(r["id"]),
+                rule_id=r["rule_id"],
+                description=r["description"],
+                severity=_wazuh_severity_label(int(r["severity"] or 0)),
+                event_count=int(r["event_count"] or 0),
+                first_event_at=r["first_event_at"].isoformat(),
+                last_event_at=r["last_event_at"].isoformat(),
+                mitre=_union_mitre(list(r["mitre_events"])),
+            )
+            for r in rows
+        ],
+    )
+
+
+class TechniqueAlert(BaseModel):
+    id: str
+    rule_id: str | None
+    description: str | None
+    severity: str | None
+    event_count: int
+    last_event_at: str
+    investigation_id: str | None
+    investigation_title: str | None
+    tenant_slug: str | None = None
+    tenant_display_name: str | None = None
+
+
+class TechniqueAlerts(BaseModel):
+    attack_id: str
+    total: int
+    alerts: list[TechniqueAlert]
+
+
+@mitre_router.get("/techniques/{attack_id}/alerts", response_model=TechniqueAlerts)
+async def get_alerts_by_technique(
+    attack_id: str,
+    request: Request,
+    limit: int = Query(25, ge=1, le=100),
+    exclude_investigation_id: UUID | None = Query(None),
+) -> TechniqueAlerts:
+    """The pivot: alerts whose source events map to this technique.
+
+    A parent technique id (T1110) also matches its sub-techniques
+    (T1110.001); a sub-technique id matches exactly. Scope is whatever
+    RLS lets the session see (tenant-pinned or MSSP-wide).
+    ``exclude_investigation_id`` drops the caller's own investigation
+    server-side so ``total`` and the page reflect only OTHER alerts.
+
+    NOTE: the match predicate scans RLS-visible alerts; fine at current
+    per-tenant volumes, but a normalized (tenant_id, technique_id,
+    alert_id) projection is the follow-up if fleet-wide pivots grow hot.
+    """
+    identity = current_identity(request)
+    if identity is None:
+        raise HTTPException(401, "authentication required")
+    if not _ATTACK_ID_RE.match(attack_id):
+        raise HTTPException(422, "invalid ATT&CK technique id")
+
+    db = _db(request)
+    match_sql = """
+        EXISTS (
+            SELECT 1
+            FROM alert_source_events e,
+                 jsonb_array_elements_text(coalesce(e.mitre->'ids', '[]'::jsonb)) AS ti(v)
+            WHERE e.alert_id = a.id
+              AND e.tenant_id = a.tenant_id
+              AND (ti.v = :aid OR ti.v LIKE :aid_sub)
+        )
+    """
+    params: dict[str, Any] = {
+        "aid": attack_id,
+        # Sub-technique ids never have their own subs; the LIKE only widens
+        # parent ids.
+        "aid_sub": f"{attack_id}.%" if "." not in attack_id else attack_id,
+    }
+    if exclude_investigation_id is not None:
+        match_sql += (
+            " AND (a.investigation_id IS NULL"
+            "      OR a.investigation_id != :excl_inv)"
+        )
+        params["excl_inv"] = str(exclude_investigation_id)
+
+    total = (
+        await db.execute(
+            text(f"SELECT count(*) FROM alerts a WHERE {match_sql}"), params
+        )
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            text(
+                f"""
+                SELECT a.id, a.rule_id, a.description, a.severity,
+                       a.event_count, a.last_event_at,
+                       c.id AS investigation_id,
+                       coalesce(c.title, c.short_id) AS investigation_title,
+                       t.slug AS tenant_slug,
+                       t.display_name AS tenant_display_name
+                FROM alerts a
+                LEFT JOIN investigations c ON c.id = a.investigation_id
+                LEFT JOIN tenants t ON t.id = a.tenant_id
+                WHERE {match_sql}
+                ORDER BY a.last_event_at DESC
+                LIMIT :limit
+                """
+            ),
+            {**params, "limit": limit},
+        )
+    ).mappings().all()
+
+    return TechniqueAlerts(
+        attack_id=attack_id,
+        total=int(total),
+        alerts=[
+            TechniqueAlert(
+                id=str(r["id"]),
+                rule_id=r["rule_id"],
+                description=r["description"],
+                severity=_wazuh_severity_label(int(r["severity"] or 0)),
+                event_count=int(r["event_count"] or 0),
+                last_event_at=r["last_event_at"].isoformat(),
+                investigation_id=str(r["investigation_id"]) if r["investigation_id"] else None,
+                investigation_title=r["investigation_title"],
+                tenant_slug=r["tenant_slug"],
+                tenant_display_name=r["tenant_display_name"],
+            )
+            for r in rows
+        ],
     )
