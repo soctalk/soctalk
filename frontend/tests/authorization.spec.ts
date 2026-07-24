@@ -274,4 +274,29 @@ test.describe('MSSP authorization facts — structured CRUD', () => {
 		await expect(page.getByText('rejected')).toBeVisible();
 		expect(cap.decision).toBe('reject');
 	});
+
+	// Entity context adds the whole ENTITY block, making the dialog taller than a
+	// laptop viewport. Centering on the scrolling overlay used to push the panel's
+	// top off-screen (y = -185 at 1280x720) where scrolling could never reach it.
+	test('new-fact dialog is fully reachable when taller than the viewport', async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 720 });
+		await wire(page);
+		await page.goto('/authorization');
+		await page.getByRole('button', { name: '+ New fact' }).click();
+		await page.getByRole('button', { name: /Entity context/ }).click();
+
+		const panel = page.locator('.card.max-w-2xl');
+		const title = page.getByRole('heading', { name: /New authorization fact/i });
+		const box = await panel.boundingBox();
+
+		expect(box!.height).toBeGreaterThan(page.viewportSize()!.height); // else this proves nothing
+		expect(box!.y).toBeGreaterThanOrEqual(0);
+		await expect(title).toBeInViewport();
+
+		// Both ends stay reachable by scrolling.
+		await page.getByRole('button', { name: 'Create fact' }).scrollIntoViewIfNeeded();
+		await expect(page.getByRole('button', { name: 'Create fact' })).toBeInViewport();
+		await title.scrollIntoViewIfNeeded();
+		await expect(title).toBeInViewport();
+	});
 });

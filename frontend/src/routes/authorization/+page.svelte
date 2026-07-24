@@ -162,16 +162,21 @@
 	{/if}
 
 	{#if editorOpen}
-		<div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
-			<div class="card w-full max-w-2xl p-5 my-8">
-				<h2 class="h4 mb-3">{m.adm_modal_new_fact_title()}</h2>
-				<AuthorizationFactForm
-					mode="mssp"
-					saving={editorSaving}
-					error={editorError}
-					on:submit={(e) => save(e.detail)}
-					on:cancel={() => (editorOpen = false)}
-				/>
+		<!-- Scroll on the overlay, center via an inner min-h-full wrapper. Centering
+		     directly on the scroll container clips a too-tall panel at BOTH ends and
+		     the overflow above the top edge can never be scrolled back into view. -->
+		<div class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+			<div class="flex min-h-full items-center justify-center p-4">
+				<div class="card w-full max-w-2xl p-5">
+					<h2 class="h4 mb-3">{m.adm_modal_new_fact_title()}</h2>
+					<AuthorizationFactForm
+						mode="mssp"
+						saving={editorSaving}
+						error={editorError}
+						on:submit={(e) => save(e.detail)}
+						on:cancel={() => (editorOpen = false)}
+					/>
+				</div>
 			</div>
 		</div>
 	{/if}
