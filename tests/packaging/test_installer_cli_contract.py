@@ -28,7 +28,9 @@ therefore expensive to catch any other way.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -42,6 +44,26 @@ CHART_TEMPLATES = ROOT / "charts" / "soctalk-system" / "templates"
 # Binaries k3s/helm drop into /usr/local/bin. A bare `sudo <bin>` cannot
 # resolve on a RHEL-family host.
 LOCAL_BIN_TOOLS = ("k3s", "kubectl", "helm")
+
+
+def _host_tool_dirs(*names: str) -> str:
+    """Colon-joined directories of the host tools the CLI needs at runtime.
+
+    The behavioural tests run the CLI on an isolated ``PATH`` so the stubbed
+    ``kubectl`` wins. ``/usr/bin:/bin`` covers FHS hosts (CI, RHEL, Debian),
+    but on NixOS those directories hold only ``sh`` and ``env`` — ``bash``,
+    ``cat`` and ``tail`` live in per-package store paths. Resolve them from the
+    parent ``PATH`` and splice those directories in; on an FHS host this
+    resolves back to ``/usr/bin`` / ``/bin`` and changes nothing.
+    """
+    dirs: list[str] = []
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            d = os.path.dirname(found)
+            if d not in dirs:
+                dirs.append(d)
+    return ":".join(dirs)
 
 
 def _read(path: Path) -> str:
@@ -202,13 +224,15 @@ def _run_cli_logs(tmp_path, comp: str, *, pods: str = "", rc_get: int = 0):
         '  *"get pods"*) echo "api app-ui postgres" ;;\n'
         "esac\nexit 0\n",
     )
+    # ``subprocess`` resolves argv[0] against the *child* env's PATH, so the
+    # host-tool dirs must be on it (stub dir first so the fake kubectl wins).
     proc = subprocess.run(
         ["bash", str(CLI), "logs", comp],
         capture_output=True,
         text=True,
         timeout=60,
         env={
-            "PATH": f"{binhome}:/usr/bin:/bin",
+            "PATH": f"{binhome}:{_host_tool_dirs('bash', 'cat', 'tail')}:/usr/bin:/bin",
             "HOME": str(tmp_path),
             "SOCTALK_CLI_VERSION": "test",
         },
