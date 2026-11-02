@@ -231,4 +231,35 @@ test.describe('Tenant detail — External SIEM panel', () => {
 		await expect(page.getByTestId('siem-collapse-toggle')).toBeVisible();
 		await expect(page.locator('input[name="api_password"]')).toHaveCount(0);
 	});
+	test('a severity floor PATCHes as a number (0 kept); clearing it sends null', async ({ page }) => {
+		// <input type="number" bind:value> hands the component a NUMBER, not a
+		// string; the form used to call .trim() on it and threw, so no PATCH
+		// was ever sent once a level had been typed.
+		const handles = await mockApi(page);
+		await page.goto(`/tenants/${TENANT_ID}`);
+		await expect(page.getByTestId('external-siem-panel')).toBeVisible();
+
+		const save = async () => {
+			const patchReq = page.waitForRequest(
+				(r) => new URL(r.url()).pathname.endsWith('/external-siem') && r.method() === 'PATCH'
+			);
+			await page.getByTestId('siem-save').click();
+			return (await patchReq).postDataJSON();
+		};
+
+		await page.getByTestId('siem-edit').click();
+		await page.fill('input[name="min_severity"]', '7');
+		expect((await save()).ingest).toMatchObject({ min_severity: 7 });
+
+		await expect(page.getByTestId('siem-edit')).toBeVisible();
+		await page.getByTestId('siem-edit').click();
+		await page.fill('input[name="min_severity"]', '0');
+		expect((await save()).ingest).toMatchObject({ min_severity: 0 });
+
+		await expect(page.getByTestId('siem-edit')).toBeVisible();
+		await page.getByTestId('siem-edit').click();
+		await page.fill('input[name="min_severity"]', '');
+		expect((await save()).ingest).toMatchObject({ min_severity: null });
+		expect(handles.lastPatchBody()).not.toBeNull();
+	});
 });

@@ -84,6 +84,29 @@ export interface IngestSettings {
 	min_severity?: number | null;
 }
 
+// The severity-floor <input type="number">: Svelte binds a NUMBER (or null /
+// undefined when the field is empty), not a string, so never .trim() it.
+// A value typed then erased can still arrive as ''. 0 is a real level.
+export type SeverityInput = number | string | null | undefined;
+
+/** Payload value for ``min_severity``: null when blank, else the number. */
+export function severityFloor(v: SeverityInput): number | null {
+	if (v === null || v === undefined) return null;
+	if (typeof v === 'string') {
+		const t = v.trim();
+		return t === '' ? null : Number(t);
+	}
+	return Number.isNaN(v) ? null : v;
+}
+
+/** Blank, or an integer Wazuh rule level 0..15. */
+export function isValidSeverityFloor(v: SeverityInput): boolean {
+	if (v === null || v === undefined) return true;
+	if (typeof v === 'string' && v.trim() === '') return true;
+	const n = typeof v === 'string' ? Number(v.trim()) : v;
+	return Number.isInteger(n) && n >= 0 && n <= 15;
+}
+
 // Stored settings plus what the adapter effectively runs with once the
 // profile/install defaults are applied. Mirrors ``IngestSettingsRead``.
 export interface IngestSettingsRead extends IngestSettings {

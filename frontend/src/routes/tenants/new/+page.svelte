@@ -4,7 +4,10 @@
 		tenantsApi,
 		type TenantOnboard,
 		type ExternalSiemOnboard,
-		type IngestSettings
+		type IngestSettings,
+		type SeverityInput,
+		severityFloor,
+		isValidSeverityFloor
 	} from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
@@ -41,7 +44,7 @@
 		ingest_initial_ts: string;
 		exclude_manager_agent: boolean;
 		agent_prefix: string;
-		min_severity: string;
+		min_severity: SeverityInput;
 	}
 
 	interface WizardForm {
@@ -96,12 +99,11 @@
 	function toIngest(s: SiemForm): IngestSettings {
 		const initial_ts =
 			s.ingest_start === 'now' ? 'now' : s.ingest_start === 'custom' ? s.ingest_initial_ts.trim() : null;
-		const sev = s.min_severity.trim();
 		return {
 			exclude_manager_agent: s.exclude_manager_agent,
 			initial_ts: initial_ts || null,
 			agent_prefix: s.agent_prefix.trim() || null,
-			min_severity: sev === '' ? null : Number(sev)
+			min_severity: severityFloor(s.min_severity)
 		};
 	}
 
@@ -191,10 +193,7 @@
 		!!form.external_siem.api_username.trim() &&
 		!!form.external_siem.api_password.trim() &&
 		(form.external_siem.ingest_start !== 'custom' || !!form.external_siem.ingest_initial_ts.trim()) &&
-		(form.external_siem.min_severity.trim() === '' ||
-			(Number.isInteger(Number(form.external_siem.min_severity)) &&
-				Number(form.external_siem.min_severity) >= 0 &&
-				Number(form.external_siem.min_severity) <= 15));
+		isValidSeverityFloor(form.external_siem.min_severity);
 
 	// For 'provided' the tenant must bring their own LLM key — the backend
 	// rejects a blank llm_api_key with a 422, so the External SIEM step
