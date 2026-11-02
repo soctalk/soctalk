@@ -323,6 +323,8 @@
 	"dash_axis_per_hour": "Pro Stunde",
 	"dash_degraded_tenants": "Beeinträchtigte Mandanten",
 	"dash_degraded_total": "{degraded} beeinträchtigt / {total} gesamt",
+	"dash_adapter_degraded": "Ingest beeinträchtigt",
+	"dash_adapter_failing": "Ingest fehlerhaft",
 	"dash_error": "Fehler: {error}",
 	"dash_evd_agent": "Agent {id}",
 	"dash_evd_alert_correlated": "Alert korreliert",

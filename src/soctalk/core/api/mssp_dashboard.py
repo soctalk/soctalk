@@ -15,6 +15,7 @@ out by the gate, not just the frontend).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -230,14 +231,19 @@ async def stuck_investigations(
 # 4. Per-tenant adapter health
 # ---------------------------------------------------------------------------
 #
-# "Degraded" in MSSP context = per-tenant adapter silent or tenant in a
-# non-running state. The adapter writes ``runtime->>'last_heartbeat'``
-# on each /api/internal/adapter/heartbeat call. Threshold for unhealthy
-# heartbeat is 5 minutes (the chart sets 60s heartbeat interval; 5x
-# that catches transient flakes without false alarms).
+# "Degraded" in MSSP context = per-tenant adapter silent, tenant in a
+# non-running state, or the adapter itself reporting that ingestion is not
+# working. The adapter writes ``runtime->>'last_heartbeat'`` and
+# ``runtime->>'health'`` on each /api/internal/adapter/heartbeat call.
+# Threshold for unhealthy heartbeat is 5 minutes (the chart sets 60s
+# heartbeat interval; 5x that catches transient flakes without false
+# alarms). A fresh heartbeat alone is not proof of health: an adapter can
+# heartbeat happily while every indexer poll fails, so its own
+# ``degraded``/``failing`` report counts too.
 
 
 _HEARTBEAT_UNHEALTHY_AGE_SECONDS = 300
+_UNHEALTHY_ADAPTER_HEALTH = frozenset({"degraded", "failing"})
 
 
 class TenantHealthRow(BaseModel):
@@ -248,6 +254,52 @@ class TenantHealthRow(BaseModel):
     last_heartbeat: str | None
     heartbeat_age_seconds: int | None
     unhealthy: bool
+    # Adapter-reported ingest health ("ok" | "degraded" | "failing"; None for
+    # a tenant that never heartbeated) and its machine-readable reasons.
+    adapter_health: str | None = None
+    adapter_health_reasons: list[str] = []
+
+
+def _classify_tenant_health(r: Any, now: Any) -> TenantHealthRow:
+    """One dashboard row from a ``tenants`` projection. Pure, for testing."""
+    from datetime import UTC, datetime
+
+    age: int | None = None
+    if r["last_heartbeat"]:
+        try:
+            hb = datetime.fromisoformat(r["last_heartbeat"].replace("Z", "+00:00"))
+            if hb.tzinfo is None:
+                hb = hb.replace(tzinfo=UTC)
+            age = int((now - hb).total_seconds())
+        except (TypeError, ValueError):
+            age = None
+    reasons: list[str] = []
+    raw_reasons = r.get("health_reasons")
+    if raw_reasons:
+        try:
+            parsed = json.loads(raw_reasons)
+            if isinstance(parsed, list):
+                reasons = [str(x)[:64] for x in parsed][:8]
+        except (TypeError, ValueError):
+            reasons = []
+    adapter_health = r.get("adapter_health")
+    unhealthy = (
+        r["state"] in ("pending", "provisioning", "degraded")
+        or age is None
+        or age > _HEARTBEAT_UNHEALTHY_AGE_SECONDS
+        or adapter_health in _UNHEALTHY_ADAPTER_HEALTH
+    )
+    return TenantHealthRow(
+        tenant_id=r["tenant_id"],
+        slug=r["slug"],
+        display_name=r["display_name"],
+        state=r["state"],
+        last_heartbeat=r["last_heartbeat"],
+        heartbeat_age_seconds=age,
+        unhealthy=unhealthy,
+        adapter_health=adapter_health,
+        adapter_health_reasons=reasons,
+    )
 
 
 class TenantHealthResponse(BaseModel):
@@ -269,7 +321,10 @@ async def tenant_health(request: Request) -> TenantHealthResponse:
                 """
                 SELECT t.id::text AS tenant_id, t.slug, t.display_name,
                        t.state,
-                       (t.runtime->>'last_heartbeat') AS last_heartbeat
+                       (t.runtime->>'last_heartbeat') AS last_heartbeat,
+                       (t.runtime->>'health') AS adapter_health,
+                       (t.runtime->'metrics_snapshot'->>'health_reasons')
+                           AS health_reasons
                 FROM tenants t
                 WHERE t.deleted_at IS NULL
                   AND t.state NOT IN ('decommissioning', 'archived', 'purged')
@@ -282,36 +337,7 @@ async def tenant_health(request: Request) -> TenantHealthResponse:
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
-    items: list[TenantHealthRow] = []
-    for r in rows:
-        age: int | None = None
-        if r["last_heartbeat"]:
-            try:
-                hb = datetime.fromisoformat(
-                    r["last_heartbeat"].replace("Z", "+00:00")
-                )
-                if hb.tzinfo is None:
-                    hb = hb.replace(tzinfo=timezone.utc)
-                age = int((now - hb).total_seconds())
-            except (TypeError, ValueError):
-                age = None
-        unhealthy = (
-            r["state"] in ("pending", "provisioning", "degraded")
-            or age is None
-            or age > _HEARTBEAT_UNHEALTHY_AGE_SECONDS
-        )
-        items.append(
-            TenantHealthRow(
-                tenant_id=r["tenant_id"],
-                slug=r["slug"],
-                display_name=r["display_name"],
-                state=r["state"],
-                last_heartbeat=r["last_heartbeat"],
-                heartbeat_age_seconds=age,
-                unhealthy=unhealthy,
-            )
-        )
-    return TenantHealthResponse(items=items)
+    return TenantHealthResponse(items=[_classify_tenant_health(r, now) for r in rows])
 
 
 # ---------------------------------------------------------------------------

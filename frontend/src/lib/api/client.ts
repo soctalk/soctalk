@@ -1269,6 +1269,10 @@ export interface MsspTenantHealthRow {
 	last_heartbeat: string | null;
 	heartbeat_age_seconds: number | null;
 	unhealthy: boolean;
+	// Adapter-reported ingest health from its last heartbeat ('ok' |
+	// 'degraded' | 'failing'; null if it never heartbeated) plus reason codes.
+	adapter_health?: string | null;
+	adapter_health_reasons?: string[];
 }
 
 export interface MsspRepeatedIocRow {
