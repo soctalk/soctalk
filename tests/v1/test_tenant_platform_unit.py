@@ -313,7 +313,11 @@ async def test_dashboard_flags_only_tenants_with_a_release(monkeypatch):
         seen.extend(ids)
         return {a: _render("OLD", None), b: _render("CUR", None)}
 
+    async def no_agent_managed(_db, ids):
+        return set()
+
     monkeypatch.setattr(pf, "latest_tenant_renders", fake_renders)
+    monkeypatch.setattr(pf, "agent_managed_tenant_ids", no_agent_managed)
     monkeypatch.setattr(pf, "current_fingerprint", lambda: "CUR")
     _fake_mssp_sessionmaker(monkeypatch)
     rows = [

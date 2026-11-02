@@ -30,6 +30,7 @@ from soctalk.core.provisioning.controller import (
 from soctalk.core.provisioning.platform import (
     PROCESS_STARTED_AT,
     RollSettings,
+    agent_managed_tenant_ids,
     current_fingerprint,
     latest_tenant_renders,
     select_tenants_to_roll,
@@ -261,6 +262,9 @@ class ProvisioningWorker:
                 .scalars()
                 .all()
             )
+            # L2 tenants are upgraded by their cloud agent, never locally.
+            remote = await agent_managed_tenant_ids(session, active)
+            active = [t for t in active if t not in remote]
             if not active:
                 return []
             busy = set(

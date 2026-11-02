@@ -1761,3 +1761,45 @@ async def test_fingerprint_failure_never_fails_a_render(
     assert result.state == TenantState.ACTIVE.value
     renders = _tenant_chart_renders(await _events_for(session, seeded_tenant.id))
     assert renders and "platform_fingerprint" not in renders[0]
+
+
+# ---------------------------------------------------------------------------
+# Agent-managed (L2) tenants: their release lives on the tenant's own cluster
+# and is applied by the cloud agent. provision() already skips them; reconcile
+# must too, or a PATCH / :reconcile / platform roll helm-applies the tenant
+# chart in the MSSP cluster and flips a healthy L2 tenant to degraded.
+# ---------------------------------------------------------------------------
+
+
+async def _make_agent_managed(session: AsyncSession, tenant_id) -> None:
+    from soctalk.core.agents.models import TenantInstallation
+
+    session.add(TenantInstallation(
+        tenant_id=tenant_id,
+        desired_chart_ref="oci://ghcr.io/soctalk/charts/soctalk-tenant",
+        desired_chart_version="0.2.1",
+        state="active",
+    ))
+    await session.commit()
+
+
+async def test_reconcile_skips_an_agent_managed_tenant(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    controller = TenantController(session, k8s=FakeK8s(), settings=_quick_settings())
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+    await _make_agent_managed(session, seeded_tenant.id)
+
+    calls: list = []
+
+    async def rec(*_a, **kw):
+        calls.append(kw)
+
+    monkeypatch.setattr(controller_mod, "helm_install_tenant", rec)
+    result = await controller.reconcile(seeded_tenant.id, actor_id="test")
+
+    assert calls == [], "reconcile helm-applied an agent-managed tenant locally"
+    assert result.state == TenantState.ACTIVE.value
+    kinds = [e.event_type for e in await _events_for(session, seeded_tenant.id)]
+    assert kinds[-1] == "agent_managed_reconcile_skipped"

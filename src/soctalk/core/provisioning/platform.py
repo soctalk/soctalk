@@ -289,3 +289,24 @@ def current_fingerprint() -> str:
     from soctalk.core.provisioning.controller import ControllerSettings
 
     return fingerprint(tenant_platform_inputs(ControllerSettings.from_env()))
+
+
+async def agent_managed_tenant_ids(session: Any, tenant_ids: list[UUID]) -> set[UUID]:
+    """Tenants whose release is applied by their L2 cloud agent (a live
+    ``TenantInstallation`` row). Their chart runs on the tenant's own cluster,
+    so the MSSP never renders it locally: there is nothing to compare, and a
+    local reconcile would helm-apply into the wrong cluster."""
+    from sqlalchemy import text
+
+    if not tenant_ids:
+        return set()
+    rows = (
+        await session.execute(
+            text(
+                "SELECT tenant_id FROM tenant_installations "
+                "WHERE tenant_id = ANY(:ids) AND deleted_at IS NULL"
+            ),
+            {"ids": [str(t) for t in tenant_ids]},
+        )
+    ).all()
+    return {r[0] if isinstance(r[0], UUID) else UUID(str(r[0])) for r in rows}

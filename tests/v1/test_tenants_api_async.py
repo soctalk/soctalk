@@ -3362,3 +3362,29 @@ async def test_reconcile_unknown_tenant_404(
     with pytest.raises(HTTPException) as exc_info:
         await reconcile_tenant(uuid4(), _ReconcileRequest(mssp_session))
     assert exc_info.value.status_code == 404
+
+
+async def test_reconcile_agent_managed_tenant_409_points_at_issue_agent(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """An L2 tenant's release is applied by its cloud agent; :reconcile must
+    not queue a local helm job (it would fail and degrade the tenant)."""
+    from fastapi import HTTPException
+
+    from soctalk.core.agents.models import TenantInstallation
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    tenant = await _seed_retry_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    mssp_session.add(TenantInstallation(
+        tenant_id=tenant.id, desired_chart_ref="oci://x/soctalk-tenant",
+        desired_chart_version="0.2.1", state="active",
+    ))
+    await mssp_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reconcile_tenant(tenant.id, _ReconcileRequest(mssp_session))
+    assert exc_info.value.status_code == 409
+    assert ":issue-agent" in exc_info.value.detail
+    assert await _reconcile_jobs(mssp_session, tenant.id) == []

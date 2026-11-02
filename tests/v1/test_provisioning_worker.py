@@ -739,3 +739,20 @@ async def test_drift_sweep_runs_the_platform_roll(
     await worker._maybe_drift_sweep()
     jobs = await _jobs_for(mssp_sessionmaker, seeded_tenant.id)
     assert [j.kind for j in jobs] == ["tenant.reconcile"]
+
+
+async def test_platform_roll_skips_agent_managed_tenants(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now
+):
+    from soctalk.core.agents.models import TenantInstallation
+
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    async with mssp_sessionmaker() as s:
+        s.add(TenantInstallation(
+            tenant_id=seeded_tenant.id, desired_chart_ref="oci://x/soctalk-tenant",
+            desired_chart_version="0.2.1", state="active",
+        ))
+        await s.commit()
+    worker = ProvisioningWorker(mssp_sessionmaker, roll_settings=_ROLL_ON)
+    assert await worker._roll_outdated_tenants() == []
+    assert await _jobs_for(mssp_sessionmaker, seeded_tenant.id) == []
