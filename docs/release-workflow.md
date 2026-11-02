@@ -128,6 +128,42 @@ cert-manager. State which variant a row covered.
 
 ## Current release
 
+- **`0.2.2` — git tag `v0.2.2` @ `eceec2e`** (new version, operator decision
+  2026-11-02; cut from main HEAD, confirmed). Contains, since `v0.2.1`:
+  #162 per-tenant adapter ingest settings (agent 000, start point, severity
+  floor; migration `v1_0048`), #163 lossless adapter rate limiting, #164
+  Python deps installed from `uv.lock` in images and CI, #165 tenant
+  NetworkPolicy admits the api's adapter-status probe, #166 real adapter
+  ingest health on the heartbeat + MSSP dashboard, #167 platform fingerprint
+  on tenant renders + `POST /tenants/{id}:reconcile` + opt-in
+  `tenantProvisioning.rollOnUpgrade`, #168 `platform_outdated` false-positive
+  fixes, #169 released chart versions immutable from main (per-commit
+  `X.Y.Z-main.g<sha>` pre-releases; demo deploys those), #171 L2 tenants never
+  reconciled locally, #172 severity-floor input crash, #173 checkpoint health
+  recovery, #170 coordinated version bump.
+- **Published** (verified by digest): images `soctalk-api@sha256:6e82089…`,
+  `soctalk-app-ui@sha256:abf351b…`, `soctalk-orchestrator@sha256:da22eb9…`,
+  `soctalk-adapter@sha256:4e16a54…`, `soctalk-linux-ep@sha256:c66fb01…`;
+  charts `soctalk-system 0.2.2` (`sha256:491dc44…`), `soctalk-tenant 0.2.2`
+  (`sha256:e93d0d4…`); GitHub Release with `.deb` + `.rpm`; VM appliance build
+  dispatched (attaches asynchronously).
+- **Codex holistic review (hard rule 5):** pass 1 **CHANGES REQUIRED** →
+  fixed by #171/#172/#173 (+ the bump). Pass 2 confirmed those fixes and the
+  bump, then returned **CHANGES REQUIRED** on two **pre-existing** L2 +
+  `provided` gaps (`core/agents/api.py` is byte-identical to `v0.2.1`, and no
+  release has validated L2 + `provided`): the agent payload never carries the
+  external-SIEM credentials Secret, and L2 readiness probes a Wazuh manager
+  that `provided` does not deploy. **Shipped as a known limitation** (release
+  engineer's decision: 0.2.2 is no worse than 0.2.1 there and better
+  everywhere else); see *Known follow-ups*.
+- **Gate** (hard rule 9; see the log row): **partial.** A raw-Helm *upgrade*
+  of an existing single-node k3s install to the released chart passed digest
+  gate, pinning and a real verdict. Rows 1–6 as defined (fresh VMs, launchpad
+  L2, the staging host, appliance, OS packages) are **NOT VALIDATED** on this
+  cut; they need operator infrastructure.
+
+### Previous release
+
 - **`0.2.1` — git tag `v0.2.1` @ `df31620`** (re-cut; see the log). Contains: the
   full #142 pricing/engine work, frontend audience-wall (#143/#144) + LLM
   base-URL-clear guard, installer LLM model-knob + provider-alias normalization +
@@ -473,8 +509,30 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `7e4dcac` | + hard rule 10 enforcement: no shipped artifact consumes `latest` (setup wizard, packer examples + CI boot-test seed, packer chart-version defaults, `alpine/openssl` in the wazuh chart) | **scoped re-validation** — operator scoped this cut to the previously-failing mode: row 5 re-run in full → **PASS**: all 5 images `0.2.1` (was `latest`), `gen-certs` on `alpine/openssl:3.5.7`, real verdict (19,973 tokens). Rows 1–4, 6 were validated on `85da7dc` and **were NOT re-run on this cut** |
 | 0.2.1 | `5a4faa9` | + BYO/external-Wazuh egress ports derived from the tenant's configured SIEM URLs (standard NetworkPolicy + Cilium `toPorts`), `PATCH /external-siem` now re-renders on URL change, malformed explicit ports rejected (#147) | **scoped re-validation**: row 4 staging digest gate **PASS** (all containers on the re-cut digests); BYO `provided`-profile re-verified — a tenant whose SIEM URLs use non-standard ports now renders those ports in its egress policy and the adapter **reaches** the SIEM (HTTP response) where it previously logged `All connection attempts failed`. Rows 1, 2, 3, 5, 6 **NOT re-run on this cut** |
 | 0.2.1 | `df31620` | + tenant image tags no longer default to `latest` (lazy fallback to the running control plane's version); chart/doc comments corrected | rows **1–4 PASS** on fresh VMs — one-click 19,911 · charts-only 20,075 · launchpad L2 19,923 (cross-cluster) · staging digest gate green. Rows 5–6 pending the packer build. Found: L2 cloud-agent still runs `:latest` (#149); L2 tenant healthy but projected `degraded` |
+| 0.2.2 | `eceec2e` | New version: #162–#173 (ingest settings, lossless rate limit, lock-pinned deps, adapter-status NetworkPolicy, adapter health, platform drift + `:reconcile`, immutable release charts, L2 reconcile guard, severity-input crash, checkpoint health) + #170 bump. Codex pass 1 → 3 fixes; pass 2 → only pre-existing L2+`provided` gaps (shipped as known limitation) | **Upgrade variant PASS** on a single-node stock-k3s install (existing 0.2.1-line install with one `provided` tenant on an external Wazuh 4.14, openai-compatible gateway, TLS via the ingress default cert; Traefik): raw `helm upgrade … --version 0.2.2` with chart defaults → login 200, schema unchanged; tenant rolled with `:reconcile` onto `soctalk-tenant 0.2.2`; `staging-released-bits.sh 0.2.2` **PASS** (every soctalk container on the published digest; no `latest`); real verdict **7,633 tokens** (synthetic alert via the real-triage recipe); UI e2e 24/0. **NOT VALIDATED on this cut:** row 1 one-click (no fresh VM), row 2 *fresh* charts-only install, row 3 launchpad L2 (and L2+`provided` is a known limitation), row 4 staging host (not reachable from this environment; the gate script ran against the install above instead), row 5 VM appliance (build pending), row 6 OS packages (attached, not installed) |
 
 ## Known follow-ups
+
+- **L2 + `provided` does not install (known limitation of 0.2.2 and 0.2.1).**
+  `core/agents/api.py` builds an agent payload that references Secret
+  `tenant-external-siem-creds` without carrying the stored credentials or
+  rendering it (adapter / runs-worker `CreateContainerConfigError` on a clean
+  tenant cluster), and L2 readiness probes `tenant-<slug>-wazuh-manager:55000`
+  although `provided` deploys no Wazuh. Needs a design for moving SIEM
+  credentials over the agent channel.
+- **L2 same-version configuration changes are not applied remotely.**
+  `:issue-agent` dispatches `upgrade_helm_release` only when the chart
+  coordinates change; local reconcile correctly skips L2 tenants (#171), so an
+  L2 settings edit on the same chart version stays in Postgres.
+- **Platform roll generation binding.** An outgoing api pod can still claim a
+  roll job queued by the incoming one and render its older platform; the
+  tenant is re-queued once the old pod is gone. Default-off roll and the
+  120 s grace mitigate it.
+- **Demo pre-release charts still run `latest` images** (`deploy/demo-values.yaml`);
+  pin them to the commit's `<short-sha>` image tags for a consistent demo.
+- **Frontend CI runs no tests.** The `frontend` job runs `pnpm check || true`
+  and `pnpm build` only; the Playwright specs (including #172's) are local-only.
+- **Row 1–6 matrix for 0.2.2** — see the log row.
 
 - **Separate the dev chart version from release versions** — **done**: main
   publishes `X.Y.Z-main.g<sha>` pre-releases and never overwrites `X.Y.Z`; the
