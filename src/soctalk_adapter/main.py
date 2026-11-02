@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,7 +68,14 @@ class _State:
         self.alerts_queried: int = 0
         self.alerts_forwarded: int = 0
         self.alerts_duplicate: int = 0
+        # Shed mode only: events discarded past the bucket (legacy). In the
+        # default defer mode this stays 0 — nothing is discarded.
         self.alerts_dropped_rate_limit: int = 0
+        # Defer mode: cumulative count of events left on the indexer for the
+        # next poll because the bucket was empty. Each deferred event counts
+        # once per poll it waits, so this is a backlog-pressure signal, not a
+        # loss count.
+        self.alerts_deferred_rate_limit: int = 0
         self.batch_seq: int = 0
         self.checkpoint_loaded: bool = False
         self.last_ingest_error: str | None = None
@@ -81,27 +89,45 @@ class _TokenBucket:
 
     The adapter is single-tenant (one process per tenant), so a process-
     local token bucket is the per-tenant cap by construction. ``rate``
-    is alerts/sec, ``burst`` is the bucket size. Excess alerts are
-    dropped (and counted on ``_state.alerts_dropped_rate_limit``) rather
-    than queued — better to lose a tail of a flood than to lag forever.
+    is alerts/sec, ``burst`` is the bucket size. What happens to the
+    excess is decided by ``SOCTALK_ADAPTER_RATE_LIMIT_MODE`` in the ingest
+    step, not here: ``defer`` (default) leaves it on the indexer for the
+    next poll by not advancing the cursor past it; ``shed`` discards it
+    and counts it on ``_state.alerts_dropped_rate_limit``.
     """
 
-    def __init__(self, rate_per_sec: float, burst: int) -> None:
+    def __init__(
+        self, rate_per_sec: float, burst: int, clock=time.monotonic
+    ) -> None:
         self.rate = max(rate_per_sec, 0.0)
         self.burst = max(burst, 1)
         self.tokens = float(self.burst)
-        self.last = time.monotonic()
+        self._clock = clock
+        self.last = clock()
 
-    def take(self, n: int) -> tuple[int, int]:
-        """Take up to ``n`` tokens. Returns (allowed, dropped)."""
-        if self.rate <= 0:
-            return n, 0  # rate-limiter disabled
-        now = time.monotonic()
+    def _refill(self) -> None:
+        now = self._clock()
         self.tokens = min(self.burst, self.tokens + (now - self.last) * self.rate)
         self.last = now
+
+    def take(self, n: int) -> tuple[int, int]:
+        """Take up to ``n`` tokens. Returns (allowed, excess)."""
+        if self.rate <= 0:
+            return n, 0  # rate-limiter disabled
+        self._refill()
         allowed = min(n, int(self.tokens))
         self.tokens -= allowed
         return allowed, n - allowed
+
+    def seconds_until(self, n: int) -> float:
+        """Seconds until ``n`` tokens are available (0 when they already are)."""
+        if self.rate <= 0:
+            return 0.0
+        self._refill()
+        n = min(n, self.burst)
+        if self.tokens >= n:
+            return 0.0
+        return (n - self.tokens) / self.rate
 
 
 def _make_rate_limiter() -> _TokenBucket:
@@ -111,6 +137,26 @@ def _make_rate_limiter() -> _TokenBucket:
 
 
 _rate_limiter = _make_rate_limiter()
+
+
+def _rate_limit_mode() -> str:
+    """``defer`` (default) or ``shed``.
+
+    ``defer`` is lossless: a batch the bucket cannot admit in full is cut at
+    the capacity and the keyset cursor advances only through the events that
+    were actually forwarded, so the tail is re-read on the next poll. The
+    ingest idempotency key on the control plane absorbs any re-read of an
+    already-delivered event. ``shed`` is the pre-0.3 behaviour — discard the
+    tail and move the cursor past it — kept for operators who would rather
+    lose the tail of a flood than lag. A malformed value is treated as
+    ``defer``: a typo must never turn on data loss.
+    """
+    raw = os.environ.get("SOCTALK_ADAPTER_RATE_LIMIT_MODE", "defer").strip().lower()
+    if raw == "shed":
+        return "shed"
+    if raw != "defer":
+        logger.warning("rate_limit_mode_invalid value=%r — using defer", raw)
+    return "defer"
 
 
 def _wazuh_indexer_url() -> str:
@@ -521,6 +567,7 @@ async def _heartbeat_once(client: httpx.AsyncClient) -> None:
         "alerts_forwarded": _state.alerts_forwarded,
         "alerts_duplicate": _state.alerts_duplicate,
         "alerts_dropped_rate_limit": _state.alerts_dropped_rate_limit,
+        "alerts_deferred_rate_limit": _state.alerts_deferred_rate_limit,
         "batch_seq": _state.batch_seq,
         "last_alert_ts": _state.last_alert_ts,
         "last_ingest_error": _state.last_ingest_error,
@@ -594,82 +641,153 @@ async def _ingest_loop() -> None:
             # (the control plane re-mints it before the TTL elapses) is picked
             # up without a pod restart — the mounted file updates in place.
             token = _read_token()
+            result: _PollResult | None = None
             try:
-                hits = await _query_alerts(
-                    wazuh_client, _state.last_alert_ts, _state.last_alert_id, batch_size
+                result = await _ingest_once(
+                    api_client, wazuh_client, api_url, tenant_id, token, batch_size
                 )
-                _state.alerts_queried += len(hits)
-                if hits:
-                    events: list[dict] = []
-                    for h in hits:
-                        ev = _hit_to_event(h)
-                        if ev is not None:
-                            events.append(ev)
-                    # Keyset cursor: the resume point is the LAST hit's
-                    # (ts, id) regardless of whether the timestamp advanced.
-                    # This is what breaks the same-timestamp livelock — the
-                    # id tie-breaker always moves forward even when many
-                    # alerts share one timestamp.
-                    new_cursor_ts = _state.last_alert_ts
-                    new_cursor_id = _state.last_alert_id
-                    if events:
-                        last = events[-1]
-                        new_cursor_ts = last["ts"] or new_cursor_ts
-                        new_cursor_id = last["source_event_id"]
-
-                    # Per-tenant rate limit — drop the tail past the bucket
-                    # capacity. The cursor still advances past dropped events
-                    # (shedding, not deferral); drops are recorded as facts.
-                    if events:
-                        allowed, dropped = _rate_limiter.take(len(events))
-                        if dropped > 0:
-                            _state.alerts_dropped_rate_limit += dropped
-                            logger.warning(
-                                "rate_limited dropped=%d total_dropped=%d batch=%d",
-                                dropped, _state.alerts_dropped_rate_limit, len(events),
-                            )
-                        events = events[:allowed]
-
-                    if events:
-                        _state.batch_seq += 1
-                        resp = await api_client.post(
-                            f"{api_url}/api/internal/adapter/events",
-                            headers={"Authorization": f"Bearer {token}"},
-                            json={
-                                "tenant_id": tenant_id,
-                                "events": events,
-                                "schema_version": SCHEMA_VERSION,
-                                "batch_seq": _state.batch_seq,
-                            },
-                            timeout=30.0,
-                        )
-                        resp.raise_for_status()
-                        body = resp.json()
-                        dup = (body.get("action_counts") or {}).get("duplicate", 0)
-                        _state.alerts_duplicate += dup
-                        _state.alerts_forwarded += len(events) - dup
-                        _state.last_ingest_error = None
-
-                    # Advance + persist the keyset cursor whether we forwarded
-                    # or shed the whole batch — either way those hits are done.
-                    if (new_cursor_ts, new_cursor_id) != (
-                        _state.last_alert_ts, _state.last_alert_id
-                    ):
-                        _state.last_alert_ts = new_cursor_ts
-                        _state.last_alert_id = new_cursor_id
-                        await _save_checkpoint(
-                            api_client, api_url, tenant_id, token,
-                            new_cursor_ts, new_cursor_id,
-                        )
-                        logger.info(
-                            "ingest_ok forwarded=%d duplicate=%d total=%d cursor=%s/%s",
-                            _state.alerts_forwarded, _state.alerts_duplicate,
-                            _state.alerts_forwarded, new_cursor_ts, new_cursor_id,
-                        )
             except Exception as e:
                 _state.last_ingest_error = str(e)
                 logger.warning("ingest_failed: %s", e)
-            await asyncio.sleep(interval)
+            await asyncio.sleep(_next_sleep(result, interval))
+
+
+@dataclass
+class _PollResult:
+    """Outcome of one ingest poll, for pacing and tests."""
+
+    queried: int = 0
+    forwarded: int = 0
+    #: events left on the indexer for the next poll (defer mode)
+    deferred: int = 0
+    #: events discarded past the bucket (shed mode only)
+    dropped: int = 0
+    advanced: bool = False
+
+
+def _next_sleep(result: _PollResult | None, interval: float) -> float:
+    """Pacing after a poll.
+
+    A deferred tail means the indexer holds more than the bucket admitted,
+    so poll again as soon as the bucket can take another batch (capped at
+    the regular interval) instead of waiting the full interval: a backlog
+    then drains at the configured rate rather than one burst per interval.
+    Everything else — empty poll, full delivery, failure — keeps the cadence.
+    """
+    if result is None or result.deferred <= 0:
+        return interval
+    want = min(result.deferred, _rate_limiter.burst)
+    return max(0.0, min(interval, _rate_limiter.seconds_until(want)))
+
+
+async def _ingest_once(
+    api_client: httpx.AsyncClient,
+    wazuh_client: httpx.AsyncClient,
+    api_url: str,
+    tenant_id: str,
+    token: str,
+    batch_size: int,
+) -> _PollResult:
+    """One poll: query from the cursor, forward what the bucket admits,
+    advance the durable cursor through what was forwarded.
+
+    The cursor is the keyset ``(ts, id)`` of the LAST event the control
+    plane accepted. In ``defer`` mode an unforwarded tail therefore stays
+    ahead of the cursor and is re-read next poll — nothing is lost, and the
+    ``search_after`` tie-breaker still moves past same-timestamp runs. In
+    ``shed`` mode the cursor jumps past the discarded tail (legacy). A
+    failed POST raises before the cursor moves, so the batch is retried
+    whole and the control plane's idempotency key absorbs any re-delivery.
+    """
+    result = _PollResult()
+    hits = await _query_alerts(
+        wazuh_client, _state.last_alert_ts, _state.last_alert_id, batch_size
+    )
+    result.queried = len(hits)
+    _state.alerts_queried += len(hits)
+    if not hits:
+        return result
+
+    events: list[dict] = []
+    for h in hits:
+        ev = _hit_to_event(h)
+        if ev is not None:
+            events.append(ev)
+    if not events:
+        return result
+
+    new_cursor_ts = _state.last_alert_ts
+    new_cursor_id = _state.last_alert_id
+
+    allowed, excess = _rate_limiter.take(len(events))
+    if excess > 0:
+        if _rate_limit_mode() == "shed":
+            # Legacy: the cursor passes the discarded tail. Recorded as a
+            # loss fact so a quiet tenant is distinguishable from a shed one.
+            _state.alerts_dropped_rate_limit += excess
+            result.dropped = excess
+            tail = events[-1]
+            new_cursor_ts = tail["ts"] or new_cursor_ts
+            new_cursor_id = tail["source_event_id"]
+            logger.warning(
+                "rate_limited dropped=%d total_dropped=%d batch=%d",
+                excess, _state.alerts_dropped_rate_limit, len(events),
+            )
+        else:
+            _state.alerts_deferred_rate_limit += excess
+            result.deferred = excess
+            logger.info(
+                "rate_limited deferred=%d allowed=%d batch=%d",
+                excess, allowed, len(events),
+            )
+    events = events[:allowed]
+
+    if events:
+        _state.batch_seq += 1
+        resp = await api_client.post(
+            f"{api_url}/api/internal/adapter/events",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "tenant_id": tenant_id,
+                "events": events,
+                "schema_version": SCHEMA_VERSION,
+                "batch_seq": _state.batch_seq,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        dup = (body.get("action_counts") or {}).get("duplicate", 0)
+        _state.alerts_duplicate += dup
+        _state.alerts_forwarded += len(events) - dup
+        _state.last_ingest_error = None
+        result.forwarded = len(events)
+        # Keyset cursor: the resume point is the LAST FORWARDED event's
+        # (ts, id) regardless of whether the timestamp advanced — the id
+        # tie-breaker always moves forward even when many alerts share one
+        # timestamp, which is what breaks the same-timestamp livelock.
+        # (Shed mode already pointed the cursor past the discarded tail,
+        # which is further along; leave it there.)
+        if result.dropped == 0:
+            last = events[-1]
+            new_cursor_ts = last["ts"] or new_cursor_ts
+            new_cursor_id = last["source_event_id"]
+
+    if (new_cursor_ts, new_cursor_id) != (_state.last_alert_ts, _state.last_alert_id):
+        _state.last_alert_ts = new_cursor_ts
+        _state.last_alert_id = new_cursor_id
+        result.advanced = True
+        await _save_checkpoint(
+            api_client, api_url, tenant_id, token, new_cursor_ts, new_cursor_id
+        )
+        logger.info(
+            "ingest_ok forwarded=%d deferred=%d dropped=%d total_forwarded=%d "
+            "duplicate=%d cursor=%s/%s",
+            result.forwarded, result.deferred, result.dropped,
+            _state.alerts_forwarded, _state.alerts_duplicate,
+            new_cursor_ts, new_cursor_id,
+        )
+    return result
 
 
 @contextlib.asynccontextmanager
@@ -709,6 +827,7 @@ async def ready() -> dict:
         "alerts_forwarded": _state.alerts_forwarded,
         "alerts_duplicate": _state.alerts_duplicate,
         "alerts_dropped_rate_limit": _state.alerts_dropped_rate_limit,
+        "alerts_deferred_rate_limit": _state.alerts_deferred_rate_limit,
         "batch_seq": _state.batch_seq,
         "checkpoint_loaded": _state.checkpoint_loaded,
         "last_alert_ts": _state.last_alert_ts,
