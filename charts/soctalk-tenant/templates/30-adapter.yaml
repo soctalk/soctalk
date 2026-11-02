@@ -122,9 +122,29 @@ spec:
             */}}
             - name: WAZUH_INDEXER_VERIFY_SSL
               value: {{ if hasKey . "verifySsl" }}{{ .verifySsl | quote }}{{ else }}"true"{{ end }}
-            {{- if .minSeverity }}
+            {{/*
+            Ingest settings. All four are key-checked (hasKey), not
+            truth-tested: ``minSeverity: 0`` ("ingest every level") and
+            ``excludeManagerAgent: false`` are real values that a truthiness
+            check would silently drop, leaving the adapter on its own
+            defaults (severity 10, manager agent excluded). Absent keys emit
+            nothing so the adapter default still applies.
+            */}}
+            {{- if hasKey . "minSeverity" }}
             - name: SOCTALK_ADAPTER_MIN_SEVERITY
               value: {{ .minSeverity | quote }}
+            {{- end }}
+            {{- if hasKey . "excludeManagerAgent" }}
+            - name: SOCTALK_ADAPTER_EXCLUDE_MANAGER_AGENT
+              value: {{ ternary "1" "0" .excludeManagerAgent | quote }}
+            {{- end }}
+            {{- if hasKey . "initialTs" }}
+            - name: SOCTALK_INGEST_INITIAL_TS
+              value: {{ .initialTs | quote }}
+            {{- end }}
+            {{- if hasKey . "agentPrefix" }}
+            - name: SOCTALK_ADAPTER_AGENT_PREFIX
+              value: {{ .agentPrefix | quote }}
             {{- end }}
             {{- end }}
           resources:

@@ -3,7 +3,8 @@
 	import {
 		tenantsApi,
 		type TenantOnboard,
-		type ExternalSiemOnboard
+		type ExternalSiemOnboard,
+		type IngestSettings
 	} from '$lib/api/tenants';
 	import { addToast, authSession, isMsspScope } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
@@ -33,6 +34,14 @@
 		api_password: string;
 		api_token: string;
 		verify_ssl: boolean;
+		// Ingest settings for the external Wazuh. ``ingest_start`` drives the
+		// backend's ``initial_ts`` ('now' | '' for a full backfill | a custom
+		// UTC instant); the other three map 1:1 onto ``IngestSettings``.
+		ingest_start: 'now' | 'all' | 'custom';
+		ingest_initial_ts: string;
+		exclude_manager_agent: boolean;
+		agent_prefix: string;
+		min_severity: string;
 	}
 
 	interface WizardForm {
@@ -72,8 +81,29 @@
 		api_username: '',
 		api_password: '',
 		api_token: '',
-		verify_ssl: true
+		verify_ssl: true,
+		// A BYO Wazuh usually has months of history; start from now so the
+		// first run doesn't backfill it all into triage. The manager's own
+		// agent (000) is where an external Wazuh reports its cloud wodles and
+		// remote syslog, so it is ingested unless the operator opts out.
+		ingest_start: 'now',
+		ingest_initial_ts: '',
+		exclude_manager_agent: false,
+		agent_prefix: '',
+		min_severity: ''
 	});
+
+	function toIngest(s: SiemForm): IngestSettings {
+		const initial_ts =
+			s.ingest_start === 'now' ? 'now' : s.ingest_start === 'custom' ? s.ingest_initial_ts.trim() : null;
+		const sev = s.min_severity.trim();
+		return {
+			exclude_manager_agent: s.exclude_manager_agent,
+			initial_ts: initial_ts || null,
+			agent_prefix: s.agent_prefix.trim() || null,
+			min_severity: sev === '' ? null : Number(sev)
+		};
+	}
 
 	let step = 1;
 	let submitting = false;
@@ -159,7 +189,12 @@
 		!!form.external_siem.indexer_password.trim() &&
 		isValidUrl(form.external_siem.api_url) &&
 		!!form.external_siem.api_username.trim() &&
-		!!form.external_siem.api_password.trim();
+		!!form.external_siem.api_password.trim() &&
+		(form.external_siem.ingest_start !== 'custom' || !!form.external_siem.ingest_initial_ts.trim()) &&
+		(form.external_siem.min_severity.trim() === '' ||
+			(Number.isInteger(Number(form.external_siem.min_severity)) &&
+				Number(form.external_siem.min_severity) >= 0 &&
+				Number(form.external_siem.min_severity) <= 15));
 
 	// For 'provided' the tenant must bring their own LLM key — the backend
 	// rejects a blank llm_api_key with a 422, so the External SIEM step
@@ -230,6 +265,7 @@
 			};
 			if (s.api_token.trim()) external_siem.api_token = s.api_token;
 			payload.external_siem = external_siem;
+			payload.ingest = toIngest(s);
 		}
 		return payload;
 	}
@@ -463,6 +499,63 @@
 						/>
 						<span class="text-sm">{m.tnew_verify_tls()}</span>
 					</label>
+					<div class="space-y-2 pt-2 border-t border-surface-500/20" data-testid="wizard-ingest">
+						<div class="text-sm font-medium">{m.tnew_ingest_section()}</div>
+						<label class="label">
+							<span class="text-sm">{m.tnew_ingest_start()}</span>
+							<select name="ingest_start" class="select" bind:value={form.external_siem.ingest_start}>
+								<option value="now">{m.tnew_ingest_start_now()}</option>
+								<option value="all">{m.tnew_ingest_start_all()}</option>
+								<option value="custom">{m.tnew_ingest_start_custom()}</option>
+							</select>
+							<small class="opacity-60">{m.tnew_ingest_start_hint()}</small>
+						</label>
+						{#if form.external_siem.ingest_start === 'custom'}
+							<label class="label">
+								<span class="text-sm">{m.tnew_ingest_start_custom()}</span>
+								<input
+									name="ingest_initial_ts"
+									type="text"
+									class="input font-mono"
+									placeholder="2026-01-31T00:00:00Z"
+									bind:value={form.external_siem.ingest_initial_ts}
+								/>
+							</label>
+						{/if}
+						<label class="flex items-center gap-2">
+							<input
+								name="exclude_manager_agent"
+								type="checkbox"
+								class="checkbox"
+								bind:checked={form.external_siem.exclude_manager_agent}
+							/>
+							<span class="text-sm">{m.tnew_ingest_exclude_manager()}</span>
+						</label>
+						<small class="opacity-60">{m.tnew_ingest_exclude_manager_hint()}</small>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+							<label class="label">
+								<span class="text-sm">{m.tnew_ingest_agent_prefix()}</span>
+								<input
+									name="agent_prefix"
+									type="text"
+									class="input"
+									bind:value={form.external_siem.agent_prefix}
+								/>
+							</label>
+							<label class="label">
+								<span class="text-sm">{m.tnew_ingest_min_severity()}</span>
+								<input
+									name="min_severity"
+									type="number"
+									min="0"
+									max="15"
+									class="input"
+									bind:value={form.external_siem.min_severity}
+								/>
+								<small class="opacity-60">{m.tnew_ingest_min_severity_hint()}</small>
+							</label>
+						</div>
+					</div>
 				</div>
 			{/if}
 			<!-- Provided tenants bring their own LLM key — REQUIRED here (the
@@ -527,6 +620,8 @@
 					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_api_url()}</dt><dd><code class="text-xs">{form.external_siem.api_url || '—'}</code></dd></div>
 					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_api_user()}</dt><dd>{form.external_siem.api_username || '—'}</dd></div>
 					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_verify_tls_short()}</dt><dd>{form.external_siem.verify_ssl ? m.tnew_yes() : m.tnew_no()}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_ingest_start()}</dt><dd>{form.external_siem.ingest_start === 'now' ? m.tnew_ingest_start_now() : form.external_siem.ingest_start === 'all' ? m.tnew_ingest_start_all() : form.external_siem.ingest_initial_ts || '—'}</dd></div>
+					<div class="flex justify-between"><dt class="opacity-60">{m.tnew_ingest_manager_short()}</dt><dd>{form.external_siem.exclude_manager_agent ? m.tnew_no() : m.tnew_yes()}</dd></div>
 				{/if}
 				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_contact()}</dt><dd>{form.contact_email || '—'}</dd></div>
 				<div class="flex justify-between"><dt class="opacity-60">{m.tnew_app_name()}</dt><dd>{form.branding_app_name || form.display_name}</dd></div>

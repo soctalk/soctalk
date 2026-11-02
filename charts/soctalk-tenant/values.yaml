@@ -172,6 +172,17 @@ adapter:
     # credsSecret: wazuh-<slug>-creds
     # usernameKey: INDEXER_USERNAME
     # passwordKey: INDEXER_PASSWORD
+    # verifySsl: true
+    # Ingest settings (the L1 controller renders these from the tenant's
+    # integration config; every key is optional and key-checked, so an
+    # explicit 0 / false is honoured):
+    # minSeverity: 10              # rule.level floor, 0..15 (0 = every level)
+    # excludeManagerAgent: true    # skip agent 000 (the manager itself). Keep
+    #                              # false for an external/BYO manager, where
+    #                              # agent 000 carries cloud wodles + syslog.
+    # initialTs: "2026-01-01T00:00:00.000Z"  # first-run cursor; a durable
+    #                              # checkpoint always takes precedence
+    # agentPrefix: "linux-ep-"     # only ingest agents whose name starts so
   # Probe is configurable so tests / alternative adapter impls can opt out
   # or point at a different path. Set to null (or omit) to disable the
   # probe — useful when running a stub image that doesn't serve health.

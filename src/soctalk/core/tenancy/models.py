@@ -526,6 +526,19 @@ class IntegrationConfig(SQLModel, table=True):
     # -wazuh-indexer and :55000 → :9200. See docs/mssp-chat-plan.md.
     wazuh_indexer_url: str | None = Field(default=None, max_length=500)
     wazuh_verify_ssl: bool = Field(default=True)
+    # Adapter ingest settings, rendered into the tenant's adapter env. NULL
+    # means "use the default", which depends on the profile for the manager
+    # agent exclusion (managed Wazuh: skip the manager pod's self-alerts on
+    # agent 000; ``provided``: keep them, because on an external manager
+    # agent 000 carries the cloud/SaaS wodles and remote syslog) and on the
+    # install (``SOCTALK_ADAPTER_MIN_SEVERITY``) for the severity floor.
+    # ``wazuh_ingest_initial_ts`` is an absolute UTC instant: a request for
+    # "now" is resolved once at write time, never at pod start, so a restart
+    # cannot skip the downtime window. The durable checkpoint still wins.
+    wazuh_ingest_exclude_manager_agent: bool | None = Field(default=None)
+    wazuh_ingest_initial_ts: str | None = Field(default=None, max_length=64)
+    wazuh_ingest_agent_prefix: str | None = Field(default=None, max_length=255)
+    wazuh_ingest_min_severity: int | None = Field(default=None)
     # External Wazuh credentials (populated only for the ``provided`` profile,
     # where the tenant brings their own Wazuh deployment rather than having
     # SocTalk provision one in-namespace). The Wazuh **API** (manager, :55000)

@@ -4,7 +4,8 @@
 		tenantsApi,
 		type ExternalSiemRead,
 		type ExternalSiemUpdate,
-		type AdapterStatus
+		type AdapterStatus,
+		type IngestSettings
 	} from '$lib/api/tenants';
 	import { addToast } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
@@ -43,6 +44,14 @@
 		api_password: string;
 		api_token: string;
 		verify_ssl: boolean;
+		// Ingest settings; ``ingest_start`` drives ``initial_ts`` ('now' |
+		// '' for a full backfill | a custom UTC instant). Editing the start
+		// point never rewinds an established adapter checkpoint.
+		ingest_start: 'now' | 'all' | 'custom';
+		ingest_initial_ts: string;
+		exclude_manager_agent: boolean;
+		agent_prefix: string;
+		min_severity: string;
 	}
 
 	function blankForm(): SiemForm {
@@ -54,7 +63,24 @@
 			api_username: '',
 			api_password: '',
 			api_token: '',
-			verify_ssl: true
+			verify_ssl: true,
+			ingest_start: 'all',
+			ingest_initial_ts: '',
+			exclude_manager_agent: false,
+			agent_prefix: '',
+			min_severity: ''
+		};
+	}
+
+	function toIngest(f: SiemForm): IngestSettings {
+		const initial_ts =
+			f.ingest_start === 'now' ? 'now' : f.ingest_start === 'custom' ? f.ingest_initial_ts.trim() : null;
+		const sev = f.min_severity.trim();
+		return {
+			exclude_manager_agent: f.exclude_manager_agent,
+			initial_ts: initial_ts || null,
+			agent_prefix: f.agent_prefix.trim() || null,
+			min_severity: sev === '' ? null : Number(sev)
 		};
 	}
 
@@ -122,7 +148,15 @@
 			api_username: read?.api_username ?? '',
 			api_password: '',
 			api_token: '',
-			verify_ssl: read?.verify_ssl ?? true
+			verify_ssl: read?.verify_ssl ?? true,
+			// Seed the ingest block from the stored settings, showing the
+			// effective manager-agent choice so the checkbox reflects what the
+			// adapter actually does when the column is unset.
+			ingest_start: read?.ingest?.initial_ts ? 'custom' : 'all',
+			ingest_initial_ts: read?.ingest?.initial_ts ?? '',
+			exclude_manager_agent: read?.ingest?.effective_exclude_manager_agent ?? false,
+			agent_prefix: read?.ingest?.agent_prefix ?? '',
+			min_severity: read?.ingest?.min_severity == null ? '' : String(read.ingest.min_severity)
 		};
 		editing = true;
 	}
@@ -139,7 +173,8 @@
 				indexer_username: formData.indexer_username || null,
 				api_url: formData.api_url || null,
 				api_username: formData.api_username || null,
-				verify_ssl: formData.verify_ssl
+				verify_ssl: formData.verify_ssl,
+				ingest: toIngest(formData)
 			};
 			// Only send a secret when the operator typed a new value; a blank field
 			// leaves the stored credential untouched (the read never echoes it).
@@ -306,6 +341,58 @@
 					/>
 					<span class="text-sm">{m.ten_siem_verify_tls_label()}</span>
 				</label>
+				<div class="space-y-2 pt-2 border-t border-surface-500/20" data-testid="siem-ingest-edit">
+					<div class="text-sm font-medium">{m.ten_siem_ingest_section()}</div>
+					<label class="label">
+						<span class="text-sm">{m.ten_siem_ingest_start()}</span>
+						<select name="ingest_start" class="select" bind:value={formData.ingest_start}>
+							<option value="all">{m.ten_siem_ingest_start_all()}</option>
+							<option value="now">{m.ten_siem_ingest_start_now()}</option>
+							<option value="custom">{m.ten_siem_ingest_start_custom()}</option>
+						</select>
+						<small class="opacity-60">{m.ten_siem_ingest_start_hint()}</small>
+					</label>
+					{#if formData.ingest_start === 'custom'}
+						<label class="label">
+							<span class="text-sm">{m.ten_siem_ingest_start_custom()}</span>
+							<input
+								name="ingest_initial_ts"
+								type="text"
+								class="input font-mono"
+								placeholder="2026-01-31T00:00:00Z"
+								bind:value={formData.ingest_initial_ts}
+							/>
+						</label>
+					{/if}
+					<label class="flex items-center gap-2">
+						<input
+							name="exclude_manager_agent"
+							type="checkbox"
+							class="checkbox"
+							bind:checked={formData.exclude_manager_agent}
+						/>
+						<span class="text-sm">{m.ten_siem_ingest_exclude_manager()}</span>
+					</label>
+					<small class="opacity-60">{m.ten_siem_ingest_exclude_manager_hint()}</small>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+						<label class="label">
+							<span class="text-sm">{m.ten_siem_ingest_agent_prefix()}</span>
+							<input name="agent_prefix" type="text" class="input" bind:value={formData.agent_prefix} />
+						</label>
+						<label class="label">
+							<span class="text-sm">{m.ten_siem_ingest_min_severity()}</span>
+							<input
+								name="min_severity"
+								type="number"
+								min="0"
+								max="15"
+								class="input"
+								bind:value={formData.min_severity}
+							/>
+							<small class="opacity-60">{m.ten_siem_ingest_min_severity_hint()}</small>
+						</label>
+					</div>
+				</div>
 				<div class="flex gap-2">
 					<button
 						type="submit"
@@ -367,6 +454,34 @@
 				<div class="flex justify-between gap-3">
 					<dt class="opacity-60">{m.ten_siem_api_token()}</dt>
 					<dd data-testid="siem-has-api-token">{read.has_api_token ? '✔' : '✘'}</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">{m.ten_siem_ingest_start()}</dt>
+					<dd class="font-mono text-xs" data-testid="siem-ingest-start">
+						{read.ingest?.initial_ts ?? m.ten_siem_ingest_start_all()}
+					</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">{m.ten_siem_ingest_manager_alerts()}</dt>
+					<dd data-testid="siem-ingest-manager-alerts">
+						{read.ingest?.effective_exclude_manager_agent ? '✘' : '✔'}
+						{#if read.ingest?.exclude_manager_agent == null}
+							<span class="opacity-60">({m.ten_siem_ingest_default()})</span>
+						{/if}
+					</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">{m.ten_siem_ingest_agent_prefix()}</dt>
+					<dd class="font-mono text-xs" data-testid="siem-ingest-agent-prefix">{read.ingest?.agent_prefix ?? '—'}</dd>
+				</div>
+				<div class="flex justify-between gap-3">
+					<dt class="opacity-60">{m.ten_siem_ingest_min_severity()}</dt>
+					<dd data-testid="siem-ingest-min-severity">
+						{read.ingest?.effective_min_severity ?? '—'}
+						{#if read.ingest?.min_severity == null}
+							<span class="opacity-60">({m.ten_siem_ingest_default()})</span>
+						{/if}
+					</dd>
 				</div>
 			</dl>
 

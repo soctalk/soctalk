@@ -46,7 +46,17 @@ const SIEM_READ = {
 	has_indexer_password: true,
 	has_api_password: true,
 	has_api_token: false,
-	verify_ssl: true
+	verify_ssl: true,
+	// Stored ingest settings (all default) + the effective values the adapter
+	// runs with: a provided tenant keeps the manager's agent-000 alerts.
+	ingest: {
+		exclude_manager_agent: null,
+		initial_ts: null,
+		agent_prefix: null,
+		min_severity: null,
+		effective_exclude_manager_agent: false,
+		effective_min_severity: 10
+	}
 };
 
 const ADAPTER_STATUS = {
@@ -145,6 +155,12 @@ test.describe('Tenant detail — External SIEM panel', () => {
 		await expect(page.getByTestId('siem-has-indexer-password')).toContainText('✔');
 		await expect(page.getByTestId('siem-has-api-password')).toContainText('✔');
 		await expect(page.getByTestId('siem-has-api-token')).toContainText('✘');
+
+		// Ingest settings: unset columns show the effective default and say so.
+		await expect(page.getByTestId('siem-ingest-start')).toContainText('all history');
+		await expect(page.getByTestId('siem-ingest-manager-alerts')).toContainText('✔');
+		await expect(page.getByTestId('siem-ingest-manager-alerts')).toContainText('default');
+		await expect(page.getByTestId('siem-ingest-min-severity')).toContainText('10');
 	});
 
 	test('polls adapter-status and shows ingest fields', async ({ page }) => {
