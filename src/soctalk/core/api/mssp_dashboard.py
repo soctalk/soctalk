@@ -373,6 +373,7 @@ async def _platform_outdated_by_tenant(rows: Any) -> dict[str, bool]:
     from uuid import UUID
 
     from soctalk.core.provisioning.platform import (
+        agent_managed_tenant_ids,
         current_fingerprint,
         is_outdated,
         latest_tenant_renders,
@@ -385,6 +386,10 @@ async def _platform_outdated_by_tenant(rows: Any) -> dict[str, bool]:
     try:
         current = current_fingerprint()
         async with tenancy_db.get_mssp_sessionmaker()() as mssp_session:
+            # L2 tenants are rendered on their own cluster by the agent; there
+            # is no local render to compare, so their flag stays unknown.
+            remote = await agent_managed_tenant_ids(mssp_session, ids)
+            ids = [t for t in ids if t not in remote]
             renders = await latest_tenant_renders(mssp_session, ids)
     except Exception as e:  # noqa: BLE001
         logger.warning("tenant_platform_check_failed", error=str(e))

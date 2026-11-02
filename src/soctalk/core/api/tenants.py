@@ -1077,6 +1077,15 @@ async def reconcile_tenant(tenant_id: UUID, request: Request) -> ProvisioningJob
             f"reconcile is only valid from state=active (current: {tenant.state}); "
             "a degraded tenant is re-provisioned with :retry",
         )
+    from soctalk.core.provisioning.platform import agent_managed_tenant_ids
+
+    if await agent_managed_tenant_ids(session, [tenant_id]):
+        raise HTTPException(
+            409,
+            "this tenant's release is applied by its L2 cloud agent on the tenant "
+            "cluster; upgrade it with POST /api/mssp/tenants/{id}:issue-agent "
+            "(dispatches upgrade_helm_release to the agent)",
+        )
 
     active_job = (
         await session.execute(

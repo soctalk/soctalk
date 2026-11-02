@@ -149,3 +149,29 @@ async def test_dashboard_still_flags_a_tenant_on_another_platform(
 
     row = next(r for r in resp.items if r.slug == rendered_tenant.slug)
     assert row.platform_outdated is True
+
+
+async def test_dashboard_does_not_flag_an_agent_managed_tenant(
+    sessionmakers, rendered_tenant, monkeypatch
+):
+    """An L2 tenant is rendered on its own cluster by the agent; the MSSP has
+    no local render to compare, so the flag is unknown (None), not outdated."""
+    from soctalk.core.agents.models import TenantInstallation
+    from soctalk.core.api import mssp_dashboard as dash
+    from soctalk.core.provisioning import platform as pf
+    from soctalk.core.tenancy import db as tenancy_db
+
+    async with sessionmakers["mssp"]() as s:
+        s.add(TenantInstallation(
+            tenant_id=rendered_tenant.id, desired_chart_ref="oci://x/soctalk-tenant",
+            desired_chart_version="0.2.1", state="active",
+        ))
+        await s.commit()
+    monkeypatch.setattr(pf, "current_fingerprint", lambda: "UPGRADED")
+    monkeypatch.setattr(tenancy_db, "get_mssp_sessionmaker", lambda: sessionmakers["mssp"])
+
+    async with sessionmakers["app"]() as s:
+        await s.execute(text("SELECT set_config('app.current_audience', 'mssp', true)"))
+        resp = await dash.tenant_health(_MsspRequest(s))
+    row = next(r for r in resp.items if r.slug == rendered_tenant.slug)
+    assert row.platform_outdated is None

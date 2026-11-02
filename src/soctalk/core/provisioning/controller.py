@@ -496,6 +496,35 @@ class TenantController:
                 "(use provision() for the rest)"
             )
 
+        # Agent-managed (L2) tenants: the release lives on the tenant's own
+        # cluster and is applied by the cloud agent (provision() skips them
+        # for the same reason). Helm-applying here would target the MSSP
+        # cluster, fail, and flip a healthy L2 tenant to degraded. A PATCH
+        # that queued this reconcile still updated the DB row; the agent
+        # picks configuration up through its own upgrade path (:issue-agent).
+        from soctalk.core.agents.models import TenantInstallation
+
+        installation_row = (
+            await self.session.execute(
+                select(TenantInstallation)
+                .where(TenantInstallation.tenant_id == tenant.id)
+                .where(TenantInstallation.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if installation_row is not None:
+            self.session.add(
+                TenantLifecycleEvent(
+                    tenant_id=tenant.id,
+                    event_type="agent_managed_reconcile_skipped",
+                    from_state=tenant.state,
+                    to_state=tenant.state,
+                    actor_id=actor_id,
+                    details={"installation_id": str(installation_row.id)},
+                )
+            )
+            await self.session.commit()
+            return tenant
+
         org = await self._load_organization(tenant.organization_id)
         integration = await self._load_integration(tenant.id)
         branding = await self._load_branding(tenant.id)
