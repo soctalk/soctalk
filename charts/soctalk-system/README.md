@@ -37,7 +37,7 @@ For local development, `scripts/dev-up.sh` at repo root brings up a `k3d` cluste
 
 ```bash
 helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-    --version 0.2.1 \
+    --version 0.2.2 \
     --namespace soctalk-system --create-namespace \
     -f values.yaml
 ```
@@ -182,7 +182,7 @@ settings.
 
 ```bash
 helm upgrade soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-    --version 0.2.1 \
+    --version 0.2.2 \
     --namespace soctalk-system \
     -f values.yaml
 ```
