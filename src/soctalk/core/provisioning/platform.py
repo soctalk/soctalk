@@ -50,13 +50,48 @@ TENANT_CHART_EVENT = "soctalk-tenant"
 _FINGERPRINT_LEN = 16
 
 
+def _content_bytes(f: Path) -> bytes:
+    """The bytes of ``f`` that carry chart content, without build stamps.
+
+    ``helm dependency build`` (run for every api image) restamps
+    ``Chart.lock``'s ``generated:`` line and repacks the subchart archives,
+    whose tar and gzip headers carry their own timestamps. Hashing those
+    raw bytes made every rebuild of an identical chart look like a new
+    platform. Archives are hashed by member name and file content instead,
+    and the ``generated:`` line is dropped.
+    """
+    name = f.name
+    if name == "Chart.lock":
+        return b"".join(
+            line for line in f.read_bytes().splitlines(keepends=True)
+            if not line.startswith(b"generated:")
+        )
+    if name.endswith((".tgz", ".tar.gz")):
+        import tarfile
+
+        h = hashlib.sha256()
+        try:
+            with tarfile.open(f, mode="r:*") as tar:
+                for m in sorted(tar.getmembers(), key=lambda m: m.name):
+                    if not m.isfile():
+                        continue
+                    member = tar.extractfile(m)
+                    h.update(m.name.encode() + b"\0")
+                    h.update((member.read() if member else b"") + b"\0")
+        except (tarfile.TarError, EOFError, OSError):
+            return f.read_bytes()
+        return h.digest()
+    return f.read_bytes()
+
+
 def _tree_digest(path: str) -> str:
     """Content digest of a local chart or directory; "" for anything else
     (an OCI reference is pinned by its version instead).
 
     A local chart bundled in the api image keeps its ``Chart.yaml`` version
     across builds while its templates change, so the version alone cannot
-    tell two platforms apart.
+    tell two platforms apart. Build stamps are ignored (``_content_bytes``),
+    so rebuilding the same chart keeps the digest.
     """
     if not path:
         return ""
@@ -64,14 +99,14 @@ def _tree_digest(path: str) -> str:
     h = hashlib.sha256()
     try:
         if p.is_file():
-            h.update(p.read_bytes())
+            h.update(_content_bytes(p))
             return h.hexdigest()[:_FINGERPRINT_LEN]
         if not p.is_dir():
             return ""
         for f in sorted(x for x in p.rglob("*") if x.is_file()):
             h.update(str(f.relative_to(p)).encode())
             h.update(b"\0")
-            h.update(f.read_bytes())
+            h.update(_content_bytes(f))
             h.update(b"\0")
     except OSError:
         return "unreadable"
