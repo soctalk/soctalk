@@ -89,6 +89,52 @@ def test_local_chart_content_changes_the_fingerprint_at_the_same_version(tmp_pat
     assert _fp(s) != before
 
 
+def _bundled_chart(root, *, generated: str, archive_mtime: int, template: str = "kind: Pod\n"):
+    """A tenant chart as the api image bundles it after ``helm dependency
+    build``: a Chart.lock stamped with the build time and subchart archives
+    whose tar/gzip headers carry their own timestamps."""
+    import gzip
+    import io
+    import tarfile
+
+    chart = root / "soctalk-tenant"
+    (chart / "charts").mkdir(parents=True, exist_ok=True)
+    (chart / "Chart.yaml").write_text("version: 0.2.1\n")
+    (chart / "Chart.lock").write_text(
+        "dependencies:\n- name: wazuh\n  version: 0.2.1\n"
+        f"digest: sha256:abc\ngenerated: \"{generated}\"\n"
+    )
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        for name, body in (("wazuh/Chart.yaml", "version: 0.2.1\n"),
+                           ("wazuh/templates/pod.yaml", template)):
+            data = body.encode()
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime = len(data), archive_mtime
+            tar.addfile(info, io.BytesIO(data))
+    (chart / "charts" / "wazuh-0.2.1.tgz").write_bytes(
+        gzip.compress(raw.getvalue(), mtime=archive_mtime)
+    )
+    return chart
+
+
+def test_rebuilding_the_same_chart_keeps_the_digest(tmp_path):
+    """Every api image build re-runs ``helm dependency build``, which
+    restamps Chart.lock and repacks the subchart archives. Hashing those
+    bytes marked every tenant outdated after any rebuild (and, with
+    rollOnUpgrade on, re-rolled the whole fleet for nothing)."""
+    a = _bundled_chart(tmp_path / "a", generated="2026-11-02T10:08:28Z", archive_mtime=1_000)
+    b = _bundled_chart(tmp_path / "b", generated="2026-11-02T10:58:41Z", archive_mtime=2_000)
+    assert pf._tree_digest(str(a)) == pf._tree_digest(str(b))
+
+
+def test_a_real_change_inside_a_subchart_still_changes_the_digest(tmp_path):
+    a = _bundled_chart(tmp_path / "a", generated="t1", archive_mtime=1_000)
+    b = _bundled_chart(tmp_path / "b", generated="t1", archive_mtime=1_000,
+                       template="kind: Pod\nspec: {}\n")
+    assert pf._tree_digest(str(a)) != pf._tree_digest(str(b))
+
+
 def test_oci_chart_ref_has_no_content_digest():
     inputs = pf.tenant_platform_inputs(
         ControllerSettings(tenant_chart_ref="oci://ghcr.io/x/soctalk-tenant")
