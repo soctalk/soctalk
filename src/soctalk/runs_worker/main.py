@@ -24,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 
 def _post_attempts() -> int:

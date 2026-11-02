@@ -18,7 +18,7 @@ install:
     existingSecret: ''
 image:
   registry: ghcr.io/soctalk
-  tag: 0.2.1
+  tag: 0.2.2
   pullPolicy: IfNotPresent
   pullSecrets: []
 postgres:
@@ -112,7 +112,7 @@ llm:
 # air-gapped install where the api + agent share a cluster.
 tenantProvisioning:
   tenantChartRef: oci://ghcr.io/soctalk/charts/soctalk-tenant
-  tenantChartVersion: 0.2.1
+  tenantChartVersion: 0.2.2
   # Cloud-agent chart the L2 tenant operator helm-installs after
   # :issue-agent returns the bootstrap token. Same override pattern as
   # tenantChartRef — point at a lab OCI registry while validating a
@@ -148,19 +148,19 @@ tenantProvisioning:
   # takes its class from charts/wazuh/values.poc.yaml.
   persistentStorageClass: standard
   adapterImageRepo: ''
-  adapterImageTag: '0.2.1'
+  adapterImageTag: '0.2.2'
   # runs-worker image (per-tenant L2 LangGraph worker). Same Python
   # build as the L1 orchestrator; entrypoint flips to
   # ``python -m soctalk.runs_worker.main``.
   runsWorkerImageRepo: ''
-  runsWorkerImageTag: '0.2.1'
+  runsWorkerImageTag: '0.2.2'
   # linux-ep attack-simulator image tag for provisioned 'poc' tenants.
   # Pinned to the release version so a release install pulls a published
   # tag; the demo environment overrides to `latest` because it tracks head.
   # Leaving this empty omits the env, and render.py then falls back to the
   # running control plane's own version — NOT `latest` (that default was
   # removed: it silently gave tenants a moving tag).
-  linuxEpImageTag: '0.2.1'
+  linuxEpImageTag: '0.2.2'
   # Master switch for the tenant chart's networkPolicies (rendered as
   # SOCTALK_TENANT_NETWORK_POLICIES_ENABLED on the api pod). Set false on
   # clusters whose CNI cannot serve them — e.g. no Cilium CRDs (the

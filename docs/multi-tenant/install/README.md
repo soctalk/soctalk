@@ -169,7 +169,7 @@ postgres:
 
 ```bash
 helm install soctalk-system oci://ghcr.io/soctalk/charts/soctalk-system \
-  --version 0.2.1 \
+  --version 0.2.2 \
   --namespace soctalk-system --create-namespace \
   -f soctalk-system-values.yaml
 ```
