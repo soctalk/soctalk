@@ -5,7 +5,9 @@
 		type ExternalSiemRead,
 		type ExternalSiemUpdate,
 		type AdapterStatus,
-		type IngestSettings
+		type IngestSettings,
+		type SeverityInput,
+		severityFloor
 	} from '$lib/api/tenants';
 	import { addToast } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
@@ -51,7 +53,7 @@
 		ingest_initial_ts: string;
 		exclude_manager_agent: boolean;
 		agent_prefix: string;
-		min_severity: string;
+		min_severity: SeverityInput;
 	}
 
 	function blankForm(): SiemForm {
@@ -75,12 +77,11 @@
 	function toIngest(f: SiemForm): IngestSettings {
 		const initial_ts =
 			f.ingest_start === 'now' ? 'now' : f.ingest_start === 'custom' ? f.ingest_initial_ts.trim() : null;
-		const sev = f.min_severity.trim();
 		return {
 			exclude_manager_agent: f.exclude_manager_agent,
 			initial_ts: initial_ts || null,
 			agent_prefix: f.agent_prefix.trim() || null,
-			min_severity: sev === '' ? null : Number(sev)
+			min_severity: severityFloor(f.min_severity)
 		};
 	}
 
@@ -156,7 +157,7 @@
 			ingest_initial_ts: read?.ingest?.initial_ts ?? '',
 			exclude_manager_agent: read?.ingest?.effective_exclude_manager_agent ?? false,
 			agent_prefix: read?.ingest?.agent_prefix ?? '',
-			min_severity: read?.ingest?.min_severity == null ? '' : String(read.ingest.min_severity)
+			min_severity: read?.ingest?.min_severity ?? null
 		};
 		editing = true;
 	}

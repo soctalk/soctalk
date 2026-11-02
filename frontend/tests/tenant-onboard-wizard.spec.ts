@@ -335,4 +335,33 @@ test.describe('Tenant onboarding wizard — External SIEM step', () => {
 		await page.getByRole('button', { name: 'Next' }).click();
 		await expect(page.locator('input[name="indexer_url"]')).toHaveValue('');
 	});
+	test('a severity floor of 0 keeps the step valid and is sent as the number 0', async ({ page }) => {
+		// Svelte binds <input type="number"> as a number; validation and
+		// payload building used to call .trim() on it, which threw, so typing
+		// any level broke the External SIEM step.
+		await gotoWizard(page);
+		await fillIdentityAndContinue(page);
+		await page.check('input[value="provided"]');
+		await page.getByRole('button', { name: 'Next' }).click();
+
+		await page.fill('input[name="indexer_url"]', 'https://indexer.example.com:9200');
+		await page.fill('input[name="indexer_username"]', 'admin');
+		await page.fill('input[name="indexer_password"]', 'indexpass');
+		await page.fill('input[name="api_url"]', 'https://wazuh.example.com:55000');
+		await page.fill('input[name="api_username"]', 'wazuh-wui');
+		await page.fill('input[name="api_password"]', 'apipass');
+		await page.selectOption('select[name="llm_provider"]', 'anthropic');
+		await page.fill('input[name="llm_api_key"]', 'sk-test-0000');
+		await page.fill('input[name="min_severity"]', '0');
+		await expect(page.getByRole('button', { name: 'Next' })).toBeEnabled();
+
+		await page.getByRole('button', { name: 'Next' }).click();
+		await page.getByRole('button', { name: 'Next' }).click();
+		const onboardReq = page.waitForRequest(
+			(r) => r.url().includes('/tenants/onboard') && r.method() === 'POST'
+		);
+		await page.getByTestId('create-tenant').click();
+		const body = (await onboardReq).postDataJSON();
+		expect(body.ingest).toMatchObject({ min_severity: 0 });
+	});
 });
