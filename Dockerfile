@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /tmp/helm.tgz "/tmp/linux-${helm_arch}" /var/lib/apt/lists/*
 
 # Copy project files
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 # The price catalog seed is force-included into the wheel (pyproject), so it
 # must be in the build context or the build fails at metadata generation.
 COPY data/pricing ./data/pricing
@@ -54,8 +54,20 @@ COPY charts/wazuh ./charts/wazuh
 RUN find /app -type f -exec chmod a+r {} + \
  && find /app -type d -exec chmod a+rx {} +
 
-# Install Python dependencies
-RUN pip install --no-cache-dir .
+# Install Python dependencies FROM THE LOCK. A bare ``pip install .`` resolves
+# pyproject's ranges afresh at build time, so two builds of the same commit
+# can ship different libraries: a fresh build picked up sqlmodel 0.0.48 /
+# SQLAlchemy 2.1 against a lock that pins 0.0.38 / 2.0, and the api failed
+# every login with "Datetime values must have timezone information". The
+# lock is exported to a requirements file (exact versions, no project
+# entry) and installed first; the project itself goes in with --no-deps so
+# nothing can re-resolve past the lock.
+RUN pip install --no-cache-dir 'uv==0.7.*' \
+ && uv export --frozen --no-dev --no-emit-project --no-hashes -o /tmp/requirements.txt \
+ && pip install --no-cache-dir -r /tmp/requirements.txt \
+ && pip install --no-cache-dir --no-deps . \
+ && pip uninstall -y uv \
+ && rm -f /tmp/requirements.txt
 
 # Expose port
 EXPOSE 8000
