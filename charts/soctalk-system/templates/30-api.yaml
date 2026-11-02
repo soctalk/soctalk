@@ -678,6 +678,12 @@ spec:
             */}}
             - name: SOCTALK_TENANT_NETWORK_POLICIES_ENABLED
               value: {{ ternary "1" "0" .Values.tenantProvisioning.tenantNetworkPoliciesEnabled | quote }}
+            - name: SOCTALK_TENANT_ROLL_ON_UPGRADE
+              value: {{ ternary "1" "0" (.Values.tenantProvisioning.rollOnUpgrade | default false) | quote }}
+            - name: SOCTALK_TENANT_ROLL_BATCH_SIZE
+              value: {{ .Values.tenantProvisioning.rollBatchSize | quote }}
+            - name: SOCTALK_TENANT_ROLL_GRACE_SECONDS
+              value: {{ .Values.tenantProvisioning.rollGraceSeconds | quote }}
             - name: SOCTALK_TENANT_CHART_REF
               value: {{ .Values.tenantProvisioning.tenantChartRef | quote }}
             - name: SOCTALK_TENANT_CHART_VERSION

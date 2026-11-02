@@ -169,6 +169,18 @@ tenantProvisioning:
   # CiliumNetworkPolicy" otherwise), or CNIs whose NP enforcement breaks
   # soctalk-system <-> tenant-* traffic. Default true (safe).
   tenantNetworkPoliciesEnabled: true
+  # Roll existing tenants onto a new control-plane platform automatically.
+  # An upgrade that changes the tenant chart or the tenant image tags does
+  # not re-render existing tenants by itself; the MSSP dashboard flags them
+  # as outdated and POST /api/mssp/tenants/{id}:reconcile rolls one (the
+  # canary-first path in docs/multi-tenant/upgrade). With this on, the
+  # provisioning worker also queues those reconciles itself: at most
+  # rollBatchSize per drift sweep (every 5 min, only when the job queue is
+  # idle), starting rollGraceSeconds after the api pod starts. Off by default
+  # so a fleet upgrade stays operator-paced.
+  rollOnUpgrade: false
+  rollBatchSize: 5
+  rollGraceSeconds: 120
 auth:
   # Secure flag on the session cookie. Production with TLS leaves this
   # true; HTTP-only dev installs flip to false so browsers actually

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -27,6 +28,7 @@ from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.decorators import require_role
 from soctalk.core.tenancy.models import Role
 
+logger = structlog.get_logger()
 
 router = APIRouter(
     prefix="/api/mssp/dashboard",
@@ -258,6 +260,12 @@ class TenantHealthRow(BaseModel):
     # a tenant that never heartbeated) and its machine-readable reasons.
     adapter_health: str | None = None
     adapter_health_reasons: list[str] = []
+    # The tenant's release was last rendered by a different control-plane
+    # platform (tenant chart / tenant image tags) than the one running now:
+    # a soctalk-system upgrade it has not been rolled onto yet. None when the
+    # tenant has no release to compare (pending, provisioning) or the check
+    # could not run. Informational: does not make the row unhealthy.
+    platform_outdated: bool | None = None
 
 
 def _classify_tenant_health(r: Any, now: Any) -> TenantHealthRow:
@@ -337,7 +345,40 @@ async def tenant_health(request: Request) -> TenantHealthResponse:
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
-    return TenantHealthResponse(items=[_classify_tenant_health(r, now) for r in rows])
+    outdated = await _platform_outdated_by_tenant(db, rows)
+    items = []
+    for r in rows:
+        row = _classify_tenant_health(r, now)
+        row.platform_outdated = outdated.get(r["tenant_id"])
+        items.append(row)
+    return TenantHealthResponse(items=items)
+
+
+# States in which a tenant has a rendered release worth comparing.
+_RENDERED_STATES = frozenset({"active", "degraded", "suspended"})
+
+
+async def _platform_outdated_by_tenant(db: Any, rows: Any) -> dict[str, bool]:
+    """tenant_id -> whether its release predates the running platform.
+    Best effort: the health card must render even if this check fails."""
+    from uuid import UUID
+
+    from soctalk.core.provisioning.platform import (
+        current_fingerprint,
+        is_outdated,
+        latest_tenant_renders,
+    )
+
+    ids = [UUID(r["tenant_id"]) for r in rows if r["state"] in _RENDERED_STATES]
+    if not ids:
+        return {}
+    try:
+        current = current_fingerprint()
+        renders = await latest_tenant_renders(db, ids)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("tenant_platform_check_failed", error=str(e))
+        return {}
+    return {str(tid): is_outdated(details, current) for tid, details in renders.items()}
 
 
 # ---------------------------------------------------------------------------

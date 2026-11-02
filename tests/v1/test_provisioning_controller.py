@@ -1700,3 +1700,64 @@ async def test_sync_state_ignores_transitional_states(
 
     assert result.state == TenantState.PROVISIONING.value
     assert await _events(session, seeded_tenant.id) == []
+
+
+# ---------------------------------------------------------------------------
+# Platform recording: each tenant-chart render stores the platform fingerprint
+# it used, so a later soctalk-system upgrade can tell which tenants are behind.
+# ---------------------------------------------------------------------------
+
+
+def _tenant_chart_renders(events) -> list[dict]:
+    return [
+        e.details for e in events
+        if e.event_type == "helm_applied" and e.details.get("chart") == "soctalk-tenant"
+    ]
+
+
+async def test_render_records_platform_and_reconcile_records_the_new_one(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    from soctalk.core.provisioning import platform as pf
+
+    monkeypatch.setenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "1.0.0")
+    settings = _quick_settings()
+    controller = TenantController(session, k8s=FakeK8s(), settings=settings)
+    await controller.provision(seeded_tenant.id, actor_id="test")
+
+    first = _tenant_chart_renders(await _events_for(session, seeded_tenant.id))
+    assert len(first) == 1
+    fp1 = pf.fingerprint(pf.tenant_platform_inputs(settings))
+    assert first[0]["platform_fingerprint"] == fp1
+    assert first[0]["platform_started_at"] == pf.PROCESS_STARTED_AT.isoformat()
+    assert first[0]["platform"]["adapter_image"].endswith(":1.0.0")
+    # The wazuh release's helm_applied carries no tenant-platform record.
+    wazuh = [
+        e.details for e in await _events_for(session, seeded_tenant.id)
+        if e.event_type == "helm_applied" and e.details.get("chart") == "wazuh"
+    ]
+    assert wazuh and all("platform_fingerprint" not in d for d in wazuh)
+
+    # soctalk-system upgrade: new adapter tag, then a reconcile.
+    monkeypatch.setenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG", "1.1.0")
+    await controller.reconcile(seeded_tenant.id, actor_id="test")
+    renders = _tenant_chart_renders(await _events_for(session, seeded_tenant.id))
+    assert len(renders) == 2
+    assert renders[-1]["platform_fingerprint"] != fp1
+    assert renders[-1]["platform_fingerprint"] == pf.fingerprint(
+        pf.tenant_platform_inputs(settings)
+    )
+
+
+async def test_fingerprint_failure_never_fails_a_render(
+    session: AsyncSession, seeded_tenant: Tenant, patched_helm, monkeypatch
+):
+    def boom(_settings):
+        raise OSError("chart dir unreadable")
+
+    monkeypatch.setattr(controller_mod, "platform_render_record", boom)
+    controller = TenantController(session, k8s=FakeK8s(), settings=_quick_settings())
+    result = await controller.provision(seeded_tenant.id, actor_id="test")
+    assert result.state == TenantState.ACTIVE.value
+    renders = _tenant_chart_renders(await _events_for(session, seeded_tenant.id))
+    assert renders and "platform_fingerprint" not in renders[0]

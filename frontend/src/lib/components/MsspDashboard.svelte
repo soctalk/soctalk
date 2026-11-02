@@ -416,6 +416,15 @@
 													{t.adapter_health === 'failing' ? m.dash_adapter_failing() : m.dash_adapter_degraded()}
 												</span>
 											{/if}
+											{#if t.platform_outdated}
+												<span
+													class="badge variant-soft-warning ml-1"
+													title={m.dash_platform_outdated_hint()}
+													data-testid="tenant-platform-outdated"
+												>
+													{m.dash_platform_outdated()}
+												</span>
+											{/if}
 										</td>
 										<td class="font-mono text-xs">
 											{#if t.heartbeat_age_seconds == null}

@@ -610,6 +610,18 @@
         },
         "tenantNetworkPoliciesEnabled": {
           "type": "boolean"
+        },
+        "rollOnUpgrade": {
+          "type": "boolean",
+          "description": "Let the provisioning worker re-render tenants whose release was rendered by an older platform (tenant chart / tenant image tags). Off: operators roll with POST /api/mssp/tenants/{id}:reconcile."
+        },
+        "rollBatchSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rollGraceSeconds": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

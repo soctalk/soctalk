@@ -1273,6 +1273,8 @@ export interface MsspTenantHealthRow {
 	// 'degraded' | 'failing'; null if it never heartbeated) plus reason codes.
 	adapter_health?: string | null;
 	adapter_health_reasons?: string[];
+	/** Release rendered by an older control-plane platform (not yet rolled). */
+	platform_outdated?: boolean | null;
 }
 
 export interface MsspRepeatedIocRow {

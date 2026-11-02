@@ -77,6 +77,10 @@ pre-upgrade backup in addition.
 
 ## Upgrade a single tenant's data plane
 
+Prefer `POST /api/mssp/tenants/<tenant-id>:reconcile` (see the next section):
+the controller re-renders the release from the tenant's stored configuration
+with the running control plane's chart and image tags. The manual equivalent:
+
 ```bash
 helm upgrade tenant-<slug> oci://ghcr.io/soctalk/charts/soctalk-tenant \
   --version <new-tenant-chart-version> \
@@ -109,24 +113,38 @@ per-tenant `runs-worker` pods. Between the system upgrade and each tenant's
 roll, that tenant's worker is running the previous release against the new
 schema.
 
-This is the riskiest step in an upgrade, and it is silent: nothing in the UI
-says a tenant is running old semantics. In 0.2.1 specifically, budget ceilings
-and price snapshots are read by the worker from the claim row, so an
+This is the riskiest step in an upgrade. In 0.2.1 specifically, budget
+ceilings and price snapshots are read by the worker from the claim row, so an
 un-rolled tenant keeps the previous budget behaviour while the MSSP console
 reports the new figures.
+
+**Seeing which tenants are behind.** Every tenant render records the
+*platform* it used: the tenant chart (its version, and a content digest when
+the chart is bundled in the api image), the adapter / runs-worker / linux-ep
+image refs, and the other install-wide render settings (`networkPolicies`
+switch, base domain, ingress class, default adapter severity, the triage
+policy directory). After a `soctalk-system` upgrade, a tenant whose last
+render used a different platform shows an **outdated** badge on the MSSP
+dashboard's tenant-health card (`platform_outdated: true` on
+`GET /api/mssp/dashboard/tenant-health`). Tenants rendered before this was
+recorded read as outdated until their next render.
 
 Keep the window short, and roll a canary first.
 
 ### Canary one tenant
 
 Pick a low-volume tenant, roll it, and confirm it actually triages before
-touching the rest:
+touching the rest. `:reconcile` queues a `tenant.reconcile` job (202; it
+returns the already-active job instead of duplicating one) that the
+provisioning worker runs: re-render, `helm upgrade`, wait for the pods. It is
+valid for `active` tenants; a `degraded` one is re-provisioned with `:retry`.
 
 ```bash
-NS=tenant-<canary-slug>
-helm upgrade $NS oci://ghcr.io/soctalk/charts/soctalk-tenant \
-  --version <new> -n $NS -f /tmp/${NS}-values.yaml --wait --timeout 15m
+curl -X POST -b cookies.txt https://<mssp-host>/api/mssp/tenants/<tenant-id>:reconcile
+# Follow it: reconcile_requested -> reconcile_started -> helm_applied ->
+# reconcile_succeeded on GET /api/mssp/tenants/<tenant-id>/events.
 
+NS=tenant-<canary-slug>
 # The worker must be on the new image, not merely restarted.
 kubectl -n $NS get deploy soctalk-runs-worker \
   -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
@@ -150,24 +168,34 @@ kubectl -n soctalk-system exec soctalk-system-postgres-0 -- \
 
 Only once the canary has completed a run should you roll the remainder.
 
-## Fleet upgrade (manual loop in this release)
+## Fleet upgrade
 
-```bash
-# List tenants.
-kubectl get ns -l tenant=true,managed-by=soctalk -o jsonpath='{.items[*].metadata.name}'
+Once the canary has completed a run, roll the rest either by hand or by
+letting the control plane do it.
 
-# Upgrade each, pausing between.
-for ns in tenant-acme tenant-beta tenant-gamma; do
-  echo "upgrading $ns..."
-  helm upgrade ${ns} oci://ghcr.io/soctalk/charts/soctalk-tenant \
-    --version <new> -n $ns -f /tmp/${ns}-values.yaml --wait --timeout 15m
-  kubectl -n $ns rollout status deploy/soctalk-adapter
-  kubectl -n $ns rollout status deploy/soctalk-runs-worker
-  sleep 60  # let heartbeat settle before next.
-done
-```
+**By hand:** call `:reconcile` for each tenant the dashboard marks outdated,
+pausing between them; the badge clears as each one is re-rendered.
 
-a future release replaces this loop with a canary-aware fleet-upgrade API.
+**Automatically:** set `tenantProvisioning.rollOnUpgrade: true` on
+`soctalk-system` (off by default, so a fleet upgrade stays operator-paced). The
+provisioning worker then queues the reconciles itself during its drift sweep:
+
+- only `active` tenants whose last render used another platform, and only
+  when no provisioning job is already active for them;
+- at most `rollBatchSize` (default 5) per sweep; sweeps run every 5 minutes
+  and only when the job queue is idle, so new tenants are never stuck behind
+  the fleet;
+- not before `rollGraceSeconds` (default 120) after the api pod starts, so an
+  incoming pod lets the outgoing one terminate first;
+- a render is only ever superseded by a control-plane process that started
+  no earlier than the one that made it, so during a rolling update the
+  outgoing pod never rolls tenants back to its older platform; a
+  `helm rollback` (new pods, old spec) rolls them back the same way it
+  rolled them forward.
+
+Each queued roll records an `upgrade_requested` lifecycle event with the old
+and new platform fingerprints. Turning it on after the canary is a reasonable
+pattern: `helm upgrade ... --set tenantProvisioning.rollOnUpgrade=true`.
 
 ## Upgrade ordering
 

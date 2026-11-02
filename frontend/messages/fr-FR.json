@@ -325,6 +325,8 @@
 	"dash_degraded_total": "{degraded} dégradés / {total} au total",
 	"dash_adapter_degraded": "ingestion dégradée",
 	"dash_adapter_failing": "ingestion en échec",
+	"dash_platform_outdated": "obsolète",
+	"dash_platform_outdated_hint": "Généré par une version antérieure de SocTalk. Mettez-le à jour avec POST /api/mssp/tenants/<tenant-id>:reconcile ou activez tenantProvisioning.rollOnUpgrade.",
 	"dash_error": "Erreur : {error}",
 	"dash_evd_agent": "Agent {id}",
 	"dash_evd_alert_correlated": "Alerte corrélée",
