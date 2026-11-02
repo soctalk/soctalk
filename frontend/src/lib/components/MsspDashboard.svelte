@@ -407,6 +407,15 @@
 										</td>
 										<td class="text-center">
 											<span class="badge {tenantStateChip(t.state)}">{t.state}</span>
+											{#if t.adapter_health === 'degraded' || t.adapter_health === 'failing'}
+												<span
+													class="badge {t.adapter_health === 'failing' ? 'variant-filled-error' : 'variant-filled-warning'} ml-1"
+													title={(t.adapter_health_reasons ?? []).join(', ')}
+													data-testid="tenant-adapter-health"
+												>
+													{t.adapter_health === 'failing' ? m.dash_adapter_failing() : m.dash_adapter_degraded()}
+												</span>
+											{/if}
 										</td>
 										<td class="font-mono text-xs">
 											{#if t.heartbeat_age_seconds == null}

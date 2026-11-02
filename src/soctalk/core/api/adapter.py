@@ -62,6 +62,9 @@ def _verify_adapter_jwt(request: Request) -> UUID:
     return identity.tenant_id
 
 
+_ADAPTER_HEALTH_VALUES = frozenset({"ok", "degraded", "failing"})
+
+
 @router.post("/heartbeat")
 async def heartbeat(payload: AdapterHeartbeatPayload, request: Request) -> dict:
     authed_tid = _verify_adapter_jwt(request)
@@ -75,11 +78,14 @@ async def heartbeat(payload: AdapterHeartbeatPayload, request: Request) -> dict:
     if tenant is None:
         raise HTTPException(404, "tenant not found")
 
-    # Update runtime snapshot.
+    # Update runtime snapshot. ``health`` is stored as one of the three
+    # documented values; anything else (a newer or broken adapter) is kept
+    # visible as "degraded" rather than silently trusted.
+    health = payload.health if payload.health in _ADAPTER_HEALTH_VALUES else "degraded"
     runtime = dict(tenant.runtime)
     runtime.update({
         "version": payload.version,
-        "health": payload.health,
+        "health": health,
         "last_heartbeat": datetime.now(timezone.utc).isoformat(),
         "metrics_snapshot": payload.metrics or {},
     })

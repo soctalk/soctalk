@@ -323,6 +323,8 @@
 	"dash_axis_per_hour": "Por hora",
 	"dash_degraded_tenants": "Tenants degradados",
 	"dash_degraded_total": "{degraded} degradados / {total} en total",
+	"dash_adapter_degraded": "ingesta degradada",
+	"dash_adapter_failing": "ingesta con fallos",
 	"dash_error": "Error: {error}",
 	"dash_evd_agent": "Agente {id}",
 	"dash_evd_alert_correlated": "Alerta correlacionada",

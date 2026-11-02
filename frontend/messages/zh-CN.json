@@ -421,6 +421,8 @@
 	"dash_axis_per_hour": "每小时",
 	"dash_degraded_tenants": "降级租户",
 	"dash_degraded_total": "{degraded} 个降级 / 共 {total} 个",
+	"dash_adapter_degraded": "采集降级",
+	"dash_adapter_failing": "采集失败",
 	"dash_error": "错误：{error}",
 	"dash_evd_agent": "代理 {id}",
 	"dash_evd_alert_correlated": "告警已关联",

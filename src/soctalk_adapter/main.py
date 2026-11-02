@@ -9,7 +9,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -34,6 +34,14 @@ VERSION = "0.2.1"
 # no-checkpoint tenant returns 200 (empty) and loads on the first try.
 CHECKPOINT_LOAD_MAX_ATTEMPTS = 10
 CHECKPOINT_LOAD_RETRY_SECONDS = 6.0
+
+# Health reported on the heartbeat. ``failing`` after this many consecutive
+# failed polls; one or two are ``degraded`` (a transient indexer/API blip).
+POLL_FAILING_THRESHOLD = 3
+# A poll loop that has not completed a poll for this long is ``failing`` even
+# if no error was recorded (hung request, wedged loop, stuck at startup). The
+# effective window is max(this, 3 x the ingest interval).
+POLL_STALE_MIN_SECONDS = 120.0
 
 
 def _read_token() -> str:
@@ -79,9 +87,71 @@ class _State:
         self.batch_seq: int = 0
         self.checkpoint_loaded: bool = False
         self.last_ingest_error: str | None = None
+        # Ingest health inputs (see _compute_health). ``ingest_phase`` is
+        # ``starting`` until the checkpoint load finishes, then ``polling``;
+        # ``disabled`` when ingest is switched off; ``stopped`` if the ingest
+        # task exited on its own (it is meant to run forever).
+        self.ingest_phase: str = "starting"
+        self.ingest_phase_since: datetime = datetime.now(UTC)
+        self.ingest_interval: float = 15.0
+        self.last_poll_ok: datetime | None = None
+        self.consecutive_poll_failures: int = 0
+        self.checkpoint_save_failing: bool = False
 
 
 _state = _State()
+
+
+def _set_ingest_phase(phase: str) -> None:
+    _state.ingest_phase = phase
+    _state.ingest_phase_since = datetime.now(UTC)
+
+
+def _compute_health(now: datetime | None = None) -> tuple[str, list[str]]:
+    """Adapter health for the heartbeat: ``ok`` | ``degraded`` | ``failing``
+    plus machine-readable reason codes.
+
+    A heartbeat only proves the pod is up. What the control plane needs to
+    know is whether alerts are flowing, so health follows the ingest loop:
+
+    * ``failing`` — the ingest task stopped (``ingest_stopped``), polls have
+      failed ``POLL_FAILING_THRESHOLD`` times in a row (``poll_failing``), or
+      no poll has completed within the stale window (``poll_stale``).
+    * ``degraded`` — a poll failed but fewer times than the threshold
+      (``poll_failing``), the durable checkpoint never loaded so ingest
+      resumed from the local cursor (``checkpoint_not_loaded``), or the last
+      checkpoint save failed (``checkpoint_save_failing``).
+    * ``ok`` — otherwise, including a quiet tenant whose polls succeed but
+      return nothing, and an adapter with ingest disabled.
+    """
+    now = now or datetime.now(UTC)
+    phase = _state.ingest_phase
+    if phase == "disabled":
+        return "ok", []
+
+    failing: list[str] = []
+    degraded: list[str] = []
+    if phase == "stopped":
+        failing.append("ingest_stopped")
+    else:
+        stale_after = max(POLL_STALE_MIN_SECONDS, 3 * _state.ingest_interval)
+        since = _state.last_poll_ok or _state.ingest_phase_since
+        if (now - since).total_seconds() > stale_after:
+            failing.append("poll_stale")
+    if _state.consecutive_poll_failures >= POLL_FAILING_THRESHOLD:
+        failing.append("poll_failing")
+    elif _state.consecutive_poll_failures > 0:
+        degraded.append("poll_failing")
+    if phase == "polling" and not _state.checkpoint_loaded:
+        degraded.append("checkpoint_not_loaded")
+    if _state.checkpoint_save_failing:
+        degraded.append("checkpoint_save_failing")
+
+    if failing:
+        return "failing", failing + degraded
+    if degraded:
+        return "degraded", degraded
+    return "ok", []
 
 
 class _TokenBucket:
@@ -551,7 +621,9 @@ async def _save_checkpoint(
             timeout=10.0,
         )
         resp.raise_for_status()
+        _state.checkpoint_save_failing = False
     except Exception as e:  # noqa: BLE001
+        _state.checkpoint_save_failing = True
         logger.warning("checkpoint_save_failed: %s", e)
 
 
@@ -571,11 +643,18 @@ async def _heartbeat_once(client: httpx.AsyncClient) -> None:
         "batch_seq": _state.batch_seq,
         "last_alert_ts": _state.last_alert_ts,
         "last_ingest_error": _state.last_ingest_error,
+        "ingest_phase": _state.ingest_phase,
+        "last_poll_ok_at": _state.last_poll_ok.isoformat() if _state.last_poll_ok else None,
+        "consecutive_poll_failures": _state.consecutive_poll_failures,
     }
+    # Health follows the ingest loop, not just "the process is up": a fresh
+    # heartbeat from an adapter whose every poll fails used to read as ok.
+    health, reasons = _compute_health()
+    metrics["health_reasons"] = reasons
     resp = await client.post(
         f"{api_url}/api/internal/adapter/heartbeat",
         headers={"Authorization": f"Bearer {token}"},
-        json={"tenant_id": tenant_id, "version": VERSION, "health": "ok",
+        json={"tenant_id": tenant_id, "version": VERSION, "health": health,
               "metrics": metrics},
         timeout=10.0,
     )
@@ -599,13 +678,15 @@ async def _heartbeat_loop() -> None:
 
 async def _ingest_loop() -> None:
     if os.environ.get("SOCTALK_INGEST_DISABLED", "0") in {"1", "true"}:
+        _set_ingest_phase("disabled")
         logger.info("ingest_disabled")
         return
     interval = float(os.environ.get("SOCTALK_INGEST_INTERVAL_SECONDS", "15"))
+    _state.ingest_interval = interval
+    _set_ingest_phase("starting")
     batch_size = int(os.environ.get("SOCTALK_INGEST_BATCH_SIZE", "100"))
     api_url = os.environ["SOCTALK_API_URL"].rstrip("/")
     tenant_id = os.environ["SOCTALK_TENANT_ID"]
-    token = _read_token()
 
     # TLS verification against the indexer is tenant-controlled via
     # WAZUH_INDEXER_VERIFY_SSL (default on); resolved once here instead of the
@@ -636,20 +717,45 @@ async def _ingest_loop() -> None:
                 "checkpoint_never_loaded attempts=%d — starting from local cursor",
                 CHECKPOINT_LOAD_MAX_ATTEMPTS,
             )
+        _set_ingest_phase("polling")
         while True:
-            # Re-read the token each cycle so a renewed ``adapter-token`` Secret
-            # (the control plane re-mints it before the TTL elapses) is picked
-            # up without a pod restart — the mounted file updates in place.
-            token = _read_token()
-            result: _PollResult | None = None
-            try:
-                result = await _ingest_once(
-                    api_client, wazuh_client, api_url, tenant_id, token, batch_size
-                )
-            except Exception as e:
-                _state.last_ingest_error = str(e)
-                logger.warning("ingest_failed: %s", e)
+            result = await _poll_cycle(
+                api_client, wazuh_client, api_url, tenant_id, batch_size
+            )
             await asyncio.sleep(_next_sleep(result, interval))
+
+
+async def _poll_cycle(
+    api_client: httpx.AsyncClient,
+    wazuh_client: httpx.AsyncClient,
+    api_url: str,
+    tenant_id: str,
+    batch_size: int,
+) -> _PollResult | None:
+    """One loop iteration with health bookkeeping. Never raises (other than
+    cancellation): a failure is recorded and the loop carries on."""
+    try:
+        # Re-read the token each cycle so a renewed ``adapter-token`` Secret
+        # (the control plane re-mints it before the TTL elapses) is picked
+        # up without a pod restart — the mounted file updates in place. Read
+        # inside the try: a transient read error is a failed poll, not a
+        # dead ingest task.
+        token = _read_token()
+        result = await _ingest_once(
+            api_client, wazuh_client, api_url, tenant_id, token, batch_size
+        )
+    except Exception as e:  # noqa: BLE001
+        _state.last_ingest_error = str(e)
+        _state.consecutive_poll_failures += 1
+        logger.warning(
+            "ingest_failed consecutive=%d: %s", _state.consecutive_poll_failures, e
+        )
+        return None
+    # A completed poll — including an empty one — is a healthy poll.
+    _state.last_poll_ok = datetime.now(UTC)
+    _state.consecutive_poll_failures = 0
+    _state.last_ingest_error = None
+    return result
 
 
 @dataclass
@@ -795,6 +901,7 @@ async def _lifespan(app: FastAPI):
     del app
     hb = asyncio.create_task(_heartbeat_loop(), name="adapter-heartbeat")
     ig = asyncio.create_task(_ingest_loop(), name="adapter-ingest")
+    ig.add_done_callback(_on_ingest_task_done)
     try:
         yield
     finally:
@@ -802,6 +909,21 @@ async def _lifespan(app: FastAPI):
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+
+
+def _on_ingest_task_done(task: asyncio.Task) -> None:
+    """The ingest loop runs until cancelled; if it ends any other way (an
+    exception outside the per-poll guard, e.g. the token file missing at
+    startup) report it as stopped instead of heartbeating ``ok`` forever."""
+    if task.cancelled() or _state.ingest_phase == "disabled":
+        return
+    exc = task.exception()
+    _set_ingest_phase("stopped")
+    if exc is not None:
+        _state.last_ingest_error = f"ingest task stopped: {exc}"
+        logger.error("ingest_task_stopped: %r", exc)
+    else:
+        logger.error("ingest_task_stopped")
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -816,7 +938,9 @@ async def live() -> dict:
 async def ready() -> dict:
     # Ready as soon as the server is up; heartbeat + ingest status are
     # informational. The chart's readiness probe just needs the process
-    # to be serving HTTP.
+    # to be serving HTTP — ``health`` is reported, not gated on, so a
+    # failing indexer does not pull the pod out of service.
+    health, reasons = _compute_health()
     return {
         "ok": True,
         "last_heartbeat_ok": _state.last_heartbeat_ok.isoformat()
@@ -832,4 +956,9 @@ async def ready() -> dict:
         "checkpoint_loaded": _state.checkpoint_loaded,
         "last_alert_ts": _state.last_alert_ts,
         "last_ingest_error": _state.last_ingest_error,
+        "health": health,
+        "health_reasons": reasons,
+        "ingest_phase": _state.ingest_phase,
+        "last_poll_ok": _state.last_poll_ok.isoformat() if _state.last_poll_ok else None,
+        "consecutive_poll_failures": _state.consecutive_poll_failures,
     }

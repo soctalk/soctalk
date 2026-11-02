@@ -303,7 +303,8 @@ hardcoded to `9200` and `55000`**; only the *host* is derived from your URLs.
 
 **An external Wazuh reachable on any other port is dropped at L3/L4**, even
 though the tenant reaches `active`, the credentials Secret is created, and the
-adapter heartbeats normally. Verified side by side on one cluster, changing only
+adapter keeps heartbeating (its reported health turns `degraded`, then
+`failing`, as polls fail — see §6.1). Verified side by side on one cluster, changing only
 the ports:
 
 | external URLs | adapter log |
@@ -345,7 +346,7 @@ through failed runs and the detail page's **LLM** panel.
 |---|---|---|
 | **Authentication failure** | Wrong/expired indexer or API credentials; rotated on the customer side; `WAZUH_API_TOKEN` expired | Adapter ingest returns 401/403 → `adapter-status.last_ingest_error` shows the auth error; the chat resolver surfaces `external Wazuh API not configured` (a typed `ExternalSiemNotConfigured`, never an unhandled 500). Fix by `PATCH /api/mssp/tenants/{id}/external-siem` with fresh creds (which rolls the adapter). |
 | **Network unreachable** | On a non-Cilium cluster: the external SIEM is **not on `:9200`/`:55000`** — the standard egress policy hardcodes those ports (§5.1, issue #147). Otherwise: FQDN allow-list missing the host; external Wazuh down; DNS or firewall blocking; wrong URL | Adapter / resolver connection times out → `adapter-status` returns `{"reachable": false, "error": "<msg>"}`. Fix by confirming `externalSiemHosts` covers both URLs, the `soctalk-system` egress reaches `:55000`, DNS resolves, and the external Wazuh is up. |
-| **401 from the indexer** | The credentials you supplied are not ones the external indexer accepts. Confirm them independently first — `curl -sk -u <user>:<pw> https://<indexer>:9200/` should return 200 — then onboard (or `PATCH .../external-siem`) with those. Note if your "external" Wazuh was itself deployed from this repo's `charts/wazuh`: that chart mints an `INDEXER_PASSWORD` into `*-wazuh-creds` but does not apply it to the indexer, so the minted value is *not* the working credential (issue #147). | Adapter logs `ingest_failed: Client error '401 Unauthorized' for url '…/wazuh-alerts-*/_search'` while heartbeat stays `ok` — note the connection succeeded, so this is auth, not networking. |
+| **401 from the indexer** | The credentials you supplied are not ones the external indexer accepts. Confirm them independently first — `curl -sk -u <user>:<pw> https://<indexer>:9200/` should return 200 — then onboard (or `PATCH .../external-siem`) with those. Note if your "external" Wazuh was itself deployed from this repo's `charts/wazuh`: that chart mints an `INDEXER_PASSWORD` into `*-wazuh-creds` but does not apply it to the indexer, so the minted value is *not* the working credential (issue #147). | Adapter logs `ingest_failed: Client error '401 Unauthorized' for url '…/wazuh-alerts-*/_search'` and its heartbeat health goes `degraded` → `failing` (`poll_failing`, §6.1) — note the connection succeeded, so this is auth, not networking. |
 | **TLS verification failure** | Self-signed external indexer/manager cert with verification on | Connection fails on cert validation. Set `verify_ssl = false` (→ `WAZUH_INDEXER_VERIFY_SSL=false` and resolver `verify=false`) via onboard or the PATCH endpoint when the external cert is self-signed. |
 | **Invalid LLM key** | Wrong/revoked `llm_api_key` supplied at onboard; rotated on the provider side | Provisioning still **succeeds** — the key is not validated at provision time. Runs fail at runtime with provider 401s from the runs-worker's LLM calls. Fix via the detail page's **LLM** panel or `PATCH /api/mssp/tenants/{id}/llm` (which rewrites the Secret and rolls the runs-worker). |
 | **LLM endpoint unreachable** | Custom `llm_base_url` host missing from the rendered egress allow-list | `render.py` derives `networkPolicies.allowedLlmHosts` from the host portion of `llm_base_url`; a policy rendered before a base-URL change drops the runs-worker's LLM egress. A `tenant.reconcile` re-render updates the allow-list (enqueued automatically when a chart-affecting `PATCH /llm` lands on an active tenant). |
@@ -353,3 +354,24 @@ through failed runs and the detail page's **LLM** panel.
 The credentials themselves never appear in logs or API responses; only presence
 booleans and masked URLs/usernames are returned. See
 [secret-placement.md](secret-placement.md) §2 for the Secret inventory row.
+
+### 6.1 Adapter health on the heartbeat
+
+A heartbeat proves the adapter pod is up, not that alerts are flowing. The
+adapter therefore reports a computed `health` on every heartbeat, with reason
+codes in `metrics.health_reasons`; the MSSP dashboard counts a tenant whose
+adapter reports `degraded` or `failing` as unhealthy even when the heartbeat
+is fresh, and badges the row with the health (reasons on hover).
+
+| health | reason | when |
+|---|---|---|
+| `failing` | `poll_failing` | 3 or more consecutive indexer polls (or event POSTs) failed |
+| `failing` | `poll_stale` | no poll completed within max(120 s, 3 × `SOCTALK_INGEST_INTERVAL_SECONDS`), including a startup stuck loading the checkpoint |
+| `failing` | `ingest_stopped` | the ingest task exited (it is meant to run until shutdown) |
+| `degraded` | `poll_failing` | 1–2 consecutive polls failed |
+| `degraded` | `checkpoint_not_loaded` | the durable cursor never loaded; ingest resumed from the local cursor |
+| `degraded` | `checkpoint_save_failing` | the last checkpoint save failed; a restart would re-read from the previous cursor |
+| `ok` | — | polls complete, including a quiet tenant whose polls return nothing new; also an adapter with ingest disabled |
+
+The adapter's `/health/ready` reports the same `health` and reasons but stays
+`ok: true`, so a failing external indexer never takes the pod out of service.
