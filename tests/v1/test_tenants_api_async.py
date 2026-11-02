@@ -3223,3 +3223,142 @@ async def test_patch_external_siem_ingest_block_rerenders(
     await mssp_session.refresh(integration)
     assert integration.wazuh_ingest_exclude_manager_agent is None
     assert integration.wazuh_ingest_min_severity == 0
+
+
+# ---------------------------------------------------------------------------
+# :reconcile on an active tenant (manual roll onto the current platform)
+# ---------------------------------------------------------------------------
+
+
+class _ReconcileRequest:
+    def __init__(self, session):
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = session
+
+        self.state = State()
+
+
+async def _reconcile_jobs(mssp_session: AsyncSession, tenant_id) -> list[ProvisioningJob]:
+    return list(
+        (
+            await mssp_session.execute(
+                select(ProvisioningJob)
+                .where(ProvisioningJob.tenant_id == tenant_id)
+                .where(ProvisioningJob.kind == "tenant.reconcile")
+            )
+        ).scalars().all()
+    )
+
+
+async def _reconcile_events(mssp_session: AsyncSession, tenant_id) -> list:
+    return list(
+        (
+            await mssp_session.execute(
+                select(TenantLifecycleEvent)
+                .where(TenantLifecycleEvent.tenant_id == tenant_id)
+                .where(TenantLifecycleEvent.event_type == "reconcile_requested")
+            )
+        ).scalars().all()
+    )
+
+
+async def test_reconcile_active_tenant_enqueues_job(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    tenant = await _seed_retry_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    result = await reconcile_tenant(tenant.id, _ReconcileRequest(mssp_session))
+
+    assert (result.kind, result.status) == ("tenant.reconcile", "pending")
+    jobs = await _reconcile_jobs(mssp_session, tenant.id)
+    assert [j.id for j in jobs] == [result.id]
+    events = await _reconcile_events(mssp_session, tenant.id)
+    assert [e.details for e in events] == [{"job_action": "enqueued_new"}]
+    # No lifecycle transition: the tenant stays active.
+    await mssp_session.refresh(tenant)
+    assert tenant.state == TenantState.ACTIVE.value
+
+
+async def test_reconcile_with_pending_job_moves_it_up_instead_of_duplicating(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    tenant = await _seed_retry_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    job = ProvisioningJob(
+        tenant_id=tenant.id, kind="tenant.reconcile", status="pending",
+        attempts=1, next_attempt_at=datetime.utcnow() + timedelta(minutes=20),
+    )
+    mssp_session.add(job)
+    await mssp_session.commit()
+
+    result = await reconcile_tenant(tenant.id, _ReconcileRequest(mssp_session))
+
+    assert result.id == job.id
+    assert len(await _reconcile_jobs(mssp_session, tenant.id)) == 1
+    await mssp_session.refresh(job)
+    assert job.next_attempt_at.replace(tzinfo=None) <= datetime.utcnow()
+    events = await _reconcile_events(mssp_session, tenant.id)
+    assert [e.details for e in events] == [{"job_action": "already_queued"}]
+
+
+async def test_reconcile_with_in_flight_job_returns_it_untouched(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    tenant = await _seed_retry_tenant(
+        mssp_session, seeded_org, state=TenantState.ACTIVE.value
+    )
+    claimed_at = datetime.utcnow() - timedelta(seconds=30)
+    job = ProvisioningJob(
+        tenant_id=tenant.id, kind="tenant.reconcile", status="in_flight",
+        attempts=1, claimed_at=claimed_at, claimed_by="worker-x",
+    )
+    mssp_session.add(job)
+    await mssp_session.commit()
+
+    result = await reconcile_tenant(tenant.id, _ReconcileRequest(mssp_session))
+
+    assert (result.id, result.status) == (job.id, "in_flight")
+    await mssp_session.refresh(job)
+    assert job.claimed_by == "worker-x"
+    events = await _reconcile_events(mssp_session, tenant.id)
+    assert [e.details for e in events] == [{"job_action": "already_in_flight"}]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [TenantState.DEGRADED.value, TenantState.SUSPENDED.value, TenantState.PENDING.value],
+)
+async def test_reconcile_non_active_tenant_409_writes_nothing(
+    mssp_session: AsyncSession, seeded_org: Organization, state
+):
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    tenant = await _seed_retry_tenant(mssp_session, seeded_org, state=state)
+    with pytest.raises(HTTPException) as exc_info:
+        await reconcile_tenant(tenant.id, _ReconcileRequest(mssp_session))
+    assert exc_info.value.status_code == 409
+    assert await _reconcile_jobs(mssp_session, tenant.id) == []
+    assert await _reconcile_events(mssp_session, tenant.id) == []
+
+
+async def test_reconcile_unknown_tenant_404(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from fastapi import HTTPException
+
+    from soctalk.core.api.tenants import reconcile_tenant
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reconcile_tenant(uuid4(), _ReconcileRequest(mssp_session))
+    assert exc_info.value.status_code == 404

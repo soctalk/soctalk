@@ -423,6 +423,8 @@
 	"dash_degraded_total": "{degraded} 个降级 / 共 {total} 个",
 	"dash_adapter_degraded": "采集降级",
 	"dash_adapter_failing": "采集失败",
+	"dash_platform_outdated": "待更新",
+	"dash_platform_outdated_hint": "由较早的 SocTalk 版本渲染。可通过 POST /api/mssp/tenants/<tenant-id>:reconcile 更新，或启用 tenantProvisioning.rollOnUpgrade。",
 	"dash_error": "错误：{error}",
 	"dash_evd_agent": "代理 {id}",
 	"dash_evd_alert_correlated": "告警已关联",

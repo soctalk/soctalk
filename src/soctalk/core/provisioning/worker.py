@@ -20,13 +20,26 @@ from typing import TYPE_CHECKING
 
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from soctalk.core.provisioning.controller import (
     ProvisionError,
     TenantController,
     TenantLifecycleError,
 )
-from soctalk.core.tenancy.models import ProvisioningJob, Tenant, TenantState
+from soctalk.core.provisioning.platform import (
+    PROCESS_STARTED_AT,
+    RollSettings,
+    current_fingerprint,
+    latest_tenant_renders,
+    select_tenants_to_roll,
+)
+from soctalk.core.tenancy.models import (
+    ProvisioningJob,
+    Tenant,
+    TenantLifecycleEvent,
+    TenantState,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -75,6 +88,7 @@ class ProvisioningWorker:
         reclaim_interval_seconds: float = DEFAULT_RECLAIM_INTERVAL_SECONDS,
         job_timeout_seconds: float = DEFAULT_JOB_TIMEOUT_SECONDS,
         drift_sweep_interval_seconds: float = DEFAULT_DRIFT_SWEEP_INTERVAL_SECONDS,
+        roll_settings: RollSettings | None = None,
     ) -> None:
         self._sf = session_factory
         self._worker_id = worker_id or f"{socket.gethostname()}:{os.getpid()}"
@@ -84,6 +98,7 @@ class ProvisioningWorker:
         self._reclaim_interval_seconds = reclaim_interval_seconds
         self._job_timeout_seconds = job_timeout_seconds
         self._drift_sweep_interval_seconds = drift_sweep_interval_seconds
+        self._roll_settings = roll_settings or RollSettings.from_env()
         self._stop_event = asyncio.Event()
         self._last_reclaim_at = 0.0
         # None = never swept. A 0.0 sentinel breaks on a freshly booted
@@ -217,6 +232,96 @@ class ProvisioningWorker:
                 logger.exception(
                     "drift_sweep_tenant_failed", tenant_id=str(tenant_id)
                 )
+
+        # Platform drift: tenants rendered by an older control plane (a
+        # soctalk-system upgrade changed the tenant chart or image tags).
+        # Opt-in; see provisioning/platform.py.
+        try:
+            await self._roll_outdated_tenants()
+        except Exception:  # noqa: BLE001
+            logger.exception("tenant_platform_roll_failed")
+
+    async def _roll_outdated_tenants(self) -> list:
+        """Queue ``tenant.reconcile`` for active tenants rendered with another
+        platform. Returns the tenant ids queued (for tests and logs)."""
+        settings = self._roll_settings
+        if not settings.enabled:
+            return []
+        current = current_fingerprint()
+        async with self._sf() as session:
+            active = list(
+                (
+                    await session.execute(
+                        select(Tenant.id)
+                        .where(Tenant.state == TenantState.ACTIVE.value)
+                        .where(Tenant.deleted_at.is_(None))  # type: ignore[union-attr]
+                        .order_by(Tenant.created_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if not active:
+                return []
+            busy = set(
+                (
+                    await session.execute(
+                        select(ProvisioningJob.tenant_id).where(
+                            ProvisioningJob.status.in_(["pending", "in_flight"])  # type: ignore[attr-defined]
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            renders = await latest_tenant_renders(session, active)
+
+        picked = select_tenants_to_roll(
+            active,
+            renders,
+            busy,
+            current_fingerprint=current,
+            process_started_at=PROCESS_STARTED_AT,
+            now=datetime.now(PROCESS_STARTED_AT.tzinfo),
+            settings=settings,
+        )
+        queued = []
+        for tenant_id, previous in picked:
+            try:
+                async with self._sf() as session:
+                    session.add(
+                        ProvisioningJob(
+                            tenant_id=tenant_id, kind="tenant.reconcile", status="pending"
+                        )
+                    )
+                    session.add(
+                        TenantLifecycleEvent(
+                            tenant_id=tenant_id,
+                            event_type="upgrade_requested",
+                            from_state=TenantState.ACTIVE.value,
+                            to_state=TenantState.ACTIVE.value,
+                            actor_id=f"platform-roll:{self._worker_id}",
+                            details={
+                                "reason": "platform_changed",
+                                "from_fingerprint": previous,
+                                "to_fingerprint": current,
+                            },
+                        )
+                    )
+                    await session.commit()
+            except IntegrityError:
+                # Another replica's sweep (or an API PATCH) queued a job for
+                # this tenant between our read and insert; the partial unique
+                # index kept it to one. Nothing to do.
+                continue
+            queued.append(tenant_id)
+            logger.info(
+                "tenant_platform_roll_queued",
+                tenant_id=str(tenant_id),
+                from_fingerprint=previous,
+                to_fingerprint=current,
+            )
+        return queued
 
     async def _claim_and_run_one(self) -> bool:
         """Try to claim a single due job; run it to completion.

@@ -110,6 +110,28 @@ def _profile_tenant_overrides(profile: Profile) -> dict[str, Any]:
     return {}
 
 
+_TENANT_IMAGES = {
+    # component -> (env prefix, default repository)
+    "adapter": ("SOCTALK_TENANT_ADAPTER_IMAGE", "ghcr.io/soctalk/soctalk-adapter"),
+    "runs_worker": ("SOCTALK_TENANT_RUNS_WORKER_IMAGE", "ghcr.io/soctalk/soctalk-orchestrator"),
+    "linux_ep": ("SOCTALK_TENANT_LINUX_EP_IMAGE", "ghcr.io/soctalk/soctalk-linux-ep"),
+}
+
+
+def tenant_image_repo(component: str) -> str:
+    """Repository a tenant workload is rendered with (install-wide)."""
+    prefix, default = _TENANT_IMAGES[component]
+    return os.getenv(f"{prefix}_REPO", default)
+
+
+def tenant_image_tag(component: str) -> str:
+    """Tag a tenant workload is rendered with (install-wide). Shared with
+    ``platform.tenant_platform_inputs`` so the platform fingerprint and the
+    render can never disagree about which image a tenant gets."""
+    prefix, _ = _TENANT_IMAGES[component]
+    return os.getenv(f"{prefix}_TAG") or _default_tenant_image_tag()
+
+
 def _default_tenant_image_tag() -> str:
     """Image tag for tenant workloads when the chart did not supply one.
 
@@ -706,14 +728,8 @@ def render_tenant_values(
         },
         "adapter": {
             "image": {
-                "repository": os.getenv(
-                    "SOCTALK_TENANT_ADAPTER_IMAGE_REPO",
-                    "ghcr.io/soctalk/soctalk-adapter",
-                ),
-                "tag": (
-                    _adapter_tag := os.getenv("SOCTALK_TENANT_ADAPTER_IMAGE_TAG")
-                    or _default_tenant_image_tag()
-                ),
+                "repository": tenant_image_repo("adapter"),
+                "tag": (_adapter_tag := tenant_image_tag("adapter")),
                 # A moving `latest` tag MUST pull Always, or the node caches the
                 # first image it ever pulled and the tenant silently runs weeks-
                 # old code (IfNotPresent never re-pulls an unchanged tag) — the
@@ -770,14 +786,8 @@ def render_tenant_values(
             "enabled": True,
             "replicas": 1,
             "image": {
-                "repository": os.getenv(
-                    "SOCTALK_TENANT_RUNS_WORKER_IMAGE_REPO",
-                    "ghcr.io/soctalk/soctalk-orchestrator",
-                ),
-                "tag": (
-                    _worker_tag := os.getenv("SOCTALK_TENANT_RUNS_WORKER_IMAGE_TAG")
-                    or _default_tenant_image_tag()
-                ),
+                "repository": tenant_image_repo("runs_worker"),
+                "tag": (_worker_tag := tenant_image_tag("runs_worker")),
                 # Always-pull a moving `latest` (see adapter above) — otherwise
                 # the runs-worker runs stale triage code cached on the node.
                 "pullPolicy": "Always" if _worker_tag == "latest" else "IfNotPresent",
@@ -993,14 +1003,8 @@ def render_linux_ep_values(
     return {
         "replicas": replicas,
         "image": {
-            "repository": os.getenv(
-                "SOCTALK_TENANT_LINUX_EP_IMAGE_REPO",
-                "ghcr.io/soctalk/soctalk-linux-ep",
-            ),
-            "tag": (
-                _linuxep_tag := os.getenv("SOCTALK_TENANT_LINUX_EP_IMAGE_TAG")
-                or _default_tenant_image_tag()
-            ),
+            "repository": tenant_image_repo("linux_ep"),
+            "tag": (_linuxep_tag := tenant_image_tag("linux_ep")),
             # Moving `latest` must pull Always (same reason as the adapter /
             # runs-worker above); a pinned release tag is immutable so
             # IfNotPresent is fine. Without an override the tenant would fall

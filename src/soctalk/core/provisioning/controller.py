@@ -41,6 +41,8 @@ from soctalk.core.provisioning.helm import (
     helm_uninstall,
 )
 from soctalk.core.provisioning.k8s import K8sClient, new_k8s_client
+from soctalk.core.provisioning.platform import TENANT_CHART_EVENT
+from soctalk.core.provisioning.platform import render_record as platform_render_record
 from soctalk.core.provisioning.render import (
     Profile,
     primary_llm_engine_for_render,
@@ -1297,10 +1299,19 @@ class TenantController:
             )
         except HelmError as e:
             raise ProvisionError(str(e), step="helm_apply_tenant") from e
-        await self._emit_event(
-            ctx, "helm_applied",
-            details={"release": ctx.release_tenant, "chart": "soctalk-tenant"},
-        )
+        # Record the install-wide platform this render used, so a later
+        # soctalk-system upgrade can tell which tenants are behind (see
+        # provisioning/platform.py). A failure to fingerprint must never fail
+        # a render that already succeeded: the tenant then reads as outdated.
+        details: dict = {"release": ctx.release_tenant, "chart": TENANT_CHART_EVENT}
+        try:
+            details.update(platform_render_record(self.settings))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "tenant_platform_fingerprint_failed",
+                tenant_id=str(ctx.tenant.id), error=str(e),
+            )
+        await self._emit_event(ctx, "helm_applied", details=details)
 
     async def _step_helm_apply_wazuh(self, ctx: _StepContext) -> None:
         """Deploy the per-tenant Wazuh release.

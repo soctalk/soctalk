@@ -1047,6 +1047,88 @@ async def resume_tenant(tenant_id: UUID, request: Request) -> TenantRead:
 
 
 @router.post(
+    "/{tenant_id}:reconcile",
+    response_model=ProvisioningJobRead,
+    status_code=202,
+    dependencies=[
+        Depends(require_role(Role.PLATFORM_ADMIN, Role.MSSP_ADMIN))
+    ],
+)
+async def reconcile_tenant(tenant_id: UUID, request: Request) -> ProvisioningJobRead:
+    """Queue a re-render of an active tenant's release with the current platform.
+
+    The supported way to roll a tenant onto a new ``soctalk-system`` release
+    (the canary step of the upgrade guide): a system upgrade changes the
+    tenant chart and image tags but never re-renders existing tenants by
+    itself (unless ``tenantProvisioning.rollOnUpgrade`` is on). Also re-applies
+    the tenant's own configuration. Idempotent: an already-active reconcile
+    job is returned (and a pending one in backoff is moved up to now) rather
+    than duplicated.
+    """
+    session = _db(request)
+    tenant = (
+        await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(404, "tenant not found")
+    if tenant.state != TenantState.ACTIVE.value:
+        raise HTTPException(
+            409,
+            f"reconcile is only valid from state=active (current: {tenant.state}); "
+            "a degraded tenant is re-provisioned with :retry",
+        )
+
+    active_job = (
+        await session.execute(
+            select(ProvisioningJob)
+            .where(ProvisioningJob.tenant_id == tenant_id)  # type: ignore[arg-type]
+            .where(ProvisioningJob.kind == "tenant.reconcile")  # type: ignore[arg-type]
+            .where(ProvisioningJob.status.in_(["pending", "in_flight"]))  # type: ignore[attr-defined]
+            .order_by(ProvisioningJob.created_at.desc())  # type: ignore[attr-defined]
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    async with tenant_context(session, tenant_id):
+        if active_job is None:
+            job = ProvisioningJob(
+                tenant_id=tenant_id, kind="tenant.reconcile", status="pending"
+            )
+            session.add(job)
+            job_action = "enqueued_new"
+        elif active_job.status == "pending":
+            active_job.next_attempt_at = datetime.utcnow()
+            active_job.updated_at = datetime.utcnow()
+            job = active_job
+            job_action = "already_queued"
+        else:
+            job = active_job
+            job_action = "already_in_flight"
+        session.add(
+            TenantLifecycleEvent(
+                tenant_id=tenant_id,
+                event_type="reconcile_requested",
+                from_state=tenant.state,
+                to_state=tenant.state,
+                actor_id=str(request.state.user_identity.get("user_id")),
+                details={"job_action": job_action},
+            )
+        )
+        await session.commit()
+
+    return ProvisioningJobRead(
+        id=job.id,
+        tenant_id=job.tenant_id,
+        kind=job.kind,
+        status=job.status,
+        attempts=job.attempts,
+        max_attempts=job.max_attempts,
+        last_error=job.last_error,
+        next_attempt_at=job.next_attempt_at.isoformat(),
+    )
+
+
+@router.post(
     "/{tenant_id}:decommission",
     response_model=TenantRead,
     status_code=202,

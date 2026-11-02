@@ -585,3 +585,157 @@ async def test_drift_sweep_skips_one_bad_tenant_and_continues(
     await worker._maybe_drift_sweep()  # must not raise
 
     assert set(seen) == {seeded_tenant.id, other.id}
+
+
+# ---------------------------------------------------------------------------
+# Platform roll (opt-in): tenants rendered by an older control plane get a
+# tenant.reconcile from the drift sweep. The decision itself is unit-tested in
+# test_tenant_platform_unit.py; these prove the DB side: the latest
+# tenant-chart render is read correctly, jobs are queued once, and only for
+# active tenants.
+# ---------------------------------------------------------------------------
+
+from soctalk.core.provisioning.platform import RollSettings  # noqa: E402
+from soctalk.core.tenancy.models import TenantLifecycleEvent  # noqa: E402
+
+_ROLL_ON = RollSettings(enabled=True, grace_seconds=0, batch_size=5)
+_LONG_AGO = "2026-01-01T00:00:00+00:00"
+
+
+async def _add_render(mssp_sessionmaker, tenant_id, details, *, at=None) -> None:
+    async with mssp_sessionmaker() as session:
+        session.add(
+            TenantLifecycleEvent(
+                tenant_id=tenant_id,
+                event_type="helm_applied",
+                from_state="active",
+                to_state="active",
+                actor_id="test",
+                details=details,
+                timestamp=at or datetime.utcnow(),
+            )
+        )
+        await session.commit()
+
+
+async def _jobs_for(mssp_sessionmaker, tenant_id) -> list[ProvisioningJob]:
+    async with mssp_sessionmaker() as session:
+        return list(
+            (
+                await session.execute(
+                    select(ProvisioningJob).where(ProvisioningJob.tenant_id == tenant_id)
+                )
+            ).scalars().all()
+        )
+
+
+async def _events_for(mssp_sessionmaker, tenant_id, event_type) -> list:
+    async with mssp_sessionmaker() as session:
+        return list(
+            (
+                await session.execute(
+                    select(TenantLifecycleEvent)
+                    .where(TenantLifecycleEvent.tenant_id == tenant_id)
+                    .where(TenantLifecycleEvent.event_type == event_type)
+                )
+            ).scalars().all()
+        )
+
+
+@pytest.fixture
+def _platform_now(monkeypatch):
+    monkeypatch.delenv("SOCTALK_TENANT_ROLL_ON_UPGRADE", raising=False)
+    monkeypatch.setattr(
+        "soctalk.core.provisioning.worker.current_fingerprint", lambda: "NEWFP"
+    )
+
+
+async def test_platform_roll_queues_one_reconcile_for_an_outdated_tenant(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now
+):
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    current = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id, TenantState.ACTIVE.value
+    )
+    await _add_render(mssp_sessionmaker, seeded_tenant.id, {
+        "chart": "soctalk-tenant", "platform_fingerprint": "OLDFP",
+        "platform_started_at": _LONG_AGO,
+    })
+    await _add_render(mssp_sessionmaker, current.id, {
+        "chart": "soctalk-tenant", "platform_fingerprint": "NEWFP",
+        "platform_started_at": _LONG_AGO,
+    })
+    # A later wazuh-release render must not mask the tenant-chart one.
+    await _add_render(
+        mssp_sessionmaker, current.id, {"chart": "wazuh"},
+        at=datetime.utcnow() + timedelta(seconds=5),
+    )
+
+    worker = ProvisioningWorker(mssp_sessionmaker, roll_settings=_ROLL_ON)
+    assert await worker._roll_outdated_tenants() == [seeded_tenant.id]
+
+    jobs = await _jobs_for(mssp_sessionmaker, seeded_tenant.id)
+    assert [(j.kind, j.status) for j in jobs] == [("tenant.reconcile", "pending")]
+    events = await _events_for(mssp_sessionmaker, seeded_tenant.id, "upgrade_requested")
+    assert len(events) == 1
+    assert events[0].details == {
+        "reason": "platform_changed", "from_fingerprint": "OLDFP",
+        "to_fingerprint": "NEWFP",
+    }
+    assert await _jobs_for(mssp_sessionmaker, current.id) == []
+
+    # The queued job is active: the next sweep does not duplicate it.
+    assert await worker._roll_outdated_tenants() == []
+    assert len(await _jobs_for(mssp_sessionmaker, seeded_tenant.id)) == 1
+
+
+async def test_platform_roll_covers_tenants_rendered_before_recording(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now
+):
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    await _add_render(
+        mssp_sessionmaker, seeded_tenant.id,
+        {"release": "tenant-x", "chart": "soctalk-tenant"},
+    )
+    worker = ProvisioningWorker(mssp_sessionmaker, roll_settings=_ROLL_ON)
+    assert await worker._roll_outdated_tenants() == [seeded_tenant.id]
+
+
+async def test_platform_roll_ignores_non_active_tenants(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now
+):
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.DEGRADED.value)
+    suspended = await _add_tenant(
+        mssp_sessionmaker, seeded_tenant.organization_id, TenantState.SUSPENDED.value
+    )
+    for tid in (seeded_tenant.id, suspended.id):
+        await _add_render(mssp_sessionmaker, tid, {
+            "chart": "soctalk-tenant", "platform_fingerprint": "OLDFP",
+        })
+    worker = ProvisioningWorker(mssp_sessionmaker, roll_settings=_ROLL_ON)
+    assert await worker._roll_outdated_tenants() == []
+
+
+async def test_platform_roll_is_off_unless_enabled(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now
+):
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    worker = ProvisioningWorker(mssp_sessionmaker)  # env unset -> disabled
+    assert await worker._roll_outdated_tenants() == []
+    assert await _jobs_for(mssp_sessionmaker, seeded_tenant.id) == []
+
+
+async def test_drift_sweep_runs_the_platform_roll(
+    mssp_sessionmaker, seeded_tenant: Tenant, _platform_now, monkeypatch
+):
+    from soctalk.core.provisioning.controller import TenantController
+
+    async def _noop(self, tenant_id, *, actor_id=None):
+        return None
+
+    monkeypatch.setattr(TenantController, "sync_state", _noop)
+    await _set_state(mssp_sessionmaker, seeded_tenant.id, TenantState.ACTIVE.value)
+    worker = ProvisioningWorker(mssp_sessionmaker, roll_settings=_ROLL_ON)
+    await worker._maybe_drift_sweep()
+    jobs = await _jobs_for(mssp_sessionmaker, seeded_tenant.id)
+    assert [j.kind for j in jobs] == ["tenant.reconcile"]
