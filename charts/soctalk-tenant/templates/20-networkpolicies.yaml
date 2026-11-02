@@ -110,6 +110,39 @@ spec:
         - { port: 55000, protocol: TCP }  # Wazuh manager API
         - { port: 9200, protocol: TCP }   # Wazuh indexer
 ---
+{{/*
+Control plane → adapter status. ``GET /api/mssp/tenants/{id}/adapter-status``
+(the MSSP UI's External SIEM panel) calls
+``http://soctalk-adapter.<ns>.svc:8080/health/ready`` from the api pod.
+``default-deny`` drops it and ``allow-from-soctalk-system`` only admits the
+Wazuh/TheHive/Cortex pods, so without this rule the panel reported every
+tenant's adapter as unreachable on any NetworkPolicy-enforcing CNI (k3s's
+kube-router, Cilium) while the adapter was healthy and heartbeating. Scoped
+to the api pod and the adapter's HTTP port only.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-adapter-status
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "soctalk-tenant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: soctalk-adapter
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: soctalk-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+      ports:
+        - { port: 8080, protocol: TCP }   # adapter HTTP (/health/ready)
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

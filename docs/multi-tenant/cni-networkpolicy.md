@@ -264,6 +264,30 @@ spec:
         - { port: 9001,  protocol: TCP }
 ```
 
+**4.3.3a Allow the api pod to probe the adapter's status port**
+
+`GET /api/mssp/tenants/{id}/adapter-status` (the External SIEM panel in the
+MSSP UI) calls `soctalk-adapter.<ns>.svc:8080/health/ready` from the api pod.
+4.3.3 does not select the adapter, so without this rule `default-deny` drops
+the probe and every tenant shows as unreachable.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-api-to-adapter-status, namespace: tenant-acme }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: soctalk-adapter } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: soctalk-system }
+          podSelector:
+            matchLabels: { app.kubernetes.io/component: api }
+      ports:
+        - { port: 8080, protocol: TCP }
+```
+
 **4.3.4 Allow adapter to egress soctalk-system API**
 
 ```yaml

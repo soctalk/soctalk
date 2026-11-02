@@ -2106,3 +2106,51 @@ def test_explicit_tenant_tag_does_not_need_package_metadata(monkeypatch):
     assert v["adapter"]["image"]["tag"] == "9.9.9"
     assert v["runsWorker"]["image"]["tag"] == "9.9.9"
     assert v["linuxep"]["image"]["tag"] == "9.9.9"
+
+
+def _netpols(manifests: list[dict]) -> dict[str, dict]:
+    return {
+        d["metadata"]["name"]: d
+        for d in manifests
+        if d and d.get("kind") == "NetworkPolicy"
+    }
+
+
+@pytest.mark.parametrize("profile", ["poc", "provided"])
+def test_chart_admits_api_to_adapter_status_port(profile):
+    """The control plane's adapter-status probe (api pod in soctalk-system →
+    soctalk-adapter:8080) must be admitted by the tenant NetworkPolicies.
+    Without a rule, ``default-deny`` dropped it and the MSSP UI reported every
+    adapter as unreachable on NetworkPolicy-enforcing CNIs."""
+    from soctalk.core.api.tenants import _ADAPTER_STATUS_PORT
+
+    if profile == "provided":
+        values = _provided_values_for_chart(
+            indexer_url="https://203.0.113.10:9200",
+            api_url="https://203.0.113.10:55000",
+            soctalk_url="",
+        )
+    else:
+        t = _make_tenant(profile)
+        values = render_tenant_values(
+            tenant=t,
+            integration=_make_integration(t.id),
+            branding=_make_branding(t.id),
+            mssp_id=str(uuid4()),
+            install_id=str(uuid4()),
+            llm_secret_name="tenant-x-llm",
+            profile=profile,
+        )
+    pol = _netpols(_helm_template(values, cilium=False))["allow-api-to-adapter-status"]
+    spec = pol["spec"]
+    assert spec["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": "soctalk-adapter"}}
+    assert spec["policyTypes"] == ["Ingress"]
+    (rule,) = spec["ingress"]
+    (peer,) = rule["from"]
+    assert peer["namespaceSelector"] == {
+        "matchLabels": {"kubernetes.io/metadata.name": "soctalk-system"}
+    }
+    # Namespace AND pod selector in ONE peer: only the api pod, not the
+    # whole control-plane namespace.
+    assert peer["podSelector"] == {"matchLabels": {"app.kubernetes.io/component": "api"}}
+    assert rule["ports"] == [{"port": _ADAPTER_STATUS_PORT, "protocol": "TCP"}]
