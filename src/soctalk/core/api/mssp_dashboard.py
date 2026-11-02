@@ -345,7 +345,7 @@ async def tenant_health(request: Request) -> TenantHealthResponse:
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
-    outdated = await _platform_outdated_by_tenant(db, rows)
+    outdated = await _platform_outdated_by_tenant(rows)
     items = []
     for r in rows:
         row = _classify_tenant_health(r, now)
@@ -358,9 +358,18 @@ async def tenant_health(request: Request) -> TenantHealthResponse:
 _RENDERED_STATES = frozenset({"active", "degraded", "suspended"})
 
 
-async def _platform_outdated_by_tenant(db: Any, rows: Any) -> dict[str, bool]:
+async def _platform_outdated_by_tenant(rows: Any) -> dict[str, bool]:
     """tenant_id -> whether its release predates the running platform.
-    Best effort: the health card must render even if this check fails."""
+    Best effort: the health card must render even if this check fails.
+
+    Reads on an MSSP-role session, not the request's. The request session is
+    app-role, and ``tenant_lifecycle_events`` is FORCE-RLS with per-tenant
+    isolation: with no tenant pinned (this endpoint rejects pinned sessions)
+    the app role sees none of its rows, so every tenant read as outdated even
+    right after a roll. The read is limited to the latest tenant-chart render
+    of the tenants this MSSP-scope response already lists, the same scope the
+    provisioning worker reads it with.
+    """
     from uuid import UUID
 
     from soctalk.core.provisioning.platform import (
@@ -368,13 +377,15 @@ async def _platform_outdated_by_tenant(db: Any, rows: Any) -> dict[str, bool]:
         is_outdated,
         latest_tenant_renders,
     )
+    from soctalk.core.tenancy import db as tenancy_db
 
     ids = [UUID(r["tenant_id"]) for r in rows if r["state"] in _RENDERED_STATES]
     if not ids:
         return {}
     try:
         current = current_fingerprint()
-        renders = await latest_tenant_renders(db, ids)
+        async with tenancy_db.get_mssp_sessionmaker()() as mssp_session:
+            renders = await latest_tenant_renders(mssp_session, ids)
     except Exception as e:  # noqa: BLE001
         logger.warning("tenant_platform_check_failed", error=str(e))
         return {}

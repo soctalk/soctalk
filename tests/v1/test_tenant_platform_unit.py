@@ -242,6 +242,19 @@ def test_batch_size_caps_one_sweep_in_tenant_order():
 
 
 # --- dashboard flag -----------------------------------------------------------
+# (The RLS behaviour against real roles is in test_tenant_platform_dashboard_rls.py.)
+
+
+def _fake_mssp_sessionmaker(monkeypatch):
+    import contextlib
+
+    from soctalk.core.tenancy import db as tenancy_db
+
+    @contextlib.asynccontextmanager
+    async def _session():
+        yield None
+
+    monkeypatch.setattr(tenancy_db, "get_mssp_sessionmaker", lambda: _session)
 
 
 async def test_dashboard_flags_only_tenants_with_a_release(monkeypatch):
@@ -256,12 +269,13 @@ async def test_dashboard_flags_only_tenants_with_a_release(monkeypatch):
 
     monkeypatch.setattr(pf, "latest_tenant_renders", fake_renders)
     monkeypatch.setattr(pf, "current_fingerprint", lambda: "CUR")
+    _fake_mssp_sessionmaker(monkeypatch)
     rows = [
         {"tenant_id": str(a), "state": "active"},
         {"tenant_id": str(b), "state": "degraded"},
         {"tenant_id": str(c), "state": "provisioning"},
     ]
-    flags = await dash._platform_outdated_by_tenant(None, rows)
+    flags = await dash._platform_outdated_by_tenant(rows)
     assert flags == {str(a): True, str(b): False}
     assert c not in seen
 
@@ -273,8 +287,9 @@ async def test_dashboard_flag_failure_is_not_fatal(monkeypatch):
         raise RuntimeError("chart dir unreadable")
 
     monkeypatch.setattr(pf, "current_fingerprint", boom)
+    _fake_mssp_sessionmaker(monkeypatch)
     rows = [{"tenant_id": str(uuid4()), "state": "active"}]
-    assert await dash._platform_outdated_by_tenant(None, rows) == {}
+    assert await dash._platform_outdated_by_tenant(rows) == {}
 
 
 # --- soctalk-system chart wiring ----------------------------------------------
