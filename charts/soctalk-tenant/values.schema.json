@@ -657,6 +657,18 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 15
+            },
+            "excludeManagerAgent": {
+              "type": "boolean"
+            },
+            "initialTs": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"
+            },
+            "agentPrefix": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
             }
           }
         }

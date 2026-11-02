@@ -139,6 +139,53 @@ def _default_tenant_image_tag() -> str:
         ) from exc
 
 
+def resolve_ingest_settings(
+    integration: IntegrationConfig, profile: str | None
+) -> dict[str, object]:
+    """Effective adapter ingest settings for a tenant.
+
+    One resolver feeds both the chart render and the external-SIEM read, so
+    what the operator sees as "effective" is exactly what the adapter runs
+    with. NULL columns fall back to the defaults:
+
+    * ``exclude_manager_agent``: ``False`` for ``provided`` (the external
+      manager's agent 000 carries the cloud wodles and remote syslog), ``True``
+      for the managed profiles (the in-cluster manager pod's self-alerts are
+      noise).
+    * ``min_severity``: the install-wide ``SOCTALK_ADAPTER_MIN_SEVERITY``
+      (default 10), clamped to the adapter's 0..15 range.
+    * ``initial_ts`` / ``agent_prefix``: unset (full backfill, no filter).
+    """
+    exclude = integration.wazuh_ingest_exclude_manager_agent
+    if exclude is None:
+        exclude = profile != "provided"
+    severity = integration.wazuh_ingest_min_severity
+    if severity is None:
+        try:
+            severity = int(os.getenv("SOCTALK_ADAPTER_MIN_SEVERITY", "10"))
+        except ValueError:
+            severity = 10
+    return {
+        "exclude_manager_agent": bool(exclude),
+        "min_severity": max(0, min(15, int(severity))),
+        "initial_ts": integration.wazuh_ingest_initial_ts or None,
+        "agent_prefix": integration.wazuh_ingest_agent_prefix or None,
+    }
+
+
+def _ingest_values(effective: dict[str, object]) -> dict[str, object]:
+    """``adapter.wazuhIndexer`` keys for the resolved ingest settings."""
+    values: dict[str, object] = {
+        "excludeManagerAgent": effective["exclude_manager_agent"],
+        "minSeverity": effective["min_severity"],
+    }
+    if effective["initial_ts"]:
+        values["initialTs"] = effective["initial_ts"]
+    if effective["agent_prefix"]:
+        values["agentPrefix"] = effective["agent_prefix"]
+    return values
+
+
 def _external_siem_hosts(integration: IntegrationConfig) -> list[str]:
     """Deduped hostnames the adapter must reach for an external Wazuh.
 
@@ -711,9 +758,12 @@ def render_tenant_values(
                 "verifySsl": (
                     integration.wazuh_verify_ssl if is_provided else False
                 ),
-                "minSeverity": int(
-                    os.getenv("SOCTALK_ADAPTER_MIN_SEVERITY", "10")
-                ),
+                # Ingest settings: per-tenant columns with profile/install
+                # defaults, resolved by the same function the external-SIEM
+                # read reports as "effective". ``initialTs``/``agentPrefix``
+                # are only emitted when set so an unset value renders nothing
+                # (the chart template key-checks rather than truth-tests).
+                **_ingest_values(resolve_ingest_settings(integration, profile)),
             },
         },
         "runsWorker": {

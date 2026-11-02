@@ -70,6 +70,27 @@ export interface ExternalSiemOnboard {
 	verify_ssl: boolean;
 }
 
+// Per-tenant adapter ingest settings. Every field is optional and ``null``
+// means "use the default": ``exclude_manager_agent`` defaults by profile
+// (off for 'provided', on for managed Wazuh), ``min_severity`` to the install
+// default, ``initial_ts`` to a full backfill, ``agent_prefix`` to no filter.
+// ``initial_ts`` accepts the literal 'now' or an ISO-8601 timestamp with an
+// offset; the backend stores the resolved absolute UTC instant. Mirrors the
+// backend ``IngestSettings``.
+export interface IngestSettings {
+	exclude_manager_agent?: boolean | null;
+	initial_ts?: string | null;
+	agent_prefix?: string | null;
+	min_severity?: number | null;
+}
+
+// Stored settings plus what the adapter effectively runs with once the
+// profile/install defaults are applied. Mirrors ``IngestSettingsRead``.
+export interface IngestSettingsRead extends IngestSettings {
+	effective_exclude_manager_agent: boolean;
+	effective_min_severity: number;
+}
+
 export interface TenantOnboard {
 	slug: string;
 	display_name: string;
@@ -97,6 +118,9 @@ export interface TenantOnboard {
 	// Supersedes the earlier flat ``wazuh_*`` fields. Omitted entirely for
 	// poc/persistent so the controller fills wazuh_url/indexer_url in-cluster.
 	external_siem?: ExternalSiemOnboard;
+	// Adapter ingest settings; omitted entirely when the wizard has nothing
+	// to override (every backend column stays NULL → defaults).
+	ingest?: IngestSettings;
 }
 
 export interface LifecycleEvent {
@@ -121,6 +145,7 @@ export interface ExternalSiemRead {
 	has_api_password: boolean;
 	has_api_token: boolean;
 	verify_ssl: boolean;
+	ingest: IngestSettingsRead;
 }
 
 // All-optional credential patch — only the fields the operator actually
@@ -136,6 +161,9 @@ export interface ExternalSiemUpdate {
 	api_password?: string | null;
 	api_token?: string | null;
 	verify_ssl?: boolean | null;
+	// Replaces the stored ingest settings as a whole when present (a null
+	// field inside clears it back to the default); omit to leave them as is.
+	ingest?: IngestSettings;
 }
 
 // Masked view of a tenant's LLM configuration. The plaintext API key is

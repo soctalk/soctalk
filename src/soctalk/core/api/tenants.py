@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -114,6 +114,106 @@ class ExternalSiemOnboard(BaseModel):
     verify_ssl: bool = True
 
 
+# The adapter's cursor format: UTC, millisecond precision, trailing ``Z``.
+_INGEST_TS_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def normalize_ingest_initial_ts(raw: str | None) -> str | None:
+    """Canonicalize an ingest start point to the adapter's cursor format.
+
+    ``None``/blank → ``None`` (adapter default: full backfill). The literal
+    ``"now"`` is resolved to the current UTC instant **here, once**, and the
+    absolute value is what gets persisted and rendered: the adapter also
+    accepts ``"now"`` but resolves it at every pod start, so rendering the
+    literal would silently skip whatever arrived during a restart. Any other
+    value must be an ISO-8601 timestamp with an explicit offset (or ``Z``);
+    a naive timestamp is rejected rather than guessed.
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    if text.lower() == "now":
+        return datetime.now(UTC).strftime(_INGEST_TS_FORMAT)[:-4] + "Z"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("initial_ts must be 'now' or an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("initial_ts must carry a timezone offset (or 'Z')")
+    return parsed.astimezone(UTC).strftime(_INGEST_TS_FORMAT)[:-4] + "Z"
+
+
+class IngestSettings(BaseModel):
+    """Per-tenant adapter ingest settings.
+
+    Every field is optional and ``None`` means "use the default":
+    ``exclude_manager_agent`` defaults by profile (off for ``provided``, on
+    for the managed profiles), ``min_severity`` to the install's
+    ``SOCTALK_ADAPTER_MIN_SEVERITY``, ``initial_ts`` to a full backfill and
+    ``agent_prefix`` to no filter. The effective values are reported on the
+    external-SIEM read so an operator can see what the adapter actually runs
+    with. Changing the start point never rewinds an established checkpoint:
+    the adapter loads the durable cursor first and only falls back to
+    ``initial_ts`` when no checkpoint exists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    exclude_manager_agent: bool | None = None
+    initial_ts: str | None = Field(default=None, max_length=64)
+    agent_prefix: str | None = Field(default=None, max_length=255)
+    min_severity: int | None = Field(default=None, ge=0, le=15)
+
+    @field_validator("initial_ts")
+    @classmethod
+    def _canonical_initial_ts(cls, v: str | None) -> str | None:
+        return normalize_ingest_initial_ts(v)
+
+    @field_validator("agent_prefix")
+    @classmethod
+    def _blank_prefix_is_none(cls, v: str | None) -> str | None:
+        if v is not None and not v.strip():
+            return None
+        return v.strip() if v is not None else None
+
+
+class IngestSettingsRead(IngestSettings):
+    """Stored ingest settings plus the values the adapter effectively runs with."""
+
+    effective_exclude_manager_agent: bool
+    effective_min_severity: int
+
+
+# payload field → IntegrationConfig column for the ingest block.
+_INGEST_FIELD_MAP: tuple[tuple[str, str], ...] = (
+    ("exclude_manager_agent", "wazuh_ingest_exclude_manager_agent"),
+    ("initial_ts", "wazuh_ingest_initial_ts"),
+    ("agent_prefix", "wazuh_ingest_agent_prefix"),
+    ("min_severity", "wazuh_ingest_min_severity"),
+)
+
+
+def _ingest_columns(ingest: IngestSettings | None) -> dict[str, Any]:
+    """IntegrationConfig kwargs for an onboarding ingest block (all NULL when absent)."""
+    return {dest: getattr(ingest, src) if ingest else None for src, dest in _INGEST_FIELD_MAP}
+
+
+def _ingest_read(cfg: IntegrationConfig, profile: str | None) -> IngestSettingsRead:
+    from soctalk.core.provisioning.render import resolve_ingest_settings
+
+    effective = resolve_ingest_settings(cfg, profile)
+    return IngestSettingsRead(
+        exclude_manager_agent=cfg.wazuh_ingest_exclude_manager_agent,
+        initial_ts=cfg.wazuh_ingest_initial_ts,
+        agent_prefix=cfg.wazuh_ingest_agent_prefix,
+        min_severity=cfg.wazuh_ingest_min_severity,
+        effective_exclude_manager_agent=effective["exclude_manager_agent"],
+        effective_min_severity=effective["min_severity"],
+    )
+
+
 class TenantOnboard(BaseModel):
     """Wizard payload — one POST, three logical steps' worth of data."""
 
@@ -162,6 +262,11 @@ class TenantOnboard(BaseModel):
     # :func:`_validate_external_siem`); ignored entirely for poc/persistent so
     # the controller fills wazuh_url/indexer_url in-cluster.
     external_siem: ExternalSiemOnboard | None = None
+    # Adapter ingest settings — valid for every profile, most relevant to
+    # ``provided`` where the operator decides the backfill start point and
+    # whether the external manager's own (agent 000) alerts are ingested.
+    # Omitted ⇒ every column NULL ⇒ today's defaults.
+    ingest: IngestSettings | None = None
 
     @field_validator("llm_provider")
     @classmethod
@@ -565,6 +670,7 @@ async def onboard_tenant(
                 wazuh_password_plain=siem.api_password if siem else None,
                 wazuh_api_token_plain=siem.api_token if siem else None,
                 wazuh_verify_ssl=siem.verify_ssl if siem else True,
+                **_ingest_columns(payload.ingest),
             ),
             BrandingConfig(
                 tenant_id=tenant.id,
@@ -1084,6 +1190,11 @@ class ExternalSiemPatch(BaseModel):
     api_password: str | None = Field(default=None, max_length=4096)
     api_token: str | None = Field(default=None, max_length=4096)
     verify_ssl: bool | None = None
+    # The ingest block is replaced as a whole when present (a ``None`` field
+    # inside it clears that setting back to its default), because "leave
+    # unchanged" and "clear" would otherwise be indistinguishable for the
+    # nullable settings. Omit the block to leave ingest settings untouched.
+    ingest: IngestSettings | None = None
 
 
 class ExternalSiemRead(BaseModel):
@@ -1102,6 +1213,7 @@ class ExternalSiemRead(BaseModel):
     has_api_password: bool
     has_api_token: bool
     verify_ssl: bool
+    ingest: IngestSettingsRead
 
 
 # payload field → IntegrationConfig column. ``api_*`` map to the Wazuh
@@ -1119,7 +1231,9 @@ _EXTERNAL_SIEM_FIELD_MAP: tuple[tuple[str, str], ...] = (
 )
 
 
-def _external_siem_read(cfg: IntegrationConfig) -> ExternalSiemRead:
+def _external_siem_read(
+    cfg: IntegrationConfig, profile: str | None
+) -> ExternalSiemRead:
     return ExternalSiemRead(
         indexer_url=cfg.wazuh_indexer_url,
         indexer_username=cfg.wazuh_indexer_username,
@@ -1129,6 +1243,7 @@ def _external_siem_read(cfg: IntegrationConfig) -> ExternalSiemRead:
         has_api_password=bool(cfg.wazuh_password_plain),
         has_api_token=bool(cfg.wazuh_api_token_plain),
         verify_ssl=cfg.wazuh_verify_ssl,
+        ingest=_ingest_read(cfg, profile),
     )
 
 
@@ -1167,6 +1282,9 @@ async def get_tenant_external_siem(
 ) -> ExternalSiemRead:
     """Masked read of a tenant's external-SIEM connection material."""
     session = _db(request)
+    profile = (
+        await session.execute(select(Tenant.profile).where(Tenant.id == tenant_id))
+    ).scalar_one_or_none()
     async with tenant_context(session, tenant_id):
         cfg = (
             await session.execute(
@@ -1177,7 +1295,7 @@ async def get_tenant_external_siem(
         ).scalar_one_or_none()
     if cfg is None:
         raise HTTPException(404, "tenant has no integration config")
-    return _external_siem_read(cfg)
+    return _external_siem_read(cfg, profile)
 
 
 @router.patch(
@@ -1240,6 +1358,16 @@ async def update_tenant_external_siem(
                 if src in _rerender_fields and getattr(cfg, dest) != value:
                     needs_rerender = True
                 setattr(cfg, dest, value)
+        # The ingest block replaces the stored settings wholesale (see
+        # ``ExternalSiemPatch``). Every one of them is baked into the adapter
+        # env by the chart, so any difference needs a re-render, not just a
+        # Secret rewrite + pod roll.
+        if payload.ingest is not None:
+            for src, dest in _INGEST_FIELD_MAP:
+                value = getattr(payload.ingest, src)
+                if getattr(cfg, dest) != value:
+                    needs_rerender = True
+                setattr(cfg, dest, value)
         await session.flush()
     # Commit the Postgres row FIRST — before any K8s side effect. The
     # DB-session middleware would otherwise commit after the handler returns,
@@ -1267,7 +1395,7 @@ async def update_tenant_external_siem(
         await _enqueue_external_siem_reconcile(session, tenant_id)
         await session.commit()
 
-    return _external_siem_read(cfg)
+    return _external_siem_read(cfg, tenant.profile)
 
 
 async def _enqueue_external_siem_reconcile(

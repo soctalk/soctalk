@@ -3011,3 +3011,215 @@ async def test_retry_non_degraded_tenant_409(
 
     assert await _provision_jobs(mssp_session, tenant.id) == []
     assert await _retry_events(mssp_session, tenant.id) == []
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant adapter ingest settings (``ingest`` block on onboarding and on
+# the external-SIEM PATCH). The columns are nullable; NULL = default, and the
+# read reports the EFFECTIVE values next to the stored ones so an operator
+# can see what the adapter actually runs with.
+# ---------------------------------------------------------------------------
+
+
+async def test_onboard_ingest_block_persists_and_resolves_now(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    """``initial_ts: "now"`` is resolved ONCE at onboarding to an absolute UTC
+    instant; rendering the literal would make the adapter re-resolve it at
+    every pod start and skip whatever arrived during a restart."""
+    from soctalk.core.api.tenants import (
+        ExternalSiemOnboard,
+        IngestSettings,
+        TenantOnboard,
+        onboard_tenant,
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    payload = TenantOnboard(
+        slug=f"ig{uuid4().hex[:8]}",
+        display_name="Ingest Settings Tenant",
+        profile="provided",
+        llm_api_key="sk-byo-" + uuid4().hex,
+        external_siem=ExternalSiemOnboard(
+            indexer_url="https://indexer.example.com:9200",
+            indexer_username="indexer-ro",
+            indexer_password="ipw-" + uuid4().hex,
+            api_url="https://wazuh.example.com:55000",
+            api_username="soctalk-adapter",
+            api_password="apw-" + uuid4().hex,
+        ),
+        ingest=IngestSettings(
+            initial_ts="now", exclude_manager_agent=False, agent_prefix=" ep- ", min_severity=0
+        ),
+    )
+    before = datetime.now(UTC)
+    result = await onboard_tenant(payload, FakeRequest())
+
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(IntegrationConfig.tenant_id == result.id)
+        )
+    ).scalar_one()
+    assert integration.wazuh_ingest_exclude_manager_agent is False
+    assert integration.wazuh_ingest_agent_prefix == "ep-"
+    assert integration.wazuh_ingest_min_severity == 0
+    ts = integration.wazuh_ingest_initial_ts
+    assert ts and ts != "now" and ts.endswith("Z")
+    parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    assert before.replace(microsecond=0) <= parsed <= datetime.now(UTC)
+
+
+async def test_onboard_without_ingest_leaves_columns_null(
+    mssp_session: AsyncSession, seeded_org: Organization
+):
+    from soctalk.core.api.tenants import TenantOnboard, onboard_tenant
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    result = await onboard_tenant(
+        TenantOnboard(slug=f"ig{uuid4().hex[:8]}", display_name="No Ingest Block", profile="poc"),
+        FakeRequest(),
+    )
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(IntegrationConfig.tenant_id == result.id)
+        )
+    ).scalar_one()
+    assert integration.wazuh_ingest_exclude_manager_agent is None
+    assert integration.wazuh_ingest_initial_ts is None
+    assert integration.wazuh_ingest_agent_prefix is None
+    assert integration.wazuh_ingest_min_severity is None
+
+
+async def _seed_siem_tenant(
+    mssp_session: AsyncSession, seeded_org: Organization, *, profile: str, state: str
+) -> Tenant:
+    tenant = Tenant(
+        slug=f"ig{uuid4().hex[:8]}",
+        display_name="Ingest PATCH",
+        state=state,
+        profile=profile,
+        organization_id=seeded_org.id,
+    )
+    mssp_session.add(tenant)
+    await mssp_session.flush()
+    mssp_session.add(
+        IntegrationConfig(
+            tenant_id=tenant.id,
+            wazuh_indexer_url="https://indexer.example.com:9200",
+            wazuh_indexer_username="idx",
+            wazuh_indexer_password_plain="idx-pw",
+            wazuh_api_url="https://wazuh.example.com:55000",
+            wazuh_username="api",
+            wazuh_password_plain="api-pw",
+        )
+    )
+    await mssp_session.commit()
+    return tenant
+
+
+async def test_get_external_siem_reports_effective_defaults(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """NULL columns read back as ``None`` with the profile/install default
+    beside them: agent 000 is KEPT for 'provided' and skipped for managed."""
+    from soctalk.core.api.tenants import get_tenant_external_siem
+
+    monkeypatch.setenv("SOCTALK_ADAPTER_MIN_SEVERITY", "8")
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    provided = await _seed_siem_tenant(
+        mssp_session, seeded_org, profile="provided", state=TenantState.ACTIVE.value
+    )
+    managed = await _seed_siem_tenant(
+        mssp_session, seeded_org, profile="poc", state=TenantState.ACTIVE.value
+    )
+    r1 = await get_tenant_external_siem(provided.id, FakeRequest())
+    assert r1.ingest.exclude_manager_agent is None
+    assert r1.ingest.effective_exclude_manager_agent is False
+    assert r1.ingest.min_severity is None
+    assert r1.ingest.effective_min_severity == 8
+    r2 = await get_tenant_external_siem(managed.id, FakeRequest())
+    assert r2.ingest.effective_exclude_manager_agent is True
+
+
+async def test_patch_external_siem_ingest_block_rerenders(
+    mssp_session: AsyncSession, seeded_org: Organization, monkeypatch
+):
+    """The ingest block is chart-rendered (adapter env), so a change must
+    enqueue a tenant.reconcile, not just rewrite the Secret. The block
+    replaces the stored settings as a whole: a ``None`` inside clears."""
+    import soctalk.core.api.tenants as tenants_mod
+    from soctalk.core.api.tenants import (
+        ExternalSiemPatch,
+        IngestSettings,
+        update_tenant_external_siem,
+    )
+
+    monkeypatch.setattr(tenants_mod, "new_k8s_client", lambda: _FakeK8s())
+    tenant = await _seed_siem_tenant(
+        mssp_session, seeded_org, profile="provided", state=TenantState.ACTIVE.value
+    )
+
+    class FakeRequest:
+        class State:
+            user_identity = {"user_id": "test-user"}
+            db = mssp_session
+        state = State()
+
+    # Credential-only PATCH: no chart-rendered field changed → no reconcile.
+    await update_tenant_external_siem(
+        tenant.id, ExternalSiemPatch(api_password="rotated-" + uuid4().hex), FakeRequest()
+    )
+    assert "tenant.reconcile" not in await _llm_jobs_by_kind(mssp_session, tenant.id)
+
+    read = await update_tenant_external_siem(
+        tenant.id,
+        ExternalSiemPatch(
+            ingest=IngestSettings(
+                exclude_manager_agent=True,
+                initial_ts="2026-01-31T00:00:00Z",
+                agent_prefix="linux-ep-",
+                min_severity=12,
+            )
+        ),
+        FakeRequest(),
+    )
+    assert read.ingest.exclude_manager_agent is True
+    assert read.ingest.effective_exclude_manager_agent is True
+    assert read.ingest.initial_ts == "2026-01-31T00:00:00.000Z"
+    assert read.ingest.agent_prefix == "linux-ep-"
+    assert read.ingest.min_severity == 12 and read.ingest.effective_min_severity == 12
+    kinds = await _llm_jobs_by_kind(mssp_session, tenant.id)
+    assert kinds.get("tenant.reconcile") == 1
+
+    # Whole-block replacement: omitted fields clear back to NULL/default.
+    read = await update_tenant_external_siem(
+        tenant.id, ExternalSiemPatch(ingest=IngestSettings(min_severity=0)), FakeRequest()
+    )
+    assert read.ingest.exclude_manager_agent is None
+    assert read.ingest.effective_exclude_manager_agent is False  # provided default
+    assert read.ingest.initial_ts is None and read.ingest.agent_prefix is None
+    assert read.ingest.min_severity == 0 and read.ingest.effective_min_severity == 0
+    integration = (
+        await mssp_session.execute(
+            select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant.id)
+        )
+    ).scalar_one()
+    await mssp_session.refresh(integration)
+    assert integration.wazuh_ingest_exclude_manager_agent is None
+    assert integration.wazuh_ingest_min_severity == 0

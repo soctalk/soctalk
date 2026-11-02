@@ -247,6 +247,30 @@ an unset override, so the render-time `llm_model` fallback keeps working).
 A direct `PATCH /llm` provider change is taken verbatim — the operator is
 explicit there and is expected to adjust the models in the same PATCH.
 
+### Ingest settings (agent 000, start point, severity floor)
+
+The adapter polls the tenant's indexer with a fixed query shape; four of its
+knobs are per-tenant, stored on `integration_configs.wazuh_ingest_*`, set at
+onboarding (`ingest` block) or via `PATCH /api/mssp/tenants/{id}/external-siem`
+(`ingest` block, replaced as a whole), and rendered into the adapter env by
+the controller. `NULL` means "default"; the read endpoint reports the
+*effective* values next to the stored ones.
+
+| Setting | Adapter env | Default | Why it matters for an external Wazuh |
+|---|---|---|---|
+| `exclude_manager_agent` | `SOCTALK_ADAPTER_EXCLUDE_MANAGER_AGENT` | **off for `provided`**, on for poc/persistent | On a managed tenant agent `000` is the in-cluster manager pod's own FIM/monitord noise. On an external manager it is *the manager itself*: every cloud wodle (Office 365, AWS, Azure, GCP, GitHub, MS Graph) and all remote syslog report as agent `000`. Excluding it there drops those alerts silently while the tenant still reports healthy. |
+| `initial_ts` | `SOCTALK_INGEST_INITIAL_TS` | unset = full backfill | A BYO Wazuh usually carries months of history. `"now"` is resolved to an absolute UTC instant **once, at write time** (never at pod start, so a restart cannot skip its own downtime). Only consulted when the tenant has no durable checkpoint yet; an existing checkpoint is never rewound or advanced by editing this. |
+| `agent_prefix` | `SOCTALK_ADAPTER_AGENT_PREFIX` | unset | Ingest only agents whose name starts with the prefix. |
+| `min_severity` | `SOCTALK_ADAPTER_MIN_SEVERITY` | install default (`SOCTALK_ADAPTER_MIN_SEVERITY`, 10) | `rule.level` floor, 0–15. `0` is a real value ("every level"); the chart key-checks it rather than truth-testing, so it is honoured. |
+
+Replaying alerts the old filter excluded: the checkpoint has already moved
+past them, so flipping `exclude_manager_agent` does not recover history
+before the current cursor. To replay, decommission the adapter's checkpoint
+deliberately (`DELETE` the row for `source=wazuh` on the control plane) and
+set `initial_ts` to the point you want to replay from; the ingest
+idempotency key `(tenant, source, source_event_id)` absorbs events that were
+already delivered.
+
 ## 5 Connectivity prerequisites
 
 Because the SIEM is outside the cluster, **two** egress paths must be open:
