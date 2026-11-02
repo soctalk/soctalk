@@ -97,6 +97,9 @@ class _State:
         self.last_poll_ok: datetime | None = None
         self.consecutive_poll_failures: int = 0
         self.checkpoint_save_failing: bool = False
+        # A checkpoint save has succeeded since start: the durable cursor is
+        # in sync even if the startup load never succeeded.
+        self.checkpoint_saved: bool = False
 
 
 _state = _State()
@@ -142,7 +145,7 @@ def _compute_health(now: datetime | None = None) -> tuple[str, list[str]]:
         failing.append("poll_failing")
     elif _state.consecutive_poll_failures > 0:
         degraded.append("poll_failing")
-    if phase == "polling" and not _state.checkpoint_loaded:
+    if phase == "polling" and not (_state.checkpoint_loaded or _state.checkpoint_saved):
         degraded.append("checkpoint_not_loaded")
     if _state.checkpoint_save_failing:
         degraded.append("checkpoint_save_failing")
@@ -622,6 +625,7 @@ async def _save_checkpoint(
         )
         resp.raise_for_status()
         _state.checkpoint_save_failing = False
+        _state.checkpoint_saved = True
     except Exception as e:  # noqa: BLE001
         _state.checkpoint_save_failing = True
         logger.warning("checkpoint_save_failed: %s", e)
@@ -755,6 +759,18 @@ async def _poll_cycle(
     _state.last_poll_ok = datetime.now(UTC)
     _state.consecutive_poll_failures = 0
     _state.last_ingest_error = None
+    # Recover the durable checkpoint without waiting for the cursor to move:
+    # retry a save that failed, or establish one when the startup load never
+    # succeeded. The control plane keeps the stored cursor monotonic
+    # (GREATEST), so persisting the current cursor can never move it back.
+    # In sync and not failing (the normal case) this writes nothing.
+    if _state.checkpoint_save_failing or not (
+        _state.checkpoint_loaded or _state.checkpoint_saved
+    ):
+        await _save_checkpoint(
+            api_client, api_url, tenant_id, token,
+            _state.last_alert_ts, _state.last_alert_id,
+        )
     return result
 
 

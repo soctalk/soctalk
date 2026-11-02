@@ -243,3 +243,80 @@ async def test_ready_reports_health_without_gating(state):
     assert body["ok"] is True
     assert body["health"] == "failing"
     assert body["health_reasons"] == ["ingest_stopped"]
+
+
+# --- checkpoint recovery ----------------------------------------------------
+# A transient checkpoint failure must not leave a quiet tenant "degraded"
+# forever: the save used to be retried only when the cursor moved, and a
+# startup load that exhausted its retries was never recovered.
+
+
+class _RecordingApi:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+        self.puts: list[dict] = []
+
+    async def put(self, _url, **kw):
+        if self.fail:
+            raise RuntimeError("api down")
+        self.puts.append(kw["json"])
+
+        class _R:
+            def raise_for_status(self): ...
+
+        return _R()
+
+
+@pytest.fixture
+def quiet_cycle(monkeypatch, state):
+    """A poll that succeeds but finds nothing new (a quiet tenant)."""
+    monkeypatch.setattr(m, "_read_token", lambda: "tok")
+    state.last_alert_ts = "2026-11-02T10:00:00.000Z"
+    state.last_alert_id = "wz-1"
+
+    async def empty(*_a, **_kw):
+        return m._PollResult()
+
+    monkeypatch.setattr(m, "_ingest_once", empty)
+
+    async def run(api):
+        return await m._poll_cycle(api, None, "http://l1", "tenant-1", 100)
+
+    return state, run
+
+
+async def test_a_failed_save_is_retried_on_the_next_quiet_poll(quiet_cycle):
+    state, run = quiet_cycle
+    state.checkpoint_save_failing = True
+    api = _RecordingApi()
+    await run(api)
+    assert [p["cursor_ts"] for p in api.puts] == ["2026-11-02T10:00:00.000Z"]
+    assert state.checkpoint_save_failing is False
+    assert m._compute_health() == ("ok", [])
+
+
+async def test_a_startup_load_that_never_succeeded_recovers_after_a_save(quiet_cycle):
+    state, run = quiet_cycle
+    state.checkpoint_loaded = False
+    assert m._compute_health(NOW) == ("degraded", ["checkpoint_not_loaded"])
+    api = _RecordingApi()
+    await run(api)
+    assert len(api.puts) == 1
+    assert m._compute_health() == ("ok", [])
+
+
+async def test_recovery_save_failing_keeps_the_reason(quiet_cycle):
+    state, run = quiet_cycle
+    state.checkpoint_loaded = False
+    await run(_RecordingApi(fail=True))
+    health, reasons = m._compute_health()
+    assert health == "degraded"
+    assert set(reasons) == {"checkpoint_not_loaded", "checkpoint_save_failing"}
+
+
+async def test_no_checkpoint_writes_on_quiet_polls_when_in_sync(quiet_cycle):
+    state, run = quiet_cycle
+    api = _RecordingApi()
+    for _ in range(3):
+        await run(api)
+    assert api.puts == []

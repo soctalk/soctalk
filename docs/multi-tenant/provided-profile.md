@@ -369,8 +369,8 @@ is fresh, and badges the row with the health (reasons on hover).
 | `failing` | `poll_stale` | no poll completed within max(120 s, 3 × `SOCTALK_INGEST_INTERVAL_SECONDS`), including a startup stuck loading the checkpoint |
 | `failing` | `ingest_stopped` | the ingest task exited (it is meant to run until shutdown) |
 | `degraded` | `poll_failing` | 1–2 consecutive polls failed |
-| `degraded` | `checkpoint_not_loaded` | the durable cursor never loaded; ingest resumed from the local cursor |
-| `degraded` | `checkpoint_save_failing` | the last checkpoint save failed; a restart would re-read from the previous cursor |
+| `degraded` | `checkpoint_not_loaded` | the durable cursor never loaded and no checkpoint save has succeeded yet (ingest resumed from the local cursor; the next successful poll saves it) |
+| `degraded` | `checkpoint_save_failing` | the last checkpoint save failed; retried on every successful poll, including quiet ones, until it succeeds |
 | `ok` | — | polls complete, including a quiet tenant whose polls return nothing new; also an adapter with ingest disabled |
 
 The adapter's `/health/ready` reports the same `health` and reasons but stays
