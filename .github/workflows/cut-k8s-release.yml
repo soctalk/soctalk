@@ -8,10 +8,13 @@ name: Cut k8s Release
 # Flow:
 #   1. Bump all version strings to X.Y.Z on main (charts, install.sh,
 #      package metadata) and let publish-images.yml publish the moving
-#      `latest` images + the X.Y.Z charts on that push.
+#      `latest` images + the X.Y.Z charts on that push (the first push of a
+#      version; later main pushes publish X.Y.Z-main.g<sha> pre-releases and
+#      never touch X.Y.Z).
 #   2. Run this action with version = X.Y.Z. It:
 #      - re-builds the images from the current ref and tags them `X.Y.Z`,
-#      - re-pushes the charts (idempotent),
+#      - re-pushes the X.Y.Z charts from the release ref (this REPLACES the
+#        version on ghcr; it is the only workflow allowed to),
 #      - creates tag vX.Y.Z + the GitHub Release,
 #      - builds + attaches the rpm/deb packages (fast, inline), and
 #      - dispatches build-packer-images.yml (async) for the VM images + OVA,

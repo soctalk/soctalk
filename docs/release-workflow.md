@@ -33,14 +33,14 @@ environment/config and the cluster's Secrets — **not in this doc**.
 2. **`cut-k8s-release.yml` is dispatch-only.** After dispatching, confirm the run
    built **main's HEAD sha**, not an old tag — building the tag is how drift
    started historically.
-3. **A `main` push that changes chart content republishes the `X.Y.Z` *chart*
-   tag — never the `X.Y.Z` *images*** (see *Two publish paths*). On push,
-   `publish-images` only tags images `latest` + `<short-sha>`; the `X.Y.Z` image
-   tags move **only** on a cut (or a manual dispatch with `inputs.tag`). Charts
-   are re-`helm push`ed at their `Chart.yaml` `version:`, overwriting that tag
-   when their rendered content differs (a code-only push that leaves `charts/`
-   untouched is an effective no-op). Order matters: expect the published chart to
-   move when you push chart changes before a cut. `paths-ignore` (below) skips the
+3. **A `main` push never moves an `X.Y.Z` tag — chart or image** (see *Two
+   publish paths*). On push, `publish-images` tags images `latest` +
+   `<short-sha>` and publishes each chart as the pre-release
+   `<Chart.yaml version>-main.g<short-sha>`. It publishes the plain `X.Y.Z`
+   chart only when that version does not exist yet (the version-bump commit),
+   and never overwrites it: on an OCI registry `helm push` of an existing
+   version **replaces** it. The `X.Y.Z` chart and image tags move **only** on a
+   cut, which re-pushes them deliberately. `paths-ignore` (below) skips the
    whole workflow for pushes touching only docs, tests, `LICENSE`, `.gitignore`,
    or the two ignored workflow files (`v1-ci.yml`, `deploy-demo.yml`) — note this
    is those two files only, **not** all of `.github/workflows/`.
@@ -189,15 +189,17 @@ token+manifest curl is finicky; real OCI clients resolve it fine).
 - **`publish-images.yml`** (push to `main`, `paths-ignore`: `**.md`, `docs/**`,
   `tests/**`, `LICENSE`, `.gitignore`, `.github/workflows/v1-ci.yml`,
   `.github/workflows/deploy-demo.yml`): publishes moving `latest` + `<short-sha>`
-  images **and the charts at their current `Chart.yaml` version** — it does **not**
-  build or move the `X.Y.Z` *image* tags. A non-ignored main push re-`helm push`es
-  the `0.2.1` chart, overwriting the tag when the rendered chart content changed
-  (GHCR overwrites — a chart tag is mutable; identical content is a no-op).
-  Auto-updates demo via `deploy-demo`. Note the two ignored workflow files: a fix
+  images **and each chart as the pre-release `<Chart.yaml version>-main.g<short-sha>`**,
+  plus the plain `X.Y.Z` chart if (and only if) that version is not published
+  yet. It does **not** build or move the `X.Y.Z` image tags, and it never
+  overwrites a published `X.Y.Z` chart (GHCR would accept it and replace the
+  content; a registry error during the existence check fails the job rather
+  than risk that). Auto-updates demo via `deploy-demo`. Note the two ignored workflow files: a fix
   to `deploy-demo.yml` or `v1-ci.yml` alone does **not** trigger a publish/redeploy.
 - **`cut-k8s-release.yml`** (`workflow_dispatch` only; inputs `version`,
   `create_release`): rebuilds images from HEAD, tags them `X.Y.Z`, `helm push`es
-  the charts, creates tag `vX.Y.Z` + the GitHub Release, calls `packages.yml`
+  the `X.Y.Z` charts from the release ref (the only workflow that replaces a
+  published `X.Y.Z` chart), creates tag `vX.Y.Z` + the GitHub Release, calls `packages.yml`
   (`.deb`/`.rpm`), and fires `build-packer-images.yml` (VM appliances) async.
 - **`packages.yml`** (called by `cut-k8s-release.yml`): builds and attaches the
   `.deb`/`.rpm` OS packages to the release.
@@ -205,7 +207,11 @@ token+manifest curl is finicky; real OCI clients resolve it fine).
   (`.ova/.qcow2.xz/.raw.xz/.vhd(x).xz/.vmdk.xz`), attached to the release.
 - **`deploy-demo.yml`** (`workflow_run` after publish-images, or dispatch): SSH to
   the demo host, `helm upgrade --install soctalk-system oci://…/soctalk-system
-  --version <ver> -f deploy/demo-values.yaml --wait --atomic`; `pullPolicy: Always`
+  --version <ver>-main.g<short-sha> -f deploy/demo-values.yaml --wait --atomic`
+  (the pre-release `publish-images` just pushed for that commit; demo tenants
+  are provisioned from the same commit's `soctalk-tenant` pre-release via
+  `tenantProvisioning.tenantChartVersion`; a manual dispatch can pass a
+  release version instead); `pullPolicy: Always`
   + a forced rollout so the moving tag is re-pulled; then the onboard +
   OpenAPI-client smokes gate it.
 
@@ -250,14 +256,15 @@ trust the tag, only the digest.
 - **Immutable — the release pointer.** A cut binds `vX.Y.Z` (git tag + GitHub
   Release) to one HEAD sha; always verify the cut built that sha. The *tag → sha*
   binding is the release of record.
-- **Mutable by design — the `X.Y.Z` *chart* tag on GHCR.** On a non-ignored
-  `main` push `publish-images` re-`helm push`es the chart at its `Chart.yaml`
-  version, overwriting the `X.Y.Z` chart tag when the rendered chart content
-  changed; the demo pipeline depends on that (it installs the `Chart.yaml`
-  version). So the *published* `X.Y.Z` chart can move ahead of the last cut's sha
-  on a chart-affecting push. The `X.Y.Z` *image* tags do **not** move on a push —
-  only on a cut — so a code-only push moves `latest`+sha images but leaves the
-  `X.Y.Z` images alone. This is why rule 1 exists. A digest-gated box stays pinned
+- **Moves only on a cut — the `X.Y.Z` *chart* tag on GHCR.** A `main` push
+  publishes `X.Y.Z-main.g<sha>` pre-releases and leaves a published `X.Y.Z`
+  chart alone; a cut re-pushes it from the release ref, so a re-cut of the same
+  version still moves it (deliberately). The demo tracks main through the
+  pre-releases. (Until this changed, every chart-affecting main push silently
+  replaced the published `X.Y.Z` chart, so `helm upgrade --version X.Y.Z` could
+  render unreleased templates against released images.) The `X.Y.Z` *image*
+  tags likewise move only on a cut. A cut is still a tag move under a pinned
+  version, which is why rule 1 exists. A digest-gated box stays pinned
   to the cut's digests until you re-apply; it is not affected by a tag moving
   under it.
 - **Mutable by intent, but audited — the release log.** During a version's
@@ -469,17 +476,16 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 
 ## Known follow-ups
 
-- **Separate the dev chart version from release versions** — **deprioritized.**
-  The chosen workflow is to **re-cut the same version** (see the versioning rule),
-  not to freeze the chart tag per release, so this is not being pursued unless the
-  operator revisits it.
-- **`helm push` semantics, stated precisely** (the workflow comments in
-  `publish-images.yml`/`cut-k8s-release.yml` still call it "idempotent", which is
-  true only for the identical-content case): re-pushing a chart version with the
-  **same** rendered content is a no-op (same digest); re-pushing that version with
-  **changed** content overwrites the tag to a new digest (GHCR allows it). That is
-  the mutable-chart-tag reality rule 1 guards against. Not a pending code change —
-  just don't read "idempotent" as "immutable".
+- **Separate the dev chart version from release versions** — **done**: main
+  publishes `X.Y.Z-main.g<sha>` pre-releases and never overwrites `X.Y.Z`; the
+  re-cut-the-same-version workflow is unchanged (a cut re-pushes `X.Y.Z`).
+  Pre-releases sort below `X.Y.Z` and are ignored by version ranges (`^0.2`),
+  so only an exact `--version …-main.g<sha>` selects one. They accumulate on
+  GHCR like the `<short-sha>` image tags do.
+- **`helm push` semantics, stated precisely:** re-pushing a chart version with
+  the **same** rendered content is a no-op (same digest); re-pushing it with
+  **changed** content replaces the tag with a new digest (GHCR allows it). That
+  is why main no longer re-pushes `X.Y.Z` and why only a cut may.
 - **Remaining `latest` consumers (hard rule 10 violations), found by audit:**
   - `charts/wazuh/templates/indexer.yaml` pulls **`alpine/openssl:latest`** — an
     unpinned third-party image in a chart that ships to every tenant. Pin it to a

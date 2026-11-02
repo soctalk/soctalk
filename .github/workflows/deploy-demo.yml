@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       chart_version:
-        description: "soctalk-system chart version to deploy (default: Chart.yaml version)"
+        description: "soctalk-system chart version to deploy (default: this commit's main pre-release, <Chart.yaml version>-main.g<short sha>; publish-images must have run for it)"
         required: false
         default: ""
 
@@ -58,15 +58,27 @@ jobs:
 
       - name: Resolve chart version
         id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.chart_version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
-          if [[ -n "${{ inputs.chart_version }}" ]]; then
-            ver="${{ inputs.chart_version }}"
+          if [[ -n "$INPUT_VERSION" ]]; then
+            ver="$INPUT_VERSION"
+            tenant_ver=""  # keep the chart's own tenantChartVersion default
           else
-            ver="$(grep -E '^version:' charts/soctalk-system/Chart.yaml | awk '{print $2}')"
+            # publish-images.yml publishes every main commit's charts as a
+            # pre-release; released X.Y.Z versions are never overwritten from
+            # main, so the demo tracks main through these. Tenants follow the
+            # same commit's soctalk-tenant pre-release.
+            base="$(grep -E '^version:' charts/soctalk-system/Chart.yaml | awk '{print $2}')"
+            tenant_base="$(grep -E '^version:' charts/soctalk-tenant/Chart.yaml | awk '{print $2}')"
+            ver="${base}-main.g${HEAD_SHA::7}"
+            tenant_ver="${tenant_base}-main.g${HEAD_SHA::7}"
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Deploying soctalk-system chart version: $ver"
+          echo "tenant_version=$tenant_ver" >> "$GITHUB_OUTPUT"
+          echo "Deploying soctalk-system chart version: $ver (tenant chart: ${tenant_ver:-chart default})"
 
       - name: Set up SSH
         run: |
@@ -85,6 +97,7 @@ jobs:
       - name: helm upgrade --install soctalk-system
         env:
           VER: ${{ steps.resolve.outputs.version }}
+          TENANT_VER: ${{ steps.resolve.outputs.tenant_version }}
           ADMIN_EMAIL: ${{ secrets.DEMO_ADMIN_EMAIL }}
           ADMIN_PW: ${{ secrets.DEMO_ADMIN_PW }}
         run: |
@@ -94,6 +107,13 @@ jobs:
           # --wait blocks until the release's workloads are Ready. The
           # bootstrap admin creds are injected here, never written to the
           # committed values file. SSH keepalive survives slow rollouts.
+          # Demo tenants are provisioned from the same commit's soctalk-tenant
+          # pre-release (tenantProvisioning.tenantChartVersion) unless a
+          # release version was requested by hand.
+          tenant_flag=""
+          if [[ -n "$TENANT_VER" ]]; then
+            tenant_flag="--set-string tenantProvisioning.tenantChartVersion=$TENANT_VER"
+          fi
           ssh -i ~/.ssh/id_demo \
               -o StrictHostKeyChecking=accept-new \
               -o ServerAliveInterval=30 \
@@ -108,6 +128,7 @@ jobs:
                  -f /tmp/demo-values.yaml \
                  --set-string install.bootstrapAdmin.email='$ADMIN_EMAIL' \
                  --set-string install.bootstrapAdmin.password='$ADMIN_PW' \
+                 $tenant_flag \
                  --wait --atomic --timeout 10m
                rm -f /tmp/demo-values.yaml"
 

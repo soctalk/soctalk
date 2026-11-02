@@ -5,12 +5,18 @@ name: Publish Images and Charts
 #     + short SHA. Versioned (X.Y.Z) release images are cut separately by
 #     `cut-k8s-release.yml`.
 #   - Four Helm charts (soctalk-system, soctalk-tenant, wazuh, linux-ep)
-#     as OCI artifacts at ghcr.io/soctalk/charts/<chart>, tagged with the
-#     Chart.yaml version. Helm OCI doesn't have a `latest` tag — to
-#     publish a new chart version, bump `version:` in Chart.yaml.
+#     as OCI artifacts at ghcr.io/soctalk/charts/<chart>:
+#       * a per-commit pre-release `<Chart.yaml version>-main.g<short sha>`
+#         on every push (what deploy-demo.yml deploys), and
+#       * the plain `<Chart.yaml version>` only if it does not exist yet
+#         (the version-bump commit). A released version is never
+#         overwritten from main: `helm push` of an existing version
+#         REPLACES it on an OCI registry, which silently changed the
+#         released charts' content after every merge. cut-k8s-release.yml
+#         is the one place that re-pushes X.Y.Z, deliberately.
 #
 # Triggered on:
-#   - push to main         → publishes `latest`+sha images (charts only if Chart.yaml version is new)
+#   - push to main         → publishes `latest`+sha images, the charts' main pre-release, and X.Y.Z charts that are new
 #   - workflow_dispatch    → manual button; useful for the first publish
 #
 # Versioned releases (images + charts + GitHub Release): use the
@@ -27,8 +33,8 @@ on:
     # are cut by the dedicated `cut-k8s-release.yml` action, NOT by a tag
     # push here — so cutting a k8s release stays decoupled from the Packer
     # VM build. This workflow only publishes the moving `latest` + short-
-    # sha images and the current Chart.yaml chart versions on every main
-    # push (which is what auto-updates demo via deploy-demo.yml).
+    # sha images and the charts' per-commit pre-release versions on every
+    # main push (which is what auto-updates demo via deploy-demo.yml).
     # Skip image rebuilds when the change touches only docs, tests, or
     # the soctalk-docs site. Saves CI minutes and avoids re-publishing
     # the same image bits on a doc tweak.
@@ -145,7 +151,11 @@ jobs:
       - name: Package and push charts
         run: |
           set -euo pipefail
-          mkdir -p /tmp/helm-out
+          out="${RUNNER_TEMP:-/tmp}/helm-out"
+          rm -rf "$out"; mkdir -p "$out/release" "$out/prerelease"
+          # `g` keeps the SemVer pre-release identifier alphanumeric: a short
+          # SHA can be all digits with a leading zero, which SemVer forbids.
+          short_sha="${GITHUB_SHA::7}"
 
           # soctalk-tenant depends on wazuh + linux-ep via file:// refs.
           # `helm package` won't traverse those without a resolved deps
@@ -156,17 +166,32 @@ jobs:
           echo "::endgroup::"
 
           for chart in soctalk-system soctalk-tenant wazuh linux-ep; do
-            echo "::group::package $chart"
-            helm package "charts/$chart" --destination /tmp/helm-out
+            ver="$(awk '/^version:/ {print $2; exit}' "charts/$chart/Chart.yaml")"
+            pre="${ver}-main.g${short_sha}"
+            echo "::group::package $chart ($ver, $pre)"
+            # Released versions are immutable. `helm push` of an existing
+            # version replaces it on an OCI registry (it is NOT a no-op), so
+            # only publish X.Y.Z when the registry does not have it yet. Any
+            # lookup error other than "not found" fails the job rather than
+            # risk overwriting a release.
+            if err="$(helm show chart "oci://ghcr.io/soctalk/charts/$chart" --version "$ver" 2>&1 >/dev/null)"; then
+              echo "$chart $ver is already published; leaving it untouched"
+            elif grep -qi "not found" <<<"$err"; then
+              helm package "charts/$chart" --destination "$out/release"
+            else
+              echo "::error::cannot tell whether $chart $ver is published: $err"
+              exit 1
+            fi
+            helm package "charts/$chart" --version "$pre" --destination "$out/prerelease"
             echo "::endgroup::"
           done
 
-          for tgz in /tmp/helm-out/*.tgz; do
-            echo "::group::push $tgz"
-            # `helm push` is idempotent: pushing the same chart version
-            # twice is a no-op (artifact already exists in registry).
-            # To publish a new version, bump `version:` in Chart.yaml.
+          for tgz in "$out"/release/*.tgz "$out"/prerelease/*.tgz; do
+            [ -e "$tgz" ] || continue
+            echo "::group::push $(basename "$tgz")"
             helm push "$tgz" oci://ghcr.io/soctalk/charts
             echo "::endgroup::"
           done
-
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "Charts for this commit: \`<chart>@$(awk '/^version:/ {print $2; exit}' charts/soctalk-system/Chart.yaml)-main.g${short_sha}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
