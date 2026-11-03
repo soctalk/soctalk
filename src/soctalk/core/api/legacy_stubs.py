@@ -18,18 +18,23 @@ Side-effecting routes (POST /review/{id}/approve, etc.) intentionally
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.decorators import require_permission_any
+from soctalk.core.tenancy.models import UserType
 from soctalk.core.tenancy.permissions import Permission
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from soctalk.core.tenancy.auth import UserIdentity
 
 # Review decisions are shared between the MSSP analyst and a co-managed-SOC tenant operator.
@@ -601,20 +606,46 @@ async def review_expire(
 # ---------------------------------------------------------------------------
 
 
-async def _analytics_session_for(identity: "UserIdentity"):
-    """Same role-aware session pattern as the audit endpoints."""
-    from soctalk.core.tenancy.context import tenant_context
+@asynccontextmanager
+async def _scoped_read_session(identity: UserIdentity) -> AsyncIterator[AsyncSession]:
+    """Read session for the audit and analytics pages, scoped like ``/api/metrics``.
+
+    - An MSSP-level role (platform_admin, mssp_admin, mssp_manager) WITHOUT a tenant pin
+      reads fleet-wide through the BYPASSRLS session.
+    - Everyone else reads ONE tenant through the RLS-subject session: an MSSP operator's
+      pin (``current_tenant``), else the caller's home tenant. The audience follows the
+      caller: ``customer`` for tenant users, so ``mssp_only`` rows stay hidden from them,
+      and ``mssp`` for pinned staff.
+    - An MSSP ``analyst`` without a pin has no tenant scope: 403, as on the review queue.
+
+    This used to branch on role alone and pass ``identity.tenant_id`` to
+    ``tenant_context``: an MSSP analyst (no home tenant, pinned or not) hit
+    ``set_config('app.current_tenant_id', 'None')`` and a 500, a pinned admin or manager
+    read fleet-wide data, and tenant users ran with ``audience='mssp'`` (set by
+    ``TenantContext``) and could read ``mssp_only`` investigation titles. It also was an
+    async generator consumed with ``async for ... return``: never exhausted, so its cleanup
+    ran later in another task, failed to reset the tenant ContextVar ("created in a
+    different Context") and held the connection until then.
+    """
+    from soctalk.core.tenancy.context import set_request_db_context, tenant_context
     from soctalk.core.tenancy.db import get_app_sessionmaker, get_mssp_sessionmaker
 
-    if identity.role in _MSSP_LEVEL_ROLES:
-        sm = get_mssp_sessionmaker()
-        async with sm() as s:
+    if identity.role in _MSSP_LEVEL_ROLES and identity.current_tenant is None:
+        async with get_mssp_sessionmaker()() as s:
             yield s
-    else:
-        sm = get_app_sessionmaker()
-        async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
-                yield s
+        return
+    tid = _effective_review_tenant(identity)
+    if tid is None:
+        raise HTTPException(403, "tenant scope required")
+    audience = "customer" if identity.user_type == UserType.TENANT.value else "mssp"
+    async with get_app_sessionmaker()() as s:
+        async with tenant_context(s, tid):
+            # ``TenantContext`` stamps audience='mssp' for backend callers; restore the
+            # caller's real audience so the visibility policies apply.
+            await set_request_db_context(
+                s, tenant_id=tid, audience=audience, user_role=identity.role
+            )
+            yield s
 
 
 async def _kpis(session, days: int) -> dict[str, Any]:
@@ -915,7 +946,7 @@ async def analytics_summary(
     identity = current_identity(request)
     period_end = datetime.now(timezone.utc)
     period_start = period_end.replace(microsecond=0) - timedelta(days=days)
-    async for s in _analytics_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         return {
             "period_start": period_start.isoformat(),
             "period_end": period_end.isoformat(),
@@ -931,7 +962,7 @@ async def analytics_kpis(
     request: Request, days: int = Query(7, ge=1, le=90)
 ) -> dict[str, Any]:
     identity = current_identity(request)
-    async for s in _analytics_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         return await _kpis(s, days)
 
 
@@ -940,7 +971,7 @@ async def analytics_ai_behavior(
     request: Request, days: int = Query(7, ge=1, le=90)
 ) -> dict[str, Any]:
     identity = current_identity(request)
-    async for s in _analytics_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         return await _ai_behavior(s, days)
 
 
@@ -949,7 +980,7 @@ async def analytics_human_review(
     request: Request, days: int = Query(7, ge=1, le=90)
 ) -> dict[str, Any]:
     identity = current_identity(request)
-    async for s in _analytics_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         return await _human_review(s, days)
 
 
@@ -958,7 +989,7 @@ async def analytics_outcomes(
     request: Request, days: int = Query(7, ge=1, le=90)
 ) -> dict[str, Any]:
     identity = current_identity(request)
-    async for s in _analytics_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         return await _outcomes(s, days)
 
 
@@ -967,40 +998,13 @@ async def analytics_outcomes(
 # ---------------------------------------------------------------------------
 
 
-async def _audit_session_for(identity: "UserIdentity"):
-    """Return a session + scoping context appropriate for the caller.
-
-    MSSP-level roles use the BYPASSRLS session so they see every
-    tenant's audit trail. Tenant-level roles use the RLS-subject
-    session with ``tenant_context`` so their audit query is naturally
-    scoped to their own tenant_id by the events_tenant_isolation
-    policy on the ``events`` table.
-
-    Yields ``(session, needs_commit)`` — read-only here so the caller
-    never commits, but the shape mirrors the write helpers above for
-    readability.
-    """
-    from soctalk.core.tenancy.context import tenant_context
-    from soctalk.core.tenancy.db import get_app_sessionmaker, get_mssp_sessionmaker
-
-    if identity.role in _MSSP_LEVEL_ROLES:
-        sm = get_mssp_sessionmaker()
-        async with sm() as s:
-            yield s
-    else:
-        sm = get_app_sessionmaker()
-        async with sm() as s:
-            async with tenant_context(s, identity.tenant_id):
-                yield s
-
-
 @router.get("/api/audit/event-types")
 async def audit_event_types(request: Request) -> dict[str, list[str]]:
     """Distinct event types present in the audit log — drives the UI filter."""
     from sqlalchemy import text as _t
 
     identity = current_identity(request)
-    async for s in _audit_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         rows = (
             await s.execute(_t("SELECT DISTINCT event_type FROM events ORDER BY event_type"))
         ).all()
@@ -1051,7 +1055,7 @@ async def audit_list(
     params["lim"] = page_size
     params["off"] = offset
 
-    async for s in _audit_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         total = (
             await s.execute(_t(f"SELECT COUNT(*) FROM events{where}"), params)
         ).scalar_one()
@@ -1105,7 +1109,7 @@ async def audit_stats(
     # because asyncpg can't cast a bind param to ``interval`` directly
     # (server-side parser sees ``$1`` before it has a target type).
     params = {"h": int(hours)}
-    async for s in _audit_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         total = (
             await s.execute(
                 _t(
@@ -1166,7 +1170,7 @@ async def audit_investigation(
     from sqlalchemy import text as _t
 
     identity = current_identity(request)
-    async for s in _audit_session_for(identity):
+    async with _scoped_read_session(identity) as s:
         inv = (
             await s.execute(
                 _t(
