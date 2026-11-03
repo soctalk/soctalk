@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 	import { api, ApiError, type AuthSession } from '$lib/api/client';
+	import { safeNextPath } from '$lib/auth/session-expiry';
 	import { addToast, authSession, tenantContext } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
 	import { localizedGoto } from '$lib/i18n';
@@ -19,6 +21,21 @@
 	// Shown inline under the form until the next attempt. A toast is easy to
 	// miss and times out; a failed sign-in must stay on screen.
 	let loginError = '';
+
+	// Why the user is here (internal-auth §8.4, §8.6): an expired session or
+	// a sign-out. Informational, not an error, and gone once they submit.
+	let noticeDismissed = false;
+	$: notice = noticeDismissed
+		? ''
+		: $page.url.searchParams.get('expired') === '1'
+			? m.login_session_expired()
+			: $page.url.searchParams.get('signed_out') === '1'
+				? m.login_signed_out()
+				: '';
+
+	// Where to go once signed in: `next` when it is a same-origin app path,
+	// else the landing route. localizedGoto re-applies this page's locale.
+	$: landing = safeNextPath($page.url.searchParams.get('next')) ?? '/';
 
 	/** Locked-until timestamp from a 423, whose detail is an object. */
 	function lockedUntil(e: ApiError): string | null {
@@ -53,7 +70,7 @@
 			mode = session.mode;
 
 			if (!session.enabled || session.user) {
-				await localizedGoto('/');
+				await localizedGoto(landing);
 			}
 		} catch (e) {
 			addToast({
@@ -69,6 +86,7 @@
 	async function submit() {
 		submitting = true;
 		loginError = '';
+		noticeDismissed = true;
 		try {
 			// Only pin tenant_slug when the URL is a *tenant* slug. MSSP
 			// slugs identify the install, not a tenant scope — login
@@ -84,11 +102,12 @@
 			// Bootstrap admins land with must_change=true. Until they
 			// clear it, the auth middleware rejects every non-whitelisted
 			// API call — sending them to /account/password is the only
-			// usable surface, so don't drop them on the dashboard.
+			// usable surface, so don't drop them on the dashboard (nor on
+			// `next`, which would bounce straight back there).
 			if (res.must_change) {
 				await localizedGoto('/account/password?must_change=1');
 			} else {
-				await localizedGoto('/');
+				await localizedGoto(landing);
 			}
 		} catch (e) {
 			loginError = describeLoginError(e);
@@ -105,7 +124,7 @@
 			enabled = session.enabled;
 			mode = session.mode;
 			if (!session.enabled || session.user) {
-				await localizedGoto('/');
+				await localizedGoto(landing);
 			}
 		} finally {
 			loading = false;
@@ -131,6 +150,12 @@
 			{/if}
 		</div>
 
+		{#if notice}
+			<div class="alert variant-soft-primary p-3" role="status" data-testid="login-notice">
+				<p class="alert-message text-sm">{notice}</p>
+			</div>
+		{/if}
+
 		{#if loading}
 			<div class="flex items-center gap-2 opacity-70">
 				<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current"></span>
@@ -138,7 +163,7 @@
 			</div>
 		{:else if !enabled}
 			<p class="opacity-70">{m.login_auth_disabled()}</p>
-			<button type="button" class="btn variant-filled-primary" on:click={() => localizedGoto('/')}>{m.login_continue()}</button>
+			<button type="button" class="btn variant-filled-primary" on:click={() => localizedGoto(landing)}>{m.login_continue()}</button>
 		{:else if mode === 'proxy'}
 			<p class="opacity-70">{m.login_proxy_hint()}</p>
 			<button type="button" class="btn variant-filled-primary" on:click={refresh} disabled={loading}>

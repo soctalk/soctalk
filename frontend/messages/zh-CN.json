@@ -711,6 +711,8 @@
 	"login_proxy_hint": "此部署使用上游身份验证。请通过您的 SSO 提供方登录后刷新。",
 	"login_refresh": "刷新会话",
 	"login_session_check_failed": "无法检查会话。",
+	"login_session_expired": "您的会话已过期，请重新登录。",
+	"login_signed_out": "您已退出登录。",
 	"login_submit": "登录",
 	"login_title": "登录",
 	"login_too_many_attempts": "登录尝试次数过多。请等待几分钟后重试。",

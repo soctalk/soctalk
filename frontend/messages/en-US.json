@@ -613,6 +613,8 @@
 	"login_proxy_hint": "This deployment uses upstream authentication. Sign in via your SSO provider and refresh.",
 	"login_refresh": "Refresh Session",
 	"login_session_check_failed": "Unable to check session.",
+	"login_session_expired": "Your session expired. Please sign in again.",
+	"login_signed_out": "You have been signed out.",
 	"login_submit": "Sign in",
 	"login_title": "Sign in",
 	"login_too_many_attempts": "Too many sign-in attempts. Wait a few minutes and try again.",
