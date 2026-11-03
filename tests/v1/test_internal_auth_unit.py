@@ -88,21 +88,21 @@ class _StubDBMiddleware:
 
 
 # Capture the real middleware class BEFORE stubbing so the module-scoped
-# cleanup fixture below can restore it. The stub assignment happens at
-# import (collection) time; the damage only becomes visible to OTHER test
-# modules once ``_reload_app`` re-imports ``app_v1`` (which then binds the
-# stub). Without restoration, every later ``create_app()`` — e.g. the
-# metrics-bridge integration tests' fixture-time client — silently runs
-# with a no-op DB session and logins 401 on "unknown email".
+# fixture below can restore it. The stub is installed by that fixture, i.e.
+# only while THIS module's tests run. It used to be assigned at import time,
+# which is collection time: every module that ran before this one (and first
+# imported ``app_v1`` then) silently got a no-op DB session, so an HTTP-level
+# integration test saw logins 401 on "unknown email" and writes vanish.
+# Without restoration, every later ``create_app()`` (e.g. the metrics-bridge
+# integration tests' fixture-time client) would be stubbed too.
 _REAL_DB_MIDDLEWARE = db_mod.DBSessionMiddleware
 _PRIOR_AUTH_MODE = os.environ.get("SOCTALK_AUTH_MODE")
-
-db_mod.DBSessionMiddleware = _StubDBMiddleware
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _restore_global_modules():
-    """Undo this module's process-global mutations at teardown.
+    """Install the stub middleware for this module; undo every
+    process-global mutation at teardown.
 
     1. Restore the real ``DBSessionMiddleware`` on ``tenancy.db``.
     2. Restore ``SOCTALK_AUTH_MODE`` to its pre-module value.
@@ -110,6 +110,7 @@ def _restore_global_modules():
        re-bind against the restored state — later tests that call
        ``create_app()`` get the REAL middleware stack again.
     """
+    db_mod.DBSessionMiddleware = _StubDBMiddleware
     yield
     db_mod.DBSessionMiddleware = _REAL_DB_MIDDLEWARE
     if _PRIOR_AUTH_MODE is None:
