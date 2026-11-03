@@ -352,6 +352,11 @@ async def assume_tenant(
     users use this to switch which tenant they're viewing without
     re-logging-in. ``slug=null + tenant_id=null`` clears the pin and
     returns to cross-tenant view.
+
+    The target must exist (404 otherwise), and every change of pin is
+    audited as ``user.impersonate`` on the tenant concerned (the one
+    entered, or the one left when the pin is cleared), so the tenant's
+    audit trail shows when MSSP staff opened it.
     """
     identity = getattr(request.state, "user_identity", None)
     if identity is None:
@@ -359,13 +364,17 @@ async def assume_tenant(
     if identity.get("user_type") != "mssp":
         raise HTTPException(403, "tenant users cannot assume tenants")
 
+    from sqlalchemy import select as _select
+
+    from soctalk.core.auth.models import Session as _Session
+    from soctalk.core.observability.audit import log_audit
+    from soctalk.core.tenancy.context import set_request_db_context
+    from soctalk.core.tenancy.models import AuditAction
+    from soctalk.core.tenancy.models import Tenant as _Tenant
+
     db = _db(request)
     target_tid: UUID | None = None
     if payload.slug:
-        from sqlalchemy import select as _select
-
-        from soctalk.core.tenancy.models import Tenant as _Tenant
-
         target_tid = (
             await db.execute(
                 _select(_Tenant.id).where(_Tenant.slug == payload.slug)
@@ -375,26 +384,53 @@ async def assume_tenant(
             raise HTTPException(404, "slug not found")
     elif payload.tenant_id:
         try:
-            target_tid = UUID(payload.tenant_id)
+            wanted = UUID(payload.tenant_id)
         except ValueError:
             raise HTTPException(400, "invalid tenant_id")
+        target_tid = (
+            await db.execute(_select(_Tenant.id).where(_Tenant.id == wanted))
+        ).scalar_one_or_none()
+        if target_tid is None:
+            raise HTTPException(404, "tenant not found")
 
     session_id_raw = getattr(request.state, "session_id", None)
     if session_id_raw is None:
         raise HTTPException(500, "session not attached")
-    from sqlalchemy import select as _select2
-
-    from soctalk.core.auth.models import Session as _Session
 
     session_row = (
         await db.execute(
-            _select2(_Session).where(_Session.id == UUID(session_id_raw))
+            _select(_Session).where(_Session.id == UUID(session_id_raw))
         )
     ).scalar_one_or_none()
     if session_row is None:
         raise HTTPException(401, "session not found")
+    previous = session_row.tenant_context
     session_row.tenant_context = target_tid
     await db.flush()
+
+    if target_tid != previous:
+        # audit_log RLS only accepts a tenant's row while the session is
+        # scoped to that tenant, so write the "left" row before re-scoping
+        # and the "entered" row after.
+        audit = {
+            "action": AuditAction.USER_IMPERSONATE,
+            "actor_principal": identity["role"],
+            "actor_id": str(identity["user_id"]),
+            "resource_type": "tenant",
+        }
+        if previous is not None and target_tid is None:
+            await log_audit(
+                db, **audit, tenant_id=previous, resource_id=str(previous),
+                notes="tenant pin cleared",
+            )
+        await set_request_db_context(
+            db, tenant_id=target_tid, audience="mssp", user_role=identity["role"]
+        )
+        if target_tid is not None:
+            await log_audit(
+                db, **audit, tenant_id=target_tid, resource_id=str(target_tid),
+                notes=f"tenant pin set; previous={previous or 'none'}",
+            )
 
     cur_slug, cur_name = await _resolve_tenant_label(db, target_tid)
     return UserPayload(
