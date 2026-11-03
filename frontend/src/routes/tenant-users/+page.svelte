@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type TenantUser, type TenantUserCreated } from '$lib/api/client';
+	import { api, type AuthUser, type TenantUser, type TenantUserCreated } from '$lib/api/client';
 	import { authSession, canManageTenantUsers, isMsspUser } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
 	import { localizedGoto } from '$lib/i18n';
+	import PasswordResetDialog from '$lib/components/users/PasswordResetDialog.svelte';
 
 	// Tenant-side (/api/tenant/*) page. An MSSP-side user who reaches it by
 	// URL is denied by the audience wall, so bounce them rather than surface
@@ -22,6 +23,8 @@
 	let role = 'tenant_analyst';
 	let displayName = '';
 	let justCreated: TenantUserCreated | null = null;
+	// Row whose password is being reset; the one-time password itself stays inside the dialog.
+	let resetTarget: TenantUser | null = null;
 
 	// `label`/`short` hold message FUNCTIONS (called at render time) — never
 	// evaluate messages at module scope (#52).
@@ -101,6 +104,16 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to reactivate';
 		}
+	}
+
+	// Your own password goes through /account/password; a deactivated user cannot sign in, so the
+	// API asks for a reactivation first (409).
+	function canReset(u: TenantUser, me: AuthUser | null): boolean {
+		return u.active && u.id !== me?.user_id;
+	}
+
+	async function resetPassword(userId: string): Promise<string> {
+		return (await api.tenantUsers.resetPassword(userId)).temporary_password;
 	}
 
 	onMount(load);
@@ -212,6 +225,11 @@
 							</td>
 							<td class="px-3 py-2 text-right">
 								{#if $canManageTenantUsers}
+									{#if canReset(u, $authSession.user)}
+										<button class="text-xs text-blue-400 hover:underline mr-3" on:click={() => (resetTarget = u)}>
+											{m.pwreset_action()}
+										</button>
+									{/if}
 									{#if u.active}
 										<button class="text-xs text-red-400 hover:underline" on:click={() => deactivate(u)}>
 											{m.adm_deactivate()}
@@ -230,3 +248,12 @@
 		</div>
 	{/if}
 </div>
+
+{#if resetTarget && $canManageTenantUsers}
+	<PasswordResetDialog
+		email={resetTarget.email}
+		userId={resetTarget.id}
+		reset={resetPassword}
+		on:close={() => (resetTarget = null)}
+	/>
+{/if}

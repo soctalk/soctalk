@@ -79,10 +79,19 @@ All under `/api/auth/*`. JSON. State-changing routes protected per §6.
 | GET    | `/api/auth/me`                                | returns current identity payload       |
 | POST   | `/api/auth/password/change`                   | old + new, authenticated               |
 | POST   | `/api/mssp/users/{id}/password/reset`         | admin forced reset, sets `must_change` |
+| POST   | `/api/tenant/users/{id}/password/reset`       | tenant_admin forced reset of an own-tenant user, sets `must_change` |
 
-The admin-reset endpoint generates a strong random password server-side
-and returns it once in the response body; the admin hands it to the
+The admin-reset endpoints generate a strong random password server-side
+and return it once in the response body; the admin hands it to the
 user out-of-band. Self-service email-based reset is deferred (§12).
+
+The MSSP endpoint resets MSSP staff only. Tenant users are reset by a
+`tenant_admin` of the same tenant through the tenant endpoint
+(`tenant_manage_users`), which runs under that tenant's RLS context and
+answers 404 for anyone outside it (MSSP staff, other tenants), 400 for
+the caller's own account (use `/api/auth/password/change`), and 409 for
+a deactivated user (reactivate first: a deactivated user cannot sign in,
+so a reset password would only become live on a later reactivation).
 
 In `AUTH_MODE=proxy`, every endpoint in this table responds with 404.
 
@@ -215,12 +224,16 @@ In the header of both apps, visible when authenticated:
 - "Sign out" — `POST /api/auth/logout`, then navigate to `/login` with
   a flash message "You have been signed out."
 
-### 8.5 Admin reset (MSSP console)
+### 8.5 Admin reset (MSSP console and tenant user admin)
 
-On the user detail page in the MSSP console:
+On the user list in the MSSP console (Staff users) and in the tenant's
+own user admin (Users):
 
-- "Reset password" button, permission-gated to `platform_admin` and
-  `mssp_admin`.
+- "Reset password" button, permission-gated to `manage_users`
+  (`platform_admin`, `mssp_admin`) on the MSSP side and to
+  `tenant_manage_users` (`tenant_admin`) on the tenant side. Not shown on
+  the caller's own row or for a deactivated user, nor (MSSP side) on a
+  `platform_admin` row unless the caller is a `platform_admin`.
 - Confirmation modal explains: "Generates a one-time password, revokes
   all of this user's active sessions, and forces them to change it at
   next login."

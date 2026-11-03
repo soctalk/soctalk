@@ -1173,7 +1173,10 @@ export const api = {
 				body: JSON.stringify(patch)
 			}),
 		deactivate: (userId: string) =>
-			request<{ deactivated: string }>(`/tenant/users/${userId}/deactivate`, { method: 'POST' })
+			request<{ deactivated: string }>(`/tenant/users/${userId}/deactivate`, { method: 'POST' }),
+		// One-time password for another active user of the caller's tenant; shown once, never stored.
+		resetPassword: (userId: string) =>
+			request<AdminPasswordReset>(`/tenant/users/${userId}/password/reset`, { method: 'POST' })
 	},
 	// MSSP-side staff user management (mssp_admin / platform_admin, MANAGE_USERS).
 	msspUsers: {
@@ -1186,7 +1189,10 @@ export const api = {
 		update: (userId: string, patch: { role?: string; active?: boolean; display_name?: string }) =>
 			request<TenantUser>(`/mssp/users/${userId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
 		deactivate: (userId: string) =>
-			request<{ deactivated: string }>(`/mssp/users/${userId}/deactivate`, { method: 'POST' })
+			request<{ deactivated: string }>(`/mssp/users/${userId}/deactivate`, { method: 'POST' }),
+		// One-time password for another MSSP staff user; shown once, never stored.
+		resetPassword: (userId: string) =>
+			request<AdminPasswordReset>(`/mssp/users/${userId}/password/reset`, { method: 'POST' })
 	}
 	};
 
@@ -1200,6 +1206,13 @@ export interface TenantUser {
 
 export interface TenantUserCreated extends TenantUser {
 	temporary_password: string;
+}
+
+// Response of an admin password reset (MSSP or tenant side). The password is returned once.
+export interface AdminPasswordReset {
+	user_id: string;
+	temporary_password: string;
+	must_change: boolean;
 }
 
 // Mirrors the server EngagementDTO. Note: there is NO `status` field on the

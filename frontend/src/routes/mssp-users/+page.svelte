@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type TenantUser, type TenantUserCreated } from '$lib/api/client';
-	import { canManageUsers } from '$lib/stores';
+	import { api, type AuthUser, type TenantUser, type TenantUserCreated } from '$lib/api/client';
+	import { authSession, canManageUsers } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
+	import PasswordResetDialog from '$lib/components/users/PasswordResetDialog.svelte';
 
 	let users: TenantUser[] = [];
 	let loading = true;
@@ -14,6 +15,8 @@
 	let role = 'analyst';
 	let displayName = '';
 	let justCreated: TenantUserCreated | null = null;
+	// Row whose password is being reset; the one-time password itself stays inside the dialog.
+	let resetTarget: TenantUser | null = null;
 
 	// Codes only; short label + full description resolve via messages at call time (#52).
 	const ROLES = [
@@ -89,6 +92,18 @@
 		} catch (e) {
 			error = e instanceof Error ? e.message : m.su_update_failed();
 		}
+	}
+
+	// Your own password goes through /account/password, and only a platform_admin may reset a
+	// platform_admin (the API answers 403 otherwise). A deactivated user cannot sign in, so
+	// reactivate first.
+	function canReset(u: TenantUser, me: AuthUser | null): boolean {
+		if (!u.active || u.id === me?.user_id) return false;
+		return u.role !== 'platform_admin' || me?.role === 'platform_admin';
+	}
+
+	async function resetPassword(userId: string): Promise<string> {
+		return (await api.msspUsers.resetPassword(userId)).temporary_password;
 	}
 
 	onMount(load);
@@ -192,6 +207,11 @@
 							</td>
 							<td class="px-3 py-2 text-right">
 								{#if $canManageUsers}
+									{#if canReset(u, $authSession.user)}
+										<button class="text-xs text-blue-400 hover:underline mr-3" on:click={() => (resetTarget = u)}>
+											{m.pwreset_action()}
+										</button>
+									{/if}
 									{#if u.active}
 										<button class="text-xs text-red-400 hover:underline" on:click={() => setActive(u, false)}>{m.adm_deactivate()}</button>
 									{:else}
@@ -206,3 +226,12 @@
 		</div>
 	{/if}
 </div>
+
+{#if resetTarget && $canManageUsers}
+	<PasswordResetDialog
+		email={resetTarget.email}
+		userId={resetTarget.id}
+		reset={resetPassword}
+		on:close={() => (resetTarget = null)}
+	/>
+{/if}

@@ -1,6 +1,7 @@
 """Tenant self-service user management.
 
-Lets a ``tenant_admin`` create, list, update, and deactivate its own org's logins. Every write is
+Lets a ``tenant_admin`` create, list, update, deactivate, and reset the password of its own org's
+logins. Every write is
 pinned to the caller's own tenant from the token and runs inside ``tenant_context`` so RLS (WITH
 CHECK on ``app.current_tenant_id``) guarantees a tenant admin can only ever touch users in its own
 tenant. Cross-cutting invariants (role assignability, the admin floor, session revocation) live in
@@ -14,10 +15,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from soctalk.core.api.auth import AdminResetResponse
 from soctalk.core.api.user_admin import (
     assert_role_assignable,
     guard_admin_floor,
@@ -25,8 +27,10 @@ from soctalk.core.api.user_admin import (
     revoke_sessions_if_needed,
     validate_email,
 )
+from soctalk.core.auth.config import AuthMode, get_auth_mode
 from soctalk.core.auth.models import PasswordCredential
 from soctalk.core.auth.passwords import hash_password
+from soctalk.core.auth.service import admin_reset_password
 from soctalk.core.observability.audit import log_audit
 from soctalk.core.tenancy.auth import current_identity
 from soctalk.core.tenancy.context import tenant_context
@@ -292,6 +296,67 @@ async def deactivate_tenant_user(user_id: UUID, request: Request) -> DeactivateR
         )
     await revoke_sessions_if_needed(db, user_id=user_id, role_changed=False, deactivated=True)
     return DeactivateResult(deactivated=str(user_id))
+
+
+@tenant_users_router.post(
+    "/users/{user_id}/password/reset",
+    response_model=AdminResetResponse,
+    dependencies=[Depends(_MANAGE)],
+)
+async def reset_tenant_user_password(user_id: UUID, request: Request) -> AdminResetResponse:
+    """Issue a one-time password for another active user of the caller's own tenant.
+
+    The tenant-side counterpart of ``POST /api/mssp/users/{id}/password/reset`` (which only
+    touches MSSP staff). ``admin_reset_password`` sets ``must_change``, clears the lockout,
+    revokes every session of the target, and writes the ``auth.password.reset.admin`` audit row;
+    all of it runs under the caller's tenant RLS context. The plaintext is returned once.
+
+    - Self → 400: your own password goes through ``POST /api/auth/password/change``.
+    - Not a tenant user of the caller's tenant (MSSP staff, another tenant, unknown) → 404.
+    - Deactivated target → 409: the password could not be used anyway (login rejects inactive
+      users), so reactivate first. Resetting first would hand out a credential that silently
+      becomes live on a later reactivation.
+    - Proxy auth mode → 404, like the MSSP reset: the identity provider owns passwords.
+    """
+    # Compare values, not enum identity: the mode is read per request and must not depend on
+    # which import of ``AuthMode`` this module happens to hold.
+    if get_auth_mode().value != AuthMode.INTERNAL.value:
+        raise HTTPException(404, "Not Found")
+    identity = current_identity(request)
+    if identity.user_id == user_id:
+        raise HTTPException(
+            400, "you cannot reset your own password here; use password change instead"
+        )
+    db = _db(request)
+    tid = _caller_tenant(request)
+    async with tenant_context(db, tid):
+        # RLS on ``users`` also exposes tenant_id IS NULL rows (MSSP staff), so pin both the
+        # user type and the tenant explicitly. Lock the row so a concurrent deactivate cannot
+        # slip between the active check and the reset.
+        row = (
+            await db.execute(
+                text(
+                    "SELECT active FROM users "
+                    "WHERE id = :id AND user_type = 'tenant' AND tenant_id = :tid FOR UPDATE"
+                ),
+                {"id": str(user_id), "tid": str(tid)},
+            )
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(404, "user not found")
+        if not row["active"]:
+            raise HTTPException(409, "user is deactivated; reactivate the user first")
+        actor = (
+            await db.execute(select(User).where(User.id == identity.user_id))
+        ).scalar_one_or_none()
+        if actor is None:
+            raise HTTPException(500, "acting user not resolvable")
+        temporary_password = await admin_reset_password(
+            db, actor_user=actor, target_user_id=user_id
+        )
+    return AdminResetResponse(
+        user_id=str(user_id), temporary_password=temporary_password, must_change=True
+    )
 
 
 __all__ = ["tenant_users_router"]
