@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type AuthSession } from '$lib/api/client';
+	import { api, ApiError, type AuthSession } from '$lib/api/client';
 	import { addToast, authSession, tenantContext } from '$lib/stores';
 	import { m } from '$lib/paraglide/messages';
 	import { localizedGoto } from '$lib/i18n';
+	import { formatDateTime } from '$lib/i18n/format';
 
 	// Dev convenience: pre-fill the bootstrap admin creds when running
 	// vite dev so you can hit Sign in immediately. Stripped from
@@ -15,6 +16,34 @@
 	let submitting = false;
 	let mode: AuthSession['mode'] = 'none';
 	let enabled = false;
+	// Shown inline under the form until the next attempt. A toast is easy to
+	// miss and times out; a failed sign-in must stay on screen.
+	let loginError = '';
+
+	/** Locked-until timestamp from a 423, whose detail is an object. */
+	function lockedUntil(e: ApiError): string | null {
+		try {
+			const body = JSON.parse(e.message) as { detail?: { locked_until?: unknown } };
+			const until = body.detail?.locked_until;
+			return typeof until === 'string' ? until : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function describeLoginError(e: unknown): string {
+		if (e instanceof ApiError) {
+			if (e.status === 401) return m.login_invalid_creds();
+			if (e.status === 429) return m.login_too_many_attempts();
+			if (e.status === 423) {
+				const until = lockedUntil(e);
+				return until
+					? m.login_locked_until({ until: formatDateTime(until) })
+					: m.login_locked();
+			}
+		}
+		return e instanceof Error && e.message ? e.message : m.login_invalid_creds();
+	}
 
 	onMount(async () => {
 		try {
@@ -39,6 +68,7 @@
 
 	async function submit() {
 		submitting = true;
+		loginError = '';
 		try {
 			// Only pin tenant_slug when the URL is a *tenant* slug. MSSP
 			// slugs identify the install, not a tenant scope — login
@@ -61,11 +91,7 @@
 				await localizedGoto('/');
 			}
 		} catch (e) {
-			addToast({
-				type: 'error',
-				title: m.login_failed_title(),
-				message: e instanceof Error ? e.message : m.login_invalid_creds()
-			});
+			loginError = describeLoginError(e);
 		} finally {
 			submitting = false;
 		}
@@ -128,6 +154,14 @@
 					<span class="font-medium">{m.login_password()}</span>
 					<input type="password" class="input" autocomplete="current-password" bind:value={password} />
 				</label>
+				{#if loginError}
+					<div class="alert variant-soft-error p-3" role="alert">
+						<div class="alert-message">
+							<p class="font-medium">{m.login_failed_title()}</p>
+							<p class="text-sm">{loginError}</p>
+						</div>
+					</div>
+				{/if}
 				<button type="submit" class="btn variant-filled-primary w-full" disabled={submitting}>
 					{#if submitting}
 						<span class="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></span>
