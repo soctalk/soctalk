@@ -65,6 +65,32 @@ def verify_password(plain: str, stored_hash: str) -> tuple[bool, str | None]:
     return (True, None)
 
 
+_DUMMY_HASH: str | None = None
+
+
+def spend_verify_time(plain: str) -> None:
+    """Run one argon2 verify against a throwaway hash and discard the result.
+
+    Sign-in paths that reject before reaching a real verify (unknown e-mail,
+    deactivated user, no credential) call this so they take as long as a wrong
+    password. Without it, an unknown e-mail answered ~50 ms faster than a known
+    one, which tells an attacker which addresses have accounts.
+    """
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = _HASHER.hash(secrets.token_urlsafe(16))
+    verify_password(plain, _DUMMY_HASH)
+
+
+def normalize_email(email: str) -> str:
+    """The canonical form of a login e-mail: surrounding spaces dropped, lower case.
+
+    Accounts are stored lower-case (``user_admin.validate_email``); sign-in must
+    accept the same address however the user typed it.
+    """
+    return email.strip().lower()
+
+
 def generate_admin_reset_password() -> str:
     """Produce a strong random password for the admin-reset flow.
 

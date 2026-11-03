@@ -20,6 +20,8 @@ from soctalk.core.auth.passwords import (
     PasswordPolicyError,
     generate_admin_reset_password,
     hash_password,
+    normalize_email,
+    spend_verify_time,
     validate_password,
     verify_password,
 )
@@ -120,8 +122,11 @@ async def authenticate(
     setting the session cookie on the response.
     """
 
-    user = await _get_user_by_email(db, email)
+    # Rejections before the real verify still pay for one argon2 verify, so the
+    # response time does not reveal whether the e-mail has an account.
+    user = await _get_user_by_email(db, normalize_email(email))
     if user is None:
+        spend_verify_time(password)
         await log_audit(
             db,
             action="auth.login.failure",
@@ -158,6 +163,7 @@ async def authenticate(
     # regardless of the active flag; gate them here before any
     # credential verification.
     if not user.active:
+        spend_verify_time(password)
         await log_audit(
             db,
             action="auth.login.failure",
@@ -172,6 +178,7 @@ async def authenticate(
     if cred is None:
         # Users authenticated via proxy handoff may not have a local
         # credential. They cannot log in here.
+        spend_verify_time(password)
         await log_audit(
             db,
             action="auth.login.failure",
@@ -260,7 +267,15 @@ async def change_password(
     On success, revokes all other sessions for the user (preserves the
     current one), clears ``must_change``, emits ``auth.password.changed``.
     Raises ``InvalidCredentials`` on wrong old password,
-    ``PasswordPolicyError`` if the new password fails policy.
+    ``PasswordPolicyError`` if the new password fails policy or equals the
+    current one, ``AccountLocked`` while the account is locked.
+
+    A wrong current password counts toward the same lockout as a failed
+    sign-in and is audited (``auth.password.change.failure``): otherwise a
+    stolen session could guess the real password here without limit and then
+    take the account over. When the lockout triggers here, every session of
+    the user is revoked, the guessing one included. The caller must commit
+    before answering, since the request session rolls back on 4xx.
     """
 
     validate_password(new_password)
@@ -269,13 +284,60 @@ async def change_password(
     if cred is None:
         raise InvalidCredentials()
 
+    user = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    tenant_id = user.tenant_id if user else None
+
+    now = _now()
+    locked_until = _ensure_aware(cred.locked_until)
+    if locked_until is not None and now < locked_until:
+        await log_audit(
+            db,
+            action="auth.password.change.failure",
+            actor_principal="user",
+            actor_id=str(user_id),
+            tenant_id=tenant_id,
+            notes="reason=locked",
+        )
+        raise AccountLocked(locked_until)
+
     matched, _ = verify_password(old_password, cred.password_hash)
     if not matched:
+        cred.consecutive_failures += 1
+        locked_now = cred.consecutive_failures >= LOCKOUT_THRESHOLD
+        if locked_now:
+            cred.locked_until = now + LOCKOUT_DURATION
+            await log_audit(
+                db,
+                action="auth.lockout.triggered",
+                actor_principal="system",
+                actor_id="system:auth",
+                tenant_id=tenant_id,
+                notes=f"user_id={user_id} failures={cred.consecutive_failures} via=password_change",
+            )
+        db.add(cred)
+        await db.flush()
+        if locked_now:
+            await revoke_all_user_sessions(db, user_id=user_id)
+        await log_audit(
+            db,
+            action="auth.password.change.failure",
+            actor_principal="user",
+            actor_id=str(user_id),
+            tenant_id=tenant_id,
+            notes="reason=bad_password",
+        )
         raise InvalidCredentials()
+
+    # ``must_change`` exists so an administrator-known password gets replaced;
+    # re-using the current one would clear the flag and keep it.
+    if new_password == old_password:
+        raise PasswordPolicyError("The new password must be different from the current one.")
 
     cred.password_hash = hash_password(new_password)
     cred.must_change = False
-    cred.updated_at = _now()
+    cred.updated_at = now
     cred.consecutive_failures = 0
     cred.locked_until = None
     db.add(cred)
@@ -285,15 +347,12 @@ async def change_password(
         db, user_id=user_id, except_session_id=current_session_id
     )
 
-    user = (
-        await db.execute(select(User).where(User.id == user_id))
-    ).scalar_one_or_none()
     await log_audit(
         db,
         action="auth.password.changed",
         actor_principal="user",
         actor_id=str(user_id),
-        tenant_id=user.tenant_id if user else None,
+        tenant_id=tenant_id,
     )
 
 
@@ -338,6 +397,12 @@ async def admin_reset_password(
     await db.flush()
 
     await revoke_all_user_sessions(db, user_id=target_user_id)
+    # The reset also lifts the sign-in rate limit for this e-mail; otherwise
+    # the in-process limiter keeps answering 429 to the new password for up
+    # to 15 minutes after an administrator unlocked the account.
+    from soctalk.core.auth.rate_limit import default_limiter
+
+    default_limiter().forget_email(target.email)
 
     await log_audit(
         db,

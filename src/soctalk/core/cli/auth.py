@@ -38,9 +38,11 @@ from soctalk.core.auth.passwords import (
     MIN_PASSWORD_LENGTH,
     PasswordPolicyError,
     hash_password,
+    normalize_email,
     validate_password,
 )
 from soctalk.core.observability.audit import log_audit
+from soctalk.core.tenancy.auth import _lookup_user_by_email
 from soctalk.core.tenancy.models import User
 
 
@@ -69,9 +71,8 @@ async def _set_password(email: str) -> int:
     sm = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sm() as db:  # type: AsyncSession
-            user = (
-                await db.execute(select(User).where(User.email == email))
-            ).scalar_one_or_none()
+            # Same resolution as sign-in: exact, else unambiguous case-insensitive.
+            user = await _lookup_user_by_email(db, email)
             if user is None:
                 print(f"No user with email {email!r}.", file=sys.stderr)
                 return 1
@@ -148,12 +149,11 @@ async def _create_admin(email: str, display_name: str | None) -> int:
                 await db.flush()
                 print("Organization created.")
 
-            user = (
-                await db.execute(select(User).where(User.email == email))
-            ).scalar_one_or_none()
+            # Same resolution as sign-in: exact, else unambiguous case-insensitive.
+            user = await _lookup_user_by_email(db, email)
             if user is None:
                 user = User(
-                    email=email,
+                    email=normalize_email(email),
                     display_name=display_name or email.split("@")[0],
                     user_type="mssp",
                     role="mssp_admin",

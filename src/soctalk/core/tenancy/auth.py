@@ -42,7 +42,7 @@ from uuid import UUID
 
 import structlog
 from fastapi import HTTPException, Request, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.tenancy.models import Role, User, UserType
@@ -124,8 +124,24 @@ def _trusted_cidrs_from_env() -> list[str]:
 
 
 async def _lookup_user_by_email(session: AsyncSession, email: str) -> User | None:
+    """Resolve a login e-mail to its user, ignoring case and surrounding spaces.
+
+    Exact match first (unchanged behaviour, and the index path). Otherwise a
+    case-insensitive match, accepted only when it is unambiguous: accounts
+    created through the API are stored lower-case, but older or CLI-created
+    rows may not be, and ``users.email`` is not unique case-insensitively.
+    """
     result = await session.execute(select(User).where(User.email == email))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user is not None:
+        return user
+    normalized = email.strip().lower()
+    rows = (
+        await session.execute(
+            select(User).where(func.lower(User.email) == normalized).limit(2)
+        )
+    ).scalars().all()
+    return rows[0] if len(rows) == 1 else None
 
 
 async def _lookup_user_for_auth(
