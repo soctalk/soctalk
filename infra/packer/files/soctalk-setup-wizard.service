@@ -29,7 +29,7 @@ RestartSec=10
 StandardOutput=journal+console
 StandardError=journal+console
 
-# Hardening (codex review: be explicit, not handwave).
+# Hardening (be explicit, not handwave).
 # We need root because we write to /etc/soctalk and /var/lib, but we
 # don't need most capabilities.
 User=root

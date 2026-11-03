@@ -69,7 +69,7 @@ def test_mixed_provider_tiers_resolve(clean_env):
 
 
 def test_per_tier_sampling_env_reaches_resolver(clean_env):
-    # Full env-load path (Codex): SOCTALK_FAST_TEMPERATURE/_MAX_TOKENS must map
+    # Full env-load path: SOCTALK_FAST_TEMPERATURE/_MAX_TOKENS must map
     # through _TIER_ENV_PREFIXES into cfg.tiers["router"] and be picked up by
     # resolve_tier_sampling — proving the fast→router rename lines up end to end.
     from soctalk.inference import resolve_tier_sampling
@@ -289,7 +289,7 @@ def test_served_engine_with_whitespace_padded_custom_base_url_ok(clean_env):
 
 def test_served_engine_accepts_global_openai_base_url(clean_env):
     # A served tier can reuse the global OPENAI_BASE_URL the resolver inherits —
-    # no per-tier base_url required (Codex #4 review).
+    # no per-tier base_url required.
     cfg = clean_env(SOCTALK_FAST_ENGINE="vllm", OPENAI_BASE_URL="http://vllm:8000/v1",
                     ANTHROPIC_API_KEY="a")
     assert cfg.tiers["router"]["engine"] == "vllm"
@@ -362,7 +362,7 @@ def test_primary_served_engine_accepts_percent_encoded_dot_base_url(clean_env):
 
 def test_base_url_only_tier_does_not_relax_guard(clean_env):
     # A base_url-only override rides the global provider — it is NOT mixed-
-    # provider intent, so both keys must still be rejected (Codex #4 review).
+    # provider intent, so both keys must still be rejected.
     with pytest.raises(ValueError, match="mutually exclusive"):
         clean_env(ANTHROPIC_API_KEY="a", OPENAI_API_KEY="o",
                   SOCTALK_FAST_BASE_URL="http://gw/v1")

@@ -168,7 +168,7 @@ def test_siem_only_floor_and_tracks(tmp_path):
 
 def test_ticket_terms_memory_from_routine_source_stores_baseline():
     """A routine-history covering grant must be stored as a standing baseline without
-    crashing the GrantFact validator (Codex #5)."""
+    crashing the GrantFact validator."""
     from soctalk.authorization.adapter import facts_from_row, stackless_facts_from_row
     from soctalk.evals.authorization_m0 import Memory, SimCase
 

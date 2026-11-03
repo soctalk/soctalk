@@ -148,7 +148,7 @@ def canonical_usage(response: Any) -> CanonicalUsage:
         # trusted: this figure OVERRIDES our own arithmetic and is what budget
         # enforcement compares against, so a negative, NaN or infinite value
         # from a provider would under-bill or stop over_budget from ever
-        # tripping (Codex review, finding 7). A bad number is discarded, which
+        # tripping. A bad number is discarded, which
         # degrades to our estimate rather than to no ceiling at all.
         if usage.actual_cost_usd is None and block.get("cost") is not None:
             try:

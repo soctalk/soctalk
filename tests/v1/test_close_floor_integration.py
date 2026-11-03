@@ -204,7 +204,7 @@ async def test_worker_close_floor_sees_sibling_active_investigation(
 async def test_close_fp_floor_veto_helper_end_to_end(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """The extracted complete_run veto (issue #43, Codex full-module finding 5):
+    """The extracted complete_run veto (issue #43, full-module finding 5):
     an active investigation with an active key-sharing sibling is vetoed (audit
     row written); a non-active investigation is never vetoed even with a sibling
     (the close path's WHERE status='active' no-op owns that case)."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Localize the golden triage set for the per-locale breakdown (Codex idea #16).
+"""Localize the golden triage set for the per-locale breakdown.
 
 SOC alerts arrive in the tenant's language — a multinational MSSP triages
 English, Spanish, Portuguese, and Chinese alert text. The correct triage

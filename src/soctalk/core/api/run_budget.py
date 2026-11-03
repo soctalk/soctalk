@@ -129,7 +129,7 @@ class RunBudgetUpdate(BaseModel):
     With multiple dimensions, "absent means 422" per field stops working (you
     must be able to change one without touching the other), so the handler
     requires that AT LEAST ONE field be present instead — an empty body still
-    cannot silently clear anything (Codex review, finding 7).
+    cannot silently clear anything.
 
     Unknown fields are rejected, not ignored (#134). A mixed payload — one
     field spelled right, one wrong — would otherwise apply half of it and
@@ -140,7 +140,7 @@ class RunBudgetUpdate(BaseModel):
 
     token_override: StrictInt | None = None
     # StrictFloat, not float: bool is a subclass of int, so a JSON `true`
-    # would coerce to a $1.00 ceiling (Codex review round 2, finding 4).
+    # would coerce to a $1.00 ceiling.
     # StrictInt already gives the token fields this property.
     dollar_override: StrictFloat | StrictInt | None = None
     # Rolling 24h ceilings (#129). Same tri-state, same clamping.
@@ -421,8 +421,7 @@ async def update_run_budget(
     # customer_viewer, and this view carries 24h spend, remaining budget and
     # the effective ceilings. The investigations bridge deliberately blanks
     # every cost and run field for a customer audience, so exposing the same
-    # numbers here would route around that decision (Codex review round 3,
-    # finding 2). /api/tenant/llm is already pinned this way.
+    # numbers here would route around that decision. /api/tenant/llm is already pinned this way.
     dependencies=[
         Depends(require_tenant_role(Role.TENANT_ADMIN, Role.TENANT_MANAGER, Role.TENANT_ANALYST))
     ],
@@ -460,8 +459,7 @@ class RunUnlockRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Strict for the same reason as RunBudgetUpdate: this is a money field, and
-    # a JSON `true` coercing to a $1.00 ceiling is not a rounding error
-    # (Codex review round 3, finding 5).
+    # a JSON `true` coercing to a $1.00 ceiling is not a rounding error.
     dollar_budget: StrictFloat | StrictInt | None = None
     token_budget: StrictInt | None = None
 
@@ -550,7 +548,7 @@ async def unlock_run(
         # on the raw total made a run unlockable only by clearing spend the
         # runtime already disregards: a run halted on TOKENS while carrying
         # $400 of unpriced dollars could not be unlocked at all, because no
-        # ceiling under the install cap exceeds $400 (Codex round 5).
+        # ceiling under the install cap exceeds $400.
         dollars_enforceable = max(0.0, dollars_used - dollars_unpriced)
         tokens_used = int(row["tokens_used"] or 0)
         dollar_cap = run_dollar_budget_max()
@@ -563,7 +561,7 @@ async def unlock_run(
         )
         # NaN fails every comparison below, so without this it would slip past
         # the cap and the exceeds-spend check and land in the column as a
-        # ceiling that can never be reached (Codex review, finding 6).
+        # ceiling that can never be reached.
         if new_dollars != new_dollars or new_dollars in (
             float("inf"),
             float("-inf"),

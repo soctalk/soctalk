@@ -78,7 +78,7 @@ async def test_dollar_budget_resolution_never_breaks_run_creation():
 
     dollars_budget is NOT NULL with a plausible default, so unlike
     price_snapshot a failure here is invisible downstream — it must not be
-    allowed to stop a run from being created (Codex review, finding 8).
+    allowed to stop a run from being created.
     """
     from uuid import uuid4
 
@@ -109,8 +109,7 @@ def test_budget_keys_are_stripped_from_the_lower_policy_layers():
     """Ceilings are install/tenant scope only.
 
     RLS scopes which policy ROWS a tenant touches, not which keys or values
-    they carry, so stripping is what actually prevents a raised ceiling
-    (Codex review, finding 5).
+    they carry, so stripping is what actually prevents a raised ceiling.
     """
     layer = {
         "max_dollars_per_investigation": 10_000,
@@ -192,7 +191,7 @@ def test_daily_status_is_what_reports_a_cap_hit_not_the_spend_object():
     assert "0.01" in (status.reason or "")
 
 
-# --- Codex review fixes ----------------------------------------------------
+# --- Review fixes ----------------------------------------------------------
 
 
 def test_provider_reported_cost_is_validated_before_it_is_trusted():
@@ -200,8 +199,7 @@ def test_provider_reported_cost_is_validated_before_it_is_trusted():
 
     A negative, NaN or infinite value from a provider would under-bill, and an
     inf would stop over_budget from ever tripping. A bad number is discarded so
-    the call degrades to our own estimate, not to no ceiling at all
-    (Codex review, finding 7).
+    the call degrades to our own estimate, not to no ceiling at all.
     """
     from soctalk.core.pricing.usage import canonical_usage
 
@@ -225,8 +223,7 @@ def test_a_non_finite_budget_cannot_survive_the_halt_check():
     """Why NaN must never reach dollars_budget: it disables the ceiling.
 
     over_budget compares used >= budget; every comparison against NaN is
-    False, so a run carrying a NaN budget can never halt (Codex review,
-    finding 6 — the unlock endpoint now rejects it at the edge).
+    False, so a run carrying a NaN budget can never halt.
     """
     from soctalk.graph import budget
 
@@ -239,14 +236,14 @@ def test_a_non_finite_budget_cannot_survive_the_halt_check():
     assert budget.over_budget(state) is False
 
 
-# --- Codex review round 3 ---------------------------------------------------
+# --- Review round 3 ---------------------------------------------------------
 
 
 def test_duplicate_model_keys_are_rejected_after_normalization():
     """Keys are stripped, so "gpt-4o" and " gpt-4o " collapse to one.
 
     Keeping the last silently would mis-price a tenant while the caller
-    believes both entries took effect (Codex review round 3, finding 3).
+    believes both entries took effect.
     """
     from soctalk.core.tenancy.models import validate_llm_model_prices
 
@@ -540,7 +537,7 @@ async def test_price_gate_checks_each_tier_against_its_own_backend(monkeypatch):
     The gate used to derive one (kind, provider_id) from the primary and apply
     it to every model, while runtime resolved each tier separately — so a tier
     could pass on the primary's catalog row and then run 'unknown' on its own
-    gateway (Codex review of phase 3).
+    gateway.
     """
     from types import SimpleNamespace
 
@@ -609,7 +606,7 @@ async def test_price_gate_is_inert_when_tracking_is_off(monkeypatch):
 
 # --- cost tracking must actually reach runtime enforcement -----------------
 #
-# Codex review, finding 5: `cost_tracking_enabled` gated only the config-time
+# Review finding 5: `cost_tracking_enabled` gated only the config-time
 # check. `over_budget` still halted on dollars, and the UI checkbox said
 # "Dollar ceilings are not enforced" — which was false. The answer now travels
 # on the run's price snapshot, so it is fixed at run creation and a mid-run
@@ -808,7 +805,7 @@ def test_exemption_survives_a_release_and_reclaim():
     dollars_used is rehydrated from the run row on claim; dollars_unpriced was
     only in graph state, so a run released on a transient provider error came
     back with the exemption at zero and could halt on the very fallback dollars
-    the exemption exists to disregard (Codex review, phases 1-2).
+    the exemption exists to disregard.
     """
     from soctalk.graph.budget import over_budget
 
@@ -871,7 +868,7 @@ def test_only_a_genuine_fallback_is_unknown(monkeypatch):
     assert budget.enforceable_dollars(st) == 0.0
 
 
-# --- Codex round 2: the residual row must not inherit 'unknown' -------------
+# --- Round 2: the residual row must not inherit 'unknown' -------------
 
 
 def _residual_source(price_source: str | None, d_unpriced: float) -> str | None:
@@ -887,7 +884,7 @@ def test_priced_remainder_is_not_labelled_unknown():
     The unpriced $9 splits off as its own row. What remains is $1 of genuinely
     priced spend — but the report's price_source is 'unknown', because that is
     what the LAST call used. Inheriting it would exempt the $1 from the daily
-    ceiling too, under-enforcing by the priced amount (Codex round 2, P0).
+    ceiling too, under-enforcing by the priced amount.
     """
     assert _residual_source("unknown", 9.0) == "mixed"
     # And 'mixed' must not be excluded by the daily-cap rule, which keys on
@@ -911,7 +908,7 @@ def test_unlock_compares_against_enforceable_spend():
     Validating on the raw total made a run unlockable only by exceeding spend
     the runtime already disregards: a token-halted run carrying $400 of
     unpriced dollars could not be unlocked at all, since no ceiling under the
-    install cap exceeds $400 (Codex round 5).
+    install cap exceeds $400.
     """
     dollars_used, dollars_unpriced = 400.0, 400.0
     enforceable = max(0.0, dollars_used - dollars_unpriced)
@@ -928,7 +925,7 @@ def test_cost_tracking_off_disables_the_daily_dollar_ceiling_too():
 
     Only the per-run check honoured it, so a tenant with accounting off was
     still stopped by the daily spend ceiling — and by chat's conversation cap —
-    while the panel said "Dollar ceilings are not enforced" (Codex round 6).
+    while the panel said "Dollar ceilings are not enforced".
     """
     from soctalk.core.cost import DailyCaps, DailyCapStatus, TenantDailySpend
 
@@ -964,7 +961,7 @@ def test_tokens_still_cap_when_cost_tracking_is_off():
 def test_fleet_daily_cap_honours_the_install_switch(monkeypatch):
     """Fleet chat has no tenant policy, but an install-wide off still means off.
 
-    It was the last path enforcing dollars through the switch (Codex round 7).
+    It was the last path enforcing dollars through the switch.
     """
     from soctalk.core.cost import MsspUserDailySpend
 
@@ -985,8 +982,8 @@ def test_a_run_with_no_llm_config_still_carries_the_switch():
 
     The worker reads the switch off the snapshot, so a NULL one meant per-run
     dollar ceilings stayed enforced even with accounting off — the switch
-    looked broken for exactly the runs created before an LLM config existed
-    (Codex round 8). An empty models map prices identically (it matches
+    looked broken for exactly the runs created before an LLM config existed.
+    An empty models map prices identically (it matches
     nothing, so the legacy table takes over) while carrying the flag.
     """
     from soctalk.graph.budget import cost_tracking_off, over_budget
@@ -1059,8 +1056,7 @@ def test_a_leased_run_reserves_but_a_queued_one_does_not():
 
     'active' also covers queued and retry-waiting runs, so counting them let a
     single queued run whose budget met the daily cap block ITSELF before it was
-    ever claimed — the queue refusing to start its own work (Codex review of
-    phases 4-5).
+    ever claimed — the queue refusing to start its own work.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -1087,7 +1083,7 @@ def test_reservation_mirrors_enforceable_spend_not_raw_spend():
     over_budget() compares dollars_used MINUS the unpriced portion, so
     reserving `budget - dollars_used` left a run able to spend more enforceable
     dollars than it had reserved: $5 budget, $4 unpriced, $0 priced reserved $1
-    while still being allowed to spend $5 (Codex review of phases 4-5, round 3).
+    while still being allowed to spend $5.
     """
     def reserved(budget, used, unpriced):
         return max(budget - max(used - unpriced, 0.0), 0.0)

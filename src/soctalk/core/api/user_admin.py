@@ -1,6 +1,6 @@
 """Shared guards for user administration (tenant self-service and MSSP-side).
 
-These enforce the invariants Codex flagged for the user CRUD, in one place so the tenant and MSSP
+These enforce the user-CRUD invariants in one place so the tenant and MSSP
 endpoints cannot drift:
 
 - role assignability per audience (no cross-audience role; only a platform_admin may mint or touch a

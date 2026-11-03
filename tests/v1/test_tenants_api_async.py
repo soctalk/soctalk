@@ -2466,7 +2466,7 @@ async def test_patch_llm_global_sampling_persists_and_enqueues_reconcile(
 async def test_patch_llm_sampling_out_of_range_rejected():
     """Bounds are enforced on the payload model (temperature 0–2, max_tokens
     1–8192) so an out-of-range value never reaches Helm validation. Booleans are
-    rejected too — Pydantic would otherwise coerce True→1.0 (Codex #4)."""
+    rejected too — Pydantic would otherwise coerce True→1.0."""
     import pytest as _pytest
     from pydantic import ValidationError
 

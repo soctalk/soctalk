@@ -95,7 +95,7 @@
 	$: doneClosed = scan.doneClosed;
 	$: doneHuman = scan.doneHuman;
 
-	// Column labels AND fills share one progressive basis (Codex P1: a
+	// Column labels AND fills share one progressive basis (a
 	// label scaled one way over a fill scaled another can visibly
 	// disagree under sampling): the landed-dot fraction projected onto
 	// the exact day aggregates in lapse mode, the exact today-so-far

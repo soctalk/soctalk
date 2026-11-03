@@ -31,7 +31,7 @@ from soctalk.triage_policy.registry import BUILTIN_TRIAGE_POLICIES, FILE_PRIORIT
 # Only the authorization engine exists as a decision module today (registry.py).
 KNOWN_DECISION_MODULES = frozenset({"authorization_engine"})
 _VALID_ACTIONS = frozenset(a.value for a in SupervisorAction)
-# CLOSE may not be GRANTED by an authored policy (Codex review, High): listing it
+# CLOSE may not be GRANTED by an authored policy: listing it
 # adds nothing over an unconstrained phase (the baseline already permits the router
 # close), but a constrained set like {decide: [CLOSE]} would make the illegal-action
 # remap rewrite EVERY proposal to CLOSE — a forced close with no reasoning-tier
@@ -224,7 +224,7 @@ async def set_authored_status(
 ) -> dict[str, Any] | None:
     """Activate ('active') or deactivate ('shadow') an authored triage policy by appending a
     status revision. Re-validates the stored definition fail-closed before it can govern
-    (Codex: old rows must re-clear the validator). Returns the new state, or None if the
+    (old rows must re-clear the validator). Returns the new state, or None if the
     triage policy doesn't exist / is retired."""
     if status not in ("active", "shadow"):
         raise TriagePolicyValidationError("status must be 'active' or 'shadow'")

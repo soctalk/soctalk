@@ -3,7 +3,7 @@
 A per-tenant cap is rendered into ``SOCTALK_CASE_RUN_{DOLLAR,TOKEN}_BUDGET`` env.
 Both must give the env TOP precedence over the claim row so the tenant override
 actually takes effect — previously the token seed was taken from the claim
-unconditionally and the env was ignored for claimed runs (Codex).
+unconditionally and the env was ignored for claimed runs.
 """
 
 from __future__ import annotations

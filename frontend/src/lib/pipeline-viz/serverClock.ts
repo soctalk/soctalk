@@ -1,4 +1,4 @@
-// Server-authoritative live clock (issue #72, Codex adjudication).
+// Server-authoritative live clock (issue #72).
 //
 // The live head must never be the browser's clock: `sync()` captures the
 // offset between the server's now() and performance.now(), and the store's

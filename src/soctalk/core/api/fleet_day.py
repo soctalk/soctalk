@@ -424,7 +424,7 @@ async def fleet_day(
 
         server_now = (await db.execute(text("SELECT now()"))).scalar_one()
 
-        # Latest-active-day fallback (Codex-adjudicated, zero-only rule):
+        # Latest-active-day fallback:
         # sparse-but-nonzero today ALWAYS wins — one alert means the day
         # has evidence; substitution on any threshold would be a hidden
         # editorial model. 'Active' is alert-anchored (the film and map

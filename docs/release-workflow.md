@@ -49,7 +49,7 @@ environment/config and the cluster's Secrets — **not in this doc**.
    `response/`, `bench/modal/`, `examples/response-playbooks/`,
    `scripts/demo-seed/`, untracked temp files). Stage named paths. `mv` to `/tmp`
    instead of `rm`.
-5. **Every fix is Codex-reviewed before commit; loop until `VERDICT: DONE`.** At
+5. **Every fix is independently reviewed before commit; loop until the review has no findings.** At
    the end of a batch, run one holistic cross-fix review — it catches interaction
    bugs the per-fix passes miss.
 6. **Never overwrite a shared/CI-owned account's password** (e.g. the demo MSSP
@@ -147,7 +147,7 @@ cert-manager. State which variant a row covered.
   charts `soctalk-system 0.2.2` (`sha256:491dc44…`), `soctalk-tenant 0.2.2`
   (`sha256:e93d0d4…`); GitHub Release with `.deb` + `.rpm`; VM appliance build
   dispatched (attaches asynchronously).
-- **Codex holistic review (hard rule 5):** pass 1 **CHANGES REQUIRED** →
+- **Holistic review (hard rule 5):** pass 1 **CHANGES REQUIRED** →
   fixed by #171/#172/#173 (+ the bump). Pass 2 confirmed those fixes and the
   bump, then returned **CHANGES REQUIRED** on two **pre-existing** L2 +
   `provided` gaps (`core/agents/api.py` is byte-identical to `v0.2.1`, and no
@@ -480,8 +480,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 - **Piping a long background command through `tail`/`head` buffers all output**,
   so a run that is stalled or blocked looks identical to one that is working.
   Stream to the file and inspect it, or you will discover an hour later that it
-  never started. Likewise `codex exec` without `< /dev/null` hangs on
-  "Reading additional input from stdin".
+  never started.
 - **`curl -sf` hides the response body**, so an auth/CSRF rejection reads as a
   bare "failed". Re-run failures with `-w '%{http_code}'` and the body before
   theorising.
@@ -500,7 +499,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 
 | Version | Tag @ sha | What / why | Gated |
 |---|---|---|---|
-| 0.2.1 | `85921ec` | Original cut: #142 (22 Codex rounds) + uv.lock sync | staging by digest; sweeps; pricing e2e 12/12; real triage |
+| 0.2.1 | `85921ec` | Original cut: #142 (22 review rounds) + uv.lock sync | staging by digest; sweeps; pricing e2e 12/12; real triage |
 | 0.2.1 | `2e097ba` | + audience-wall (#143/#144), base-URL guard, demo MSSP-surface host | staging re-applied; demo redeployed; guards verified live |
 | 0.2.1 | `90b576c` | + installer LLM model-knob (gateway → `gpt-4o` 404) | fresh QEMU one-click → real triage, no patching |
 | 0.2.1 | `9a2a2dd` | + L2 runs-worker `SOCTALK_API_VERIFY_SSL` | launchpad L2 re-run → real triage on the tenant |
@@ -509,7 +508,7 @@ generously and treat "worker didn't finish in window" as SKIP, not failure.
 | 0.2.1 | `7e4dcac` | + hard rule 10 enforcement: no shipped artifact consumes `latest` (setup wizard, packer examples + CI boot-test seed, packer chart-version defaults, `alpine/openssl` in the wazuh chart) | **scoped re-validation** — operator scoped this cut to the previously-failing mode: row 5 re-run in full → **PASS**: all 5 images `0.2.1` (was `latest`), `gen-certs` on `alpine/openssl:3.5.7`, real verdict (19,973 tokens). Rows 1–4, 6 were validated on `85da7dc` and **were NOT re-run on this cut** |
 | 0.2.1 | `5a4faa9` | + BYO/external-Wazuh egress ports derived from the tenant's configured SIEM URLs (standard NetworkPolicy + Cilium `toPorts`), `PATCH /external-siem` now re-renders on URL change, malformed explicit ports rejected (#147) | **scoped re-validation**: row 4 staging digest gate **PASS** (all containers on the re-cut digests); BYO `provided`-profile re-verified — a tenant whose SIEM URLs use non-standard ports now renders those ports in its egress policy and the adapter **reaches** the SIEM (HTTP response) where it previously logged `All connection attempts failed`. Rows 1, 2, 3, 5, 6 **NOT re-run on this cut** |
 | 0.2.1 | `df31620` | + tenant image tags no longer default to `latest` (lazy fallback to the running control plane's version); chart/doc comments corrected | rows **1–4 PASS** on fresh VMs — one-click 19,911 · charts-only 20,075 · launchpad L2 19,923 (cross-cluster) · staging digest gate green. Rows 5–6 pending the packer build. Found: L2 cloud-agent still runs `:latest` (#149); L2 tenant healthy but projected `degraded` |
-| 0.2.2 | `eceec2e` | New version: #162–#173 (ingest settings, lossless rate limit, lock-pinned deps, adapter-status NetworkPolicy, adapter health, platform drift + `:reconcile`, immutable release charts, L2 reconcile guard, severity-input crash, checkpoint health) + #170 bump. Codex pass 1 → 3 fixes; pass 2 → only pre-existing L2+`provided` gaps (shipped as known limitation) | **Upgrade variant PASS** on a single-node stock-k3s install (existing 0.2.1-line install with one `provided` tenant on an external Wazuh 4.14, openai-compatible gateway, TLS via the ingress default cert; Traefik): raw `helm upgrade … --version 0.2.2` with chart defaults → login 200, schema unchanged; tenant rolled with `:reconcile` onto `soctalk-tenant 0.2.2`; `staging-released-bits.sh 0.2.2` **PASS** (every soctalk container on the published digest; no `latest`); real verdict **7,633 tokens** (synthetic alert via the real-triage recipe); UI e2e 24/0. **NOT VALIDATED on this cut:** row 1 one-click (no fresh VM), row 2 *fresh* charts-only install, row 3 launchpad L2 (and L2+`provided` is a known limitation), row 4 staging host (not reachable from this environment; the gate script ran against the install above instead), row 5 VM appliance (build pending), row 6 OS packages (attached, not installed) |
+| 0.2.2 | `eceec2e` | New version: #162–#173 (ingest settings, lossless rate limit, lock-pinned deps, adapter-status NetworkPolicy, adapter health, platform drift + `:reconcile`, immutable release charts, L2 reconcile guard, severity-input crash, checkpoint health) + #170 bump. Review pass 1 → 3 fixes; pass 2 → only pre-existing L2+`provided` gaps (shipped as known limitation) | **Upgrade variant PASS** on a single-node stock-k3s install (existing 0.2.1-line install with one `provided` tenant on an external Wazuh 4.14, openai-compatible gateway, TLS via the ingress default cert; Traefik): raw `helm upgrade … --version 0.2.2` with chart defaults → login 200, schema unchanged; tenant rolled with `:reconcile` onto `soctalk-tenant 0.2.2`; `staging-released-bits.sh 0.2.2` **PASS** (every soctalk container on the published digest; no `latest`); real verdict **7,633 tokens** (synthetic alert via the real-triage recipe); UI e2e 24/0. **NOT VALIDATED on this cut:** row 1 one-click (no fresh VM), row 2 *fresh* charts-only install, row 3 launchpad L2 (and L2+`provided` is a known limitation), row 4 staging host (not reachable from this environment; the gate script ran against the install above instead), row 5 VM appliance (build pending), row 6 OS packages (attached, not installed) |
 
 ## Known follow-ups
 

@@ -167,15 +167,13 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                          -- Compared on the FAMILY id as well, because runtime
                          -- lookup tries exact then version-stripped. Without
                          -- this, importing `gpt-4o` re-priced tenants pinned to
-                         -- `gpt-4o-2024-08-06` while reporting none affected
-                         -- (Codex, round 4).
+                         -- `gpt-4o-2024-08-06` while reporting none affected.
                          COALESCE(i.llm_fast_model, i.llm_model),
                          COALESCE(i.llm_reasoning_model, i.llm_model),
                          -- The bare primary too: chat runs on it, and with both
                          -- overrides set the COALESCEs above never reach it —
                          -- so an operator was told a price change affected no
-                         -- tenants while it changed what their chat cost
-                         -- (Codex review of the chat-role change).
+                         -- tenants while it changed what their chat cost.
                          i.llm_model
                        )
                     OR regexp_replace(
@@ -194,8 +192,7 @@ async def _tenants_using(db: AsyncSession, model: str) -> list[str]:
                          -- Per-tier models live in llm_tiers JSONB and are
                          -- consumed by render and runtime, but the scalar
                          -- columns above never see them — so a price change
-                         -- to a tier-only model reported no affected tenants
-                         -- (Codex, round 2).
+                         -- to a tier-only model reported no affected tenants.
                          SELECT 1
                            FROM jsonb_each(COALESCE(i.llm_tiers, '{}'::jsonb)) AS tier(k, v)
                           WHERE v->>'model' = :m

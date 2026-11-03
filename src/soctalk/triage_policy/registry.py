@@ -131,7 +131,7 @@ def parse_triage_policy_text(text: str) -> TriagePolicy:
             f"(got {pb.priority}) — built-in protections may not be outranked"
         )
     if pb.deterministic_disposition is not None:
-        # Codex #44 High: minting a new auto-close CLASS is a code-review
+        # #44: minting a new auto-close CLASS is a code-review
         # decision (a vetted built-in), never file data — the class-attestation
         # veto trusts the triage policy's own rule_groups, so an authored file could
         # otherwise declare any group operational and deterministically close it.

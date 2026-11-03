@@ -100,7 +100,7 @@ def provider_kind_for(
     arbitrary host, so without this it classified as ``openai_compatible`` and
     could never match the catalog's self_hosted rows — leaving a self-hosted
     tenant on the fail-expensive unknown-model fallback while a $0 row for its
-    model sat in the table (Codex review round 2, finding 1). Hosted vendor
+    model sat in the table. Hosted vendor
     authorities are checked first because the actual request still reaches
     that vendor even if a bad config also names a served engine.
     """
@@ -153,7 +153,7 @@ def _rates_from_override(
     tenant because a tenant carries one provider and base URL". Per-tier
     backends broke that: a tenant can point its fast and reasoning roles at the
     same model string through different providers at different prices, and a
-    model-keyed map silently collapsed the two into one (Codex review of #140).
+    model-keyed map silently collapsed the two into one.
     """
     if not overrides:
         return None
@@ -241,7 +241,7 @@ def roles_for_config(
     the primary config and applied it to every model, while runtime resolved
     each tier against its own provider and base URL. A tier could therefore
     pass the gate on the primary's catalog row and then run as ``unknown`` on
-    its gateway, or be refused although it was priced (Codex review of phase 3).
+    its gateway, or be refused although it was priced.
 
     One function now, so the two cannot drift.
 
@@ -274,14 +274,14 @@ def roles_for_config(
         # which model this conversation actually runs. A conversation can be
         # created with an explicit model (chat.py accepts body.model) and keeps
         # it as a tier override, so pricing the tenant default would stamp a
-        # model the turn never calls (Codex, round 4 of the chat-role change).
+        # model the turn never calls.
         ("chat", chat_model or cfg.llm_model),
     ):
         tier = tiers.get(role) or {}
         provider = tier.get("provider") or cfg.llm_provider
         base_url = tier.get("base_url") or cfg.llm_base_url
         model = tier.get("model") or fallback_model
-        # The primary config carries an engine too now (#142, Codex round 13):
+        # The primary config carries an engine too now (#142):
         # without it a single-provider self-hosted tenant resolved by host and
         # stayed openai_compatible, missing its own self_hosted price. A tier's
         # engine still wins, since it describes that tier's own backend.
@@ -309,13 +309,11 @@ def roles_for_config(
         # running one model string through two providers genuinely has two
         # prices, and stamping both is what makes _snapshot_rates report the
         # ambiguity rather than silently pick one. Suppressing them collapsed
-        # reasoning onto fast's backend — a worse bug than the one being fixed
-        # (Codex, round 2 of the chat-role change).
+        # reasoning onto fast's backend — a worse bug than the one being fixed.
         # Compared on the FAMILY id, not the exact string, because that is what
         # _snapshot_rates matches on. With an exact comparison, fast=gpt-4o and
         # chat=gpt-4o-2024-08-06 both got stamped and then both matched the same
-        # lookup — reintroducing the ambiguity this skip exists to prevent
-        # (Codex, round 3 of the chat-role change).
+        # lookup — reintroducing the ambiguity this skip exists to prevent.
         if role == "chat" and any(
             base_model_id(existing["model"]) == base_model_id(model)
             for existing in roles.values()
@@ -399,7 +397,7 @@ async def resolve_run_prices(
     which is what the worker reads to decide whether dollar ceilings apply at
     all. Returning None dropped that, so a tenant with accounting switched off
     was still halted on dollars for any run created before its LLM config
-    existed (Codex round 8).
+    existed.
     """
     stmt = select(IntegrationConfig).where(IntegrationConfig.tenant_id == tenant_id)
     if integration_config_id is not None:
@@ -421,7 +419,7 @@ async def resolve_run_prices(
     # run the fast tier on one provider and the reasoning tier on another, and
     # those cost different amounts even for the same model string — pricing
     # both against the primary config would silently bill one of them at the
-    # other's rate (Codex review, finding 2).
+    # other's rate.
     #
     # NULL or empty falls back to the primary, matching how render.py resolves
     # fastModel / reasoningModel.
@@ -440,7 +438,7 @@ async def resolve_run_prices(
     if not models:
         # A config that resolves no roles (a blank primary model, which the LLM
         # PATCH permits) must still carry the switch, for the same reason as the
-        # no-config case above (Codex round 9).
+        # no-config case above.
         return {
             "version": SNAPSHOT_VERSION,
             "currency": "USD",

@@ -78,8 +78,7 @@
 	let priceEdited = false;
 	// Keyed on the backend too, not just the model: the same model string costs
 	// different amounts through different providers, so changing provider or
-	// base_url must re-look-up rather than keep the previous backend's rates
-	// (Codex review of phases 4-5).
+	// base_url must re-look-up rather than keep the previous backend's rates.
 	let priceLookupFor = '';
 
 	function resetPriceState(): void {

@@ -3,8 +3,8 @@
 #
 # Starts the worker in a SCRUBBED environment (env -i) so no leaked
 # per-tier provider var (SOCTALK_FAST_*, SOCTALK_REASONING_*, ANTHROPIC_*,
-# a stray OPENAI_BASE_URL) can route a call to a paid provider — the Codex
-# P0 hole. Runs preflight.py first and refuses to start the worker unless
+# a stray OPENAI_BASE_URL) can route a call to a paid provider — the P0
+# hole. Runs preflight.py first and refuses to start the worker unless
 # every resolved tier points at the local stub.
 #
 # Usage:

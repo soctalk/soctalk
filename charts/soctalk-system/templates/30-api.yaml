@@ -307,8 +307,8 @@ spec:
             {{- /*
               load_config admits only anthropic|openai, but values.schema.json
               also accepts openai-compatible, azure and ollama. Emitting those
-              literally crashed the API at startup on a schema-VALID install
-              (Codex review of #142). azure and ollama speak the OpenAI
+              literally crashed the API at startup on a schema-VALID install.
+              azure and ollama speak the OpenAI
               protocol, so they canonicalise to openai; the base URL below is
               what actually points at them.
             */}}
@@ -317,7 +317,7 @@ spec:
               Trimmed once, here, so classification, validation and the emitted
               value all see the same string. A value with surrounding whitespace
               worked before — the runtime trims env vars — so rejecting it would
-              break installs that were fine (Codex review of #142, round 11).
+              break installs that were fine.
             */}}
             {{- $baseRaw := .Values.defaults.llm.baseUrl | default "" | trim }}
             - name: SOCTALK_LLM_PROVIDER
@@ -327,15 +327,14 @@ spec:
               default model is gpt-4o and install.sh writes a provider without
               touching the model, so an anthropic install rendered
               provider=anthropic with SOCTALK_CHAT_MODEL=gpt-4o and fleet chat
-              called Anthropic with an OpenAI model (Codex review of #142).
+              called Anthropic with an OpenAI model.
               When they disagree, emit nothing and let the code default apply.
             */}}
             {{- /*
               Trimmed for the same reason as baseUrl: pricing strips model
               names before resolving, so an untrimmed " gpt-4o " was CALLED
               with spaces and PRICED without them — the called model and the
-              priced model diverged, which is the gap #142 exists to close
-              (Codex review of #142, round 12).
+              priced model diverged, which is the gap #142 exists to close.
             */}}
             {{- $model := .Values.defaults.llm.model | default "" | trim }}
             {{- $hasModel := ne $model "" }}
@@ -345,7 +344,7 @@ spec:
               opaque model or deployment ids that we cannot judge — one may
               legitimately begin "claude" while being served over the OpenAI
               protocol — so overriding it would replace the operator's
-              deliberate choice with gpt-4o (Codex review of #142, round 5).
+              deliberate choice with gpt-4o.
               $rawProvider, not the canonicalised $provider, precisely because
               the canonicalisation erases that distinction.
             */}}
@@ -354,17 +353,17 @@ spec:
               at api.openai.com IS first-party in practice — which is the
               chart's own default pairing — so judging by the provider string
               alone treated it as an opaque gateway and let a mismatched model
-              through (Codex review of #142, round 6).
+              through.
             */}}
             {{- /*
               Compare the parsed HOST exactly. `contains` matched any URL with
               the vendor host as a substring, so a proxy at
               https://api.openai.com.proxy.local/v1 was judged first-party and
-              had its model overwritten (Codex review of #142, round 7).
+              had its model overwritten.
             */}}
             {{- /*
               Normalise before comparing, or equality misses forms that reach
-              the same vendor (Codex review of #142, round 8):
+              the same vendor:
                 - a schemeless URL parses entirely into .path, leaving .host
                   empty, so every such URL read as third-party;
                 - a trailing-dot FQDN (api.openai.com.) is the same host.
@@ -375,7 +374,7 @@ spec:
               Extracted by string handling rather than urlParse, which ABORTS
               rendering on inputs values.schema.json accepts: a percent-escape
               it dislikes (https://api%2eopenai%2ecom/v1) fails the whole
-              template (Codex review of #142, round 9).
+              template.
 
               The comparison must agree with what the RUNTIME resolves, because
               a host the chart calls third-party but httpx resolves to a vendor
@@ -385,7 +384,7 @@ spec:
             */}}
             {{- /*
               Classify by the AUTHORITY only, and fold exactly what the runtime
-              folds — no more (Codex review of #142, round 10, checked against
+              folds — no more (checked against
               httpx 0.28.1 / openai 2.32.0 / anthropic 0.96.0):
 
                 - %2e is NOT decoded by httpx: the host stays api%2eopenai%2ecom.
@@ -409,7 +408,7 @@ spec:
               No scheme means no authority for httpx to resolve, so the value
               cannot be classified AND cannot work as a base URL. Earlier this
               called `fail`, but values.schema.json accepts the value, so that
-              aborted a legal install (Codex review of #142, round 12). Treat
+              aborted a legal install. Treat
               it as unusable instead: no host, and $hasUsableBase suppresses
               the base-URL env below so the SDK default applies rather than a
               string that would point at the wrong vendor.
@@ -437,7 +436,7 @@ spec:
             {{- /*
               Resolved ONCE into $chatModel so the runtime env and the tenant
               seed default below cannot disagree — they did, and that is the
-              chat-model gap one level down (Codex review of #142, round 12).
+              chat-model gap one level down.
 
               First-party and mismatched: use the PROVIDER's default. Emitting
               nothing fell through to the code default (claude-sonnet-4-6), so
@@ -485,7 +484,7 @@ spec:
               tenant `llm.provider`, whose schema allows only
               openai-compatible|anthropic — so a schema-valid system value of
               `openai`, `azure` or `ollama` made tenant provisioning fail
-              schema validation (Codex review of #142, round 6). Pre-existing,
+              schema validation. Pre-existing,
               not introduced here.
             */}}
             {{- /*
@@ -493,8 +492,7 @@ spec:
               coherent values the API pod itself runs on. Emitting the RAW
               values handed tenants provider=openai-compatible with an
               Anthropic base URL and a Claude model while the pod ran
-              openai/gpt-4o — the chat-model gap #142 is about, one level down
-              (Codex review of #142, round 12).
+              openai/gpt-4o — the chat-model gap #142 is about, one level down.
 
               $chatModel is the corrected model resolved above; $base/
               $hasUsableBase carry the same suppression rules as the runtime
@@ -518,8 +516,7 @@ spec:
             {{- /*
               Seeded too, or a tenant onboarded from a self-hosted install
               stores the same backend with no engine and prices it as
-              openai_compatible, missing its own self_hosted catalog entry
-              (Codex review of #142, round 13).
+              openai_compatible, missing its own self_hosted catalog entry.
             */}}
             - name: SOCTALK_LLM_ENGINE_DEFAULT
               value: {{ .Values.defaults.llm.engine | default "" | quote }}

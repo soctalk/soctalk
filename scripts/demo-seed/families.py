@@ -1,7 +1,7 @@
 """Demo-seed corpus (issue #72): authored families + goldens-derived cases.
 
 Every template is authored to the PRODUCT'S ACTUAL GATES (verified against
-source, see the Codex round-4 constraints in the design history):
+source, see the round-4 review constraints in the design history):
 
 - assess(): sev>=8 real, 5-7 unclear, 3-4 likely_fp, <3 high_conf_fp
   UNLESS MITRE present (then unclear). Rules-band ingest auto-close fires
@@ -13,8 +13,7 @@ source, see the Codex round-4 constraints in the design history):
 - Live authz binding: activity.action = rule_id, subject = user entity,
   target = host entity — facts are authored in THAT vocabulary.
 
-All prose in this file was authored offline (Claude subscription), never
-by runtime inference.
+All prose in this file was written offline, never by runtime inference.
 """
 
 from __future__ import annotations
@@ -364,7 +363,7 @@ def goldens_events(rng: random.Random, n: int) -> list[EventTemplate]:
         host = f"g{t}-{alert.get('agent', {}).get('name', 'app-00')}"
         # The ACTOR is the source user; dstuser is the elevation target
         # (often root for sudo) and would misname the account in the demo
-        # story (Codex P2). Prefer srcuser.
+        # story. Prefer srcuser.
         user = (
             (alert.get("data", {}) or {}).get("srcuser")
             or (alert.get("data", {}) or {}).get("dstuser")

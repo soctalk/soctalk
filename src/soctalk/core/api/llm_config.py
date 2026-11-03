@@ -71,7 +71,7 @@ class LlmConfigRead(BaseModel):
     model: str
     # Serving engine behind base_url. Exposed so an operator can SEE why a
     # backend prices as self_hosted, and clear it when moving to a gateway
-    # (#142, Codex round 14).
+    # (#142).
     engine: str | None = None
     # Raw stored value and whether it was suppressed from ``engine`` because
     # the hosted request authority wins. ``engine`` is the value the UI should
@@ -304,7 +304,7 @@ class LlmConfigUpdate(BaseModel):
     # omitted leaves it alone, '' clears it to NULL, any other value sets it.
     # Without a way to CLEAR it, a tenant moving from a self-hosted endpoint
     # to a gateway kept a stale engine and went on pricing the gateway as
-    # self_hosted (#142, Codex round 14).
+    # self_hosted (#142).
     engine: str | None = Field(default=None, max_length=32)
     # No min_length — the empty string is a meaningful value (CLEAR),
     # see the class docstring for the tri-state contract.
@@ -313,7 +313,7 @@ class LlmConfigUpdate(BaseModel):
     # Tenant-global default sampling. ``None`` = unchanged. Bounds mirror the
     # chart's values.schema.json + LLMConfig so an out-of-range value is rejected
     # here rather than failing Helm validation / worker startup on the next
-    # re-render. ``max_tokens`` is a ROUTER output cap (Codex #1): a schema-
+    # re-render. ``max_tokens`` is a ROUTER output cap: a schema-
     # constrained decision is tiny, so 8192 is generous headroom — a future
     # large-generation setting would be a separate field, not this ceiling.
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
@@ -367,7 +367,7 @@ class LlmConfigUpdate(BaseModel):
     def _reject_bool(cls, v):
         # Pydantic v2 coerces ``bool`` → 0/1 for numeric fields; ``True`` would
         # silently become temperature 1.0 / max_tokens 1. A config API must not
-        # accept a boolean where a number is meant (Codex #4).
+        # accept a boolean where a number is meant.
         if isinstance(v, bool):
             raise ValueError("must be a number, not a boolean")
         return v
@@ -606,7 +606,7 @@ async def update_tenant_llm(
         prior_tiers = cfg.llm_tiers
         # Tri-state (see the field comment): '' clears it, so a tenant can
         # move off a self-hosted endpoint without the stale engine keeping
-        # the new gateway priced as self_hosted (#142, Codex round 14).
+        # the new gateway priced as self_hosted (#142).
         next_provider = (
             payload.provider if payload.provider is not None else cfg.llm_provider
         )
@@ -676,7 +676,7 @@ async def update_tenant_llm(
         # Placed AFTER the tiers merge on purpose: runtime prices per-tier
         # backends too, so a gate that ran before this saw a config the worker
         # never uses and let an unpriced tier model through to be billed at the
-        # fail-expensive fallback (Codex review, finding 2). Still before any
+        # fail-expensive fallback. Still before any
         # side effect, so a rejection leaves nothing half-applied — no Secret
         # written, no provisioning job queued.
         #
@@ -797,7 +797,7 @@ async def update_tenant_llm(
     # Resolve the effective prices here too, so PATCH and GET return the same
     # shape. Without this a caller that treats the PATCH response as the fresh
     # config sees effective_prices: null immediately after editing the very
-    # overlay that determines it (Codex review round 3, finding 4). Same
+    # overlay that determines it. Same
     # non-fatal contract as GET: a pricing problem must not fail the write that
     # already succeeded.
     try:

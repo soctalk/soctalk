@@ -339,8 +339,7 @@ async def resolve_run_dollar_budget(db: AsyncSession, tenant_id: UUID) -> float:
     Never raises. ``dollars_budget`` is NOT NULL with a plausible default, so
     unlike ``price_snapshot`` a failed resolution is invisible downstream — it
     looks like a real budget. Callers get the install default and a logged
-    warning rather than an exception that would fail run creation (Codex
-    review, finding 8).
+    warning rather than an exception that would fail run creation.
     """
     default = run_dollar_budget_default()
     try:
@@ -433,8 +432,8 @@ async def effective_policy(
     # Budget ceilings are an MSSP decision and are settable at install and
     # tenant scope only. The per-investigation layers are the ones closest to
     # tenant-authored data, and RLS does not help here: it scopes which rows a
-    # tenant can read and write, not which KEYS or VALUES they may carry
-    # (Codex review, finding 5). Stripping the keys is what prevents a ceiling
+    # tenant can read and write, not which KEYS or VALUES they may carry.
+    # Stripping the keys is what prevents a ceiling
     # from being raised by the lower layers.
     template = _without_budget_keys(investigation_template)
     local = _without_budget_keys(investigation_local)

@@ -4,7 +4,7 @@ The zero-API-token guarantee is only real if the worker CANNOT reach any
 paid provider. Clearing ANTHROPIC_API_KEY is not enough: per-tier env
 (SOCTALK_<TIER>_PROVIDER/_BASE_URL/_API_KEY/_ENGINE) can independently
 point a tier at Anthropic or the Modal Qwen endpoint, and the presence of
-tier config even relaxes the provider mutual-exclusion check (Codex P0).
+tier config even relaxes the provider mutual-exclusion check.
 
 This asserts, against the FULLY LOADED soctalk config (which itself calls
 load_dotenv, so it sees any leak), that every resolved tier's base URL is

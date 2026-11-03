@@ -293,7 +293,7 @@ def test_higher_trust_asset_record_wins():
 
 def test_account_records_resolve_by_trust():
     """Contract: conflicting entity_context resolves by trust — a low-trust benign account
-    record must not shadow a high-trust off-call privileged-human record (Codex probe)."""
+    record must not shadow a high-trust off-call privileged-human record."""
     low = account_entity(id="ENT-low", trust=40)  # service, inert
     high = account_entity(id="ENT-high", account_type="human", privileged=True,
                           on_call=False, break_glass=False, trust=100)

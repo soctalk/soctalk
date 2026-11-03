@@ -118,7 +118,7 @@ async def test_duplicate_create_conflicts(mssp_session: AsyncSession, seed_two_t
         {"legal_actions": {"triage": ["NOT_AN_ACTION"]}},      # unknown action
         {"decision_modules": ["made_up_module"]},              # unknown module
         {"legal_actions": {"triag": ["VERDICT"]}},             # unknown phase (typo)
-        # CLOSE may not be granted (Codex High): {decide:[CLOSE]} would remap every
+        # CLOSE may not be granted: {decide:[CLOSE]} would remap every
         # proposal to a forced verdict-less close; unconstrained already permits CLOSE.
         {"legal_actions": {"decide": ["CLOSE"]}},
         {"legal_actions": {"triage": ["VERDICT", "CLOSE"]}},
@@ -177,7 +177,7 @@ async def test_edit_active_playbook_stays_active(
     mssp_session: AsyncSession, seed_two_tenants
 ):
     """Editing an active triage policy must keep it governing (not silently drop to shadow) and
-    re-roll — the Codex-flagged footgun."""
+    re-roll — the flagged footgun."""
     t, _ = seed_two_tenants
     req = _req(mssp_session)
     await create_authored_triage_policy_route(t.tenant_id, _valid(id="edit-pb"), req)

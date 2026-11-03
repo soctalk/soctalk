@@ -50,8 +50,7 @@ async def _write_execution_log(
     # investigation_id/run_id carry FKs; the ledger must stay writable for a
     # MALFORMED payload too (that is exactly when it matters most), so scrub
     # dangling references to NULL via subselects instead of aborting the
-    # transaction on an FK violation. The subselects are TENANT-SCOPED (Codex ph2
-    # Medium-3): a rejected cross-tenant payload must not cross-link this tenant's
+    # transaction on an FK violation. The subselects are TENANT-SCOPED: a rejected cross-tenant payload must not cross-link this tenant's
     # ledger row to another tenant's investigation/run — a foreign id resolves to
     # NULL, not a real FK.
     await db.execute(
@@ -132,7 +131,7 @@ async def handle_response_action(
     async with tenant_context(db, tenant_id):
         # This session may be BYPASSRLS: the payload's tenant/investigation
         # must agree with the outbox row AND the database before any side
-        # effect (Codex #49 Medium-5) — a malformed row must not become a
+        # effect — a malformed row must not become a
         # cross-tenant write or hand tenant B's envelope to tenant A's hook.
         if str(envelope.get("tenant_id")) != str(tenant_id) or str(
             envelope.get("investigation_id")
@@ -276,7 +275,7 @@ async def handle_execute_proposal(
     row_tenant = UUID(str(outbox_row["tenant_id"]))
 
     async with tenant_context(db, row_tenant):
-        # ATOMIC CLAIM (Codex ph2 High-1): transition approved -> executing in one
+        # ATOMIC CLAIM: transition approved -> executing in one
         # guarded UPDATE. This is the SINGLE point that authorizes execution and it
         # simultaneously enforces every guard the payload cannot be trusted for:
         #   - status='approved'      — a non-approved (proposed/rejected/failed) or
@@ -335,7 +334,7 @@ async def handle_execute_proposal(
             )
             raise ValueError("execute_proposal payload/proposal scope mismatch")
 
-        # NOTE (Codex ph2 High-2): the external POST + this transaction commit are
+        # NOTE: the external POST + this transaction commit are
         # not one atomic unit — a process death after the endpoint accepted the
         # action but before commit rolls the proposal back to 'executing' and the
         # outbox row stays claimable, so the action may be re-delivered. This is

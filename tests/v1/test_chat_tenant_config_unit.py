@@ -81,7 +81,7 @@ async def test_openai_byok_tenant_overlays_and_swaps_model():
 
 async def test_cross_provider_without_own_key_falls_back_to_base():
     # A default/unconfigured openai-compatible row with NO own key on an
-    # anthropic install can't authenticate — must fall back to base (Codex #3).
+    # anthropic install can't authenticate — must fall back to base.
     integ = _integration(
         llm_provider="openai-compatible", llm_base_url="https://api.openai.com/v1",
         llm_model="gpt-4o", llm_api_key_plain=None,

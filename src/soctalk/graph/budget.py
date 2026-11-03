@@ -317,7 +317,7 @@ def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float
     # form the built-in table uses. Without this a snapshot for
     # ``deepseek-v4-flash`` is ignored the moment the API reports
     # ``deepseek-v4-flash-20260731``, and the call silently falls back to the
-    # fail-expensive rate this feature exists to remove (Codex review, #3).
+    # fail-expensive rate this feature exists to remove.
     # Strip unconditionally, unlike ``_normalize_model``, which only strips when
     # the result happens to be a key in the built-in table — that guard is right
     # for a table lookup and wrong here, where both sides are stripped and
@@ -342,7 +342,7 @@ def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float
     # A stamp that says "unknown" must not be quietly rescued by the shipped
     # defaults. If it were, the run would record one story and be billed by
     # another, and "why was this run priced this way" would have a wrong
-    # answer even when the number happened to be right (Codex).
+    # answer even when the number happened to be right.
     if all(e.get("source") == "unknown" for e in matches):
         return _UNKNOWN_SENTINEL
 
@@ -358,7 +358,7 @@ def _snapshot_rates(state: dict[str, Any], model: str | None) -> dict[str, float
         # happens when a hybrid tenant runs one model through two providers.
         # The call site does not tell us which role is spending, so guessing
         # would bill half the calls at the wrong provider's rate. Fall through
-        # and say so (Codex review, #2).
+        # and say so.
         logger.warning(
             "price_snapshot_ambiguous",
             model=model,
@@ -493,7 +493,7 @@ def track(state: dict[str, Any], response: Any) -> int:
         # Assignment, not setdefault: with setdefault, one provider-reported
         # call early in a run permanently labelled every later estimate as
         # "provider_reported", which is the opposite of what these fields are
-        # for (Codex review, phases 1-2).
+        # for.
         state["cost_basis"] = "estimated"
     # Which rate card produced the number. Kept on state rather than computed
     # only for the log line, so the worker can report it and the ledger can

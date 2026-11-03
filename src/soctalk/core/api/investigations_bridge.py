@@ -85,8 +85,7 @@ class InvestigationList(BaseModel):
     page: int
     page_size: int
     # The UI's Next button keys off this. It was never returned, so it read as
-    # undefined and Next stayed disabled however many pages existed
-    # (Codex review round 3, finding 1).
+    # undefined and Next stayed disabled however many pages existed.
     has_more: bool = False
 
 

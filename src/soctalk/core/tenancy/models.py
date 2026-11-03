@@ -269,7 +269,7 @@ def check_engine_provider_combo(provider: str | None, engine: str | None) -> Non
     ``provider_kind_for`` lets the engine win over the provider, so
     provider=anthropic with engine=sglang prices an Anthropic backend as
     self_hosted and bills it against a catalog entry it never touches
-    (#142, Codex round 14). Tiers already enforced this; the primary config
+    (#142). Tiers already enforced this; the primary config
     accepted it, which is how the combo reached pricing at all.
 
     Raises ValueError, so it reads as a 422 at the API boundary. Kept as a
@@ -338,7 +338,7 @@ class LLMTierConfig(BaseModel):
     @classmethod
     def _reject_bool_sampling(cls, v):
         # Pydantic v2 coerces bool → 0/1 for numeric fields; reject it for parity
-        # with the global sampling API (Codex) — True must not become 1.0 / 1.
+        # with the global sampling API — True must not become 1.0 / 1.
         if isinstance(v, bool):
             raise ValueError("must be a number, not a boolean")
         return v
@@ -462,7 +462,7 @@ def validate_llm_model_prices(
             raw_value = block[field]
             # bool is a subclass of int, so float(True) is 1.0 and would store a
             # price of $1/Mtok from a JSON `true`. Reject it as the wrong type
-            # rather than coercing (Codex review round 2, finding 2).
+            # rather than coercing.
             if isinstance(raw_value, bool):
                 raise ValueError(
                     f"llm_model_prices entry {len(out) + 1}: {field} must be a number"
@@ -489,8 +489,7 @@ def validate_llm_model_prices(
         key = model.strip()
         # Keys are normalized by stripping, so "gpt-4o" and " gpt-4o " collapse
         # to the same model. Silently keeping the last one would mis-price a
-        # tenant while the caller believes both entries took effect
-        # (Codex review round 3, finding 3).
+        # tenant while the caller believes both entries took effect.
         if key in out:
             raise ValueError(
                 f"llm_model_prices entry {len(out) + 1} duplicates an earlier model"
@@ -590,7 +589,7 @@ class IntegrationConfig(SQLModel, table=True):
     # Pricing cannot tell a served endpoint from a gateway by host alone, so
     # without this a self-hosted install seeded tenants that priced as
     # openai_compatible and missed their own self_hosted catalog entry — the
-    # model was called but never priced (#142, Codex round 13). Tiers already
+    # model was called but never priced (#142). Tiers already
     # carried an engine; the primary config had no equivalent field.
     llm_engine: str | None = Field(default=None, max_length=32)
     # Optional per-tier LLM backends for a hybrid tenant (issue #12). NULL =

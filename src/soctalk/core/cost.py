@@ -89,7 +89,7 @@ async def postgres_knows_timezone(db: AsyncSession, name: str) -> bool:
     Python's tzdata and the database's can differ between images, and the zone
     is used inside the spend query: a name Python accepts but Postgres does not
     makes that query raise, and a cap that errors is a cap that stops all
-    triage (Codex review round 4, finding 3).
+    triage.
     """
     row = (
         await db.execute(
@@ -107,7 +107,7 @@ async def db_day_window(db: AsyncSession, tz_name: str) -> tuple[datetime, datet
     Deriving the displayed reset time from Postgres rather than from the app
     process removes the skew: otherwise the API could report old-day spend with
     a next-day reset, or refuse one more claim after the time it just told the
-    operator it would clear (Codex review round 4, finding 2).
+    operator it would clear.
     """
     row = (
         await db.execute(text(_DAY_WINDOW_SQL), {"tz": tz_name})
@@ -215,7 +215,7 @@ _DAILY_SPEND_SQL = """
         -- charged a run that spent before midnight to the new day, and let an
         -- unlock after midnight drag yesterday's spend forward. Ledger rows are
         -- stamped when the spend was reported and nothing moves them after
-        -- (#129, Codex review round 4, finding 1).
+        -- (#129).
         SELECT tokens_delta::bigint AS tokens,
                -- Unpriced spend is counted in tokens but NOT in dollars: the
                -- figure is a guess about a model nobody has priced, and a
@@ -234,8 +234,7 @@ _DAILY_SPEND_SQL = """
                -- Same rule as the worker ledger above: spend priced by
                -- guesswork does not close a ceiling. Chat matters here in
                -- particular because this ceiling also gates the worker's claim
-               -- loop, so an unpriced chat session could stop triage entirely
-               -- (Codex round 3, P1).
+               -- loop, so an unpriced chat session could stop triage entirely.
                GREATEST(
                    COALESCE(dollars, 0.0) - COALESCE(dollars_unpriced, 0.0),
                    0.0
@@ -255,12 +254,12 @@ _SPEND_PROVENANCE_SQL = """
              -- Unpriced FIRST. A row can carry cost_basis='provider_reported'
              -- inherited from another call in the same window, and bucketing on
              -- that would file exempt fallback dollars as billed-by-provider —
-             -- the opposite of what this breakdown is for (Codex round 2, P2).
+             -- the opposite of what this breakdown is for.
              WHEN price_source = 'unknown'         THEN 'unpriced'
              -- A residual row is what survived splitting an unpriced portion
              -- out of a mixed window. Its cost_basis describes the LAST call,
              -- not the residual, so reporting it would have filed provider
-             -- spend as estimated and vice versa (Codex round 4). Say
+             -- spend as estimated and vice versa. Say
              -- "mixed" — enforced, but not attributable to one basis.
              WHEN price_source = 'mixed'           THEN 'mixed'
              WHEN cost_basis = 'provider_reported' THEN 'provider_reported'
@@ -348,7 +347,7 @@ _RESERVED_SQL = """
                -- reserving budget - dollars_used under-reserves a run that has
                -- spent mostly-unpriced dollars. A $5 run with $4 unpriced and
                -- $0 priced reserved $1 while still being allowed to spend $5
-               -- enforceable (Codex review of phases 4-5, round 3).
+               -- enforceable.
                GREATEST(
                    r.dollars_budget
                      - GREATEST(r.dollars_used - COALESCE(u.unpriced, 0.0), 0.0),
@@ -366,7 +365,7 @@ _RESERVED_SQL = """
              -- Scoped to the tenant as defence in depth. Run IDs are globally
              -- unique so this is not load-bearing today, but it keeps the
              -- subquery from scanning other tenants' rows on a BYPASSRLS
-             -- session (Codex review of phases 4-5, round 4).
+             -- session.
              AND tenant_id = :t
            GROUP BY run_id
       ) u ON u.run_id = r.id
@@ -376,7 +375,7 @@ _RESERVED_SQL = """
        -- also covers queued and retry-waiting runs, so counting them let a
        -- single queued run whose budget meets the daily cap block ITSELF
        -- before it was ever claimed — the queue refusing to start its own
-       -- work (Codex review of phases 4-5).
+       -- work.
        --
        -- A leased run is genuinely in flight and genuinely holds its budget.
        AND r.claimed_by IS NOT NULL
@@ -420,15 +419,14 @@ async def assert_tenant_daily_cap_ok(
     # Reservations are checked for EVERY admission path, not just the worker's.
     # Chat holds no budget of its own, so it makes no reservation — but letting
     # it spend into headroom already promised to in-flight runs would push the
-    # tenant past a ceiling that has effectively been committed (Codex review
-    # of phases 4-5).
+    # tenant past a ceiling that has effectively been committed.
     over_reserved = False
     res_tokens, res_dollars = await reserved_headroom(db, tenant_id)
     if res_tokens or res_dollars:
         # Tokens are checked whatever the accounting switch says. Turning off
         # DOLLAR accounting does not turn off the token ceiling, and gating
         # both on one flag let a grandfathered unpriced tenant over-admit token
-        # budget under concurrency (Codex review of phases 4-5, round 2).
+        # budget under concurrency.
         over_reserved = status.spend.tokens + res_tokens >= status.caps.tokens
         if status.cost_tracking:
             over_reserved = over_reserved or (
@@ -500,7 +498,7 @@ class MsspUserDailySpend:
     def dollar_cap_hit(self) -> bool:
         # Fleet chat spans tenants, so there is no tenant policy to read — but
         # an install that has switched dollar accounting off means it here too,
-        # and this was the last path still enforcing through it (Codex round 7).
+        # and this was the last path still enforcing through it.
         from soctalk.core.ir.policies import cost_tracking_install_default
 
         if not cost_tracking_install_default():
@@ -517,7 +515,7 @@ _MSSP_USER_DAILY_SPEND_SQL = """
                        + COALESCE(m.tokens_out, 0))::bigint), 0)::bigint AS tokens,
            -- Same exemption as the tenant ceiling. This one gates fleet chat
            -- posts, and was the last place raw chat dollars could halt
-           -- something on money priced by guesswork (Codex round 4, P2).
+           -- something on money priced by guesswork.
            COALESCE(SUM(GREATEST(
                COALESCE(m.dollars, 0.0) - COALESCE(m.dollars_unpriced, 0.0),
                0.0
@@ -670,7 +668,7 @@ class DailyCapStatus:
         # Accounting off means the dollar ceiling is not enforced, which is what
         # the switch says and what the panel promises. Only the per-run check
         # honoured it before, so a tenant with accounting off was still stopped
-        # here and by chat's conversation cap (Codex round 6).
+        # here and by chat's conversation cap.
         if not self.cost_tracking:
             return False
         return self.spend.dollars >= self.caps.dollars
@@ -706,7 +704,7 @@ async def get_tenant_daily_status(
     enforced — which is what the switch says it does, and what the panel
     promises. Only the per-run check honoured it before, so a tenant with
     accounting off still got stopped by the daily spend ceiling and by chat's
-    conversation cap (Codex round 6). The token ceiling still applies: tokens
+    conversation cap. The token ceiling still applies: tokens
     are counted, not inferred, so turning off dollar accounting is not a
     request to remove every bound on work.
     """

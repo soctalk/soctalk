@@ -57,7 +57,7 @@
 	const reducedMotion = () =>
 		browser && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	/** Viewer-tz calendar date (YYYY-MM-DD). NOT toISOString — that is UTC
-	 * and wrong near midnight for any non-UTC viewer (Codex). */
+	 * and wrong near midnight for any non-UTC viewer. */
 	const viewerToday = () => new Date().toLocaleDateString('en-CA');
 
 	function dayFrac(d: FleetDay, serverNowIso: string): number {
@@ -73,7 +73,7 @@
 
 	/** Request generation: a response fetched for a superseded mode or
 	 * fallback intent must be discarded, or a slow replay-fallback reply
-	 * can overwrite the live surface after a mode switch (Codex). */
+	 * can overwrite the live surface after a mode switch. */
 	let dayReq = 0;
 
 	async function loadDay(initial: boolean) {
@@ -82,7 +82,7 @@
 			// Latest-active-day fallback (zero-only rule): today with ANY
 			// alerts always wins; an empty today is substituted server-side
 			// with the most recent active day, disclosed via the date label.
-			// REPLAY-ONLY (Codex): the live surface is the present tense —
+			// REPLAY-ONLY: the live surface is the present tense —
 			// it must never carry a substituted day's title or stats.
 			const wantFallback = mode === 'replay' && !pinToday;
 			const fresh = await api.analytics.getFleetDay({
@@ -120,7 +120,7 @@
 
 	function showToday() {
 		// Explicit navigation away from the film: stop it first so the
-		// immediate re-apply/seek cannot land mid-play (Codex).
+		// immediate re-apply/seek cannot land mid-play.
 		timeline.pause();
 		pinToday = true;
 		void loadDay(true);
@@ -151,8 +151,8 @@
 	}
 
 	function maybeStartCatchup() {
-		// Once per session per day, never under reduced motion (Codex/NN|g:
-		// a ritual replayed on every visit becomes an ignored roadblock).
+		// Once per session per day, never under reduced motion
+		// (a ritual replayed on every visit becomes an ignored roadblock).
 		// Never on an empty or substituted day: there is nothing of TODAY
 		// to catch up on, and auto-playing yesterday uninvited would blur
 		// the live/replay line.
@@ -194,7 +194,7 @@
 		// EVERY mode switch refetches under the new mode's intent (replay
 		// wants the fallback, live wants the plain present) — bumping the
 		// request generation so any in-flight response for the previous
-		// mode is discarded rather than landing stale (Codex).
+		// mode is discarded rather than landing stale.
 		void loadDay(true);
 	}
 
@@ -257,7 +257,7 @@
 	// as dots land (projected onto the exact aggregates so they end on
 	// the true totals). Only the live head binds to the live snapshot.
 	// Totals are invariant per schedule — keep them out of the per-frame
-	// path (Codex P2).
+	// path.
 	$: totals = scheduleTotals(schedule);
 	$: lapse = day && !showLiveHead ? countsAt(schedule, $timeline.t) : null;
 	$: lapseAtEnd = $timeline.t >= LAPSE_MS - 1;
@@ -287,7 +287,7 @@
 				: (day?.guard_vetoes ?? 0);
 	// The veto rail reveals each ruling when its DOT lands — the same
 	// clock statVetoes ticks on, so a row never appears while the stat
-	// still reads 0 (Codex P2). Rows whose investigation was sampled out
+	// still reads 0. Rows whose investigation was sampled out
 	// of the dot set (sample_rate < 1 only) fall back to their real
 	// guard-decision time; the stat's projection covers them in aggregate.
 	const vetoLapseT = (d: FleetDay, at: string): number => {

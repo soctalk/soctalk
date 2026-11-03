@@ -300,8 +300,7 @@ class TenantOnboard(BaseModel):
     def _check_engine_combo(self) -> TenantOnboard:
         # provider_kind_for lets the engine win over the provider, so an
         # anthropic tenant carrying a served engine would price as
-        # self_hosted against a catalog entry it never calls (#142, Codex
-        # round 14). Same rule the tiers already enforce.
+        # self_hosted against a catalog entry it never calls (#142). Same rule the tiers already enforce.
         check_engine_provider_combo(self.llm_provider, self.llm_engine)
         return self
 
@@ -589,7 +588,7 @@ async def onboard_tenant(
             # The engine rides with the endpoint it describes. Without it the
             # tenant stores a self-hosted backend that its own price gate
             # classifies as a generic gateway, so the model is called and never
-            # priced (#142, Codex round 13).
+            # priced (#142).
             if llm_engine is None:
                 env_engine = os.getenv("SOCTALK_LLM_ENGINE_DEFAULT", "").strip()
                 if env_engine:
@@ -713,7 +712,7 @@ async def onboard_tenant(
     # what removing the SOCTALK_COST_TRACKING=off workaround was for.
     #
     # Warn rather than refuse. My first reason for this was wrong — a 422 here
-    # would roll back cleanly, as Codex pointed out, because the provisioning
+    # would roll back cleanly, because the provisioning
     # job and commit both come later. The real reason is that **at onboard time
     # there is no tenant yet to hold a price override**. Refusing would
     # dead-end anyone onboarding a gateway-backed tenant, whose
@@ -729,7 +728,7 @@ async def onboard_tenant(
     # The response is built BEFORE the check. A rollback below expires the
     # committed ``tenant`` instance, and _to_read would then lazy-load expired
     # attributes on an AsyncSession — turning a warning failure into
-    # MissingGreenlet (Codex phase-3 round 3).
+    # MissingGreenlet.
     await _warn_if_unpriced(tenant.id, event="tenant_onboarded_with_unpriced_model")
     return _to_read(tenant)
 
@@ -859,7 +858,7 @@ async def _warn_if_unpriced(tenant_id: UUID, *, event: str) -> None:
     errors, so nothing was raised), and the rollback that fixed THAT expired
     the session's identity map — breaking any caller still holding the tenant
     object. A best-effort warning has no business touching the transaction that
-    carries the actual work (Codex phase-3 rounds 3-5).
+    carries the actual work.
 
     Never raises: this is a diagnostic, not a gate.
     """
@@ -950,12 +949,12 @@ async def create_tenant(
 
     # The legacy create endpoint writes an IntegrationConfig directly, so it
     # bypassed the price gate entirely — the one entry point still open after
-    # phase 3 claimed to close them all (Codex review). Same warn-not-refuse
+    # phase 3 claimed to close them all. Same warn-not-refuse
     # rule and the same reason as onboarding: there is no tenant yet to hold a
     # price override when the config is created.
     #
     # Response built first, transaction always ended — same reasoning as the
-    # onboard check above (Codex phase-3 round 3).
+    # onboard check above.
     await _warn_if_unpriced(tenant.id, event="tenant_created_with_unpriced_model")
     return _to_read(tenant)
 

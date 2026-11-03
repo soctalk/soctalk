@@ -53,7 +53,7 @@ def validate_authored(raw: dict[str, Any]) -> ResponsePlaybook:
     # export); the DB ROW's status column carries the draft/shadow/active lifecycle
     # separately, and live dispatch keys on the row status, never on this field.
     # Without this, an exported shadow playbook would carry status:active and
-    # activate on a file rollout (Codex ph2 incr3 finding 3).
+    # activate on a file rollout.
     try:
         pb = ResponsePlaybook.model_validate({**raw, "status": "shadow"})
     except Exception as exc:  # noqa: BLE001 — surface pydantic errors as author feedback
@@ -194,7 +194,7 @@ async def set_authored_status(
     if latest is None or latest["status"] == "retired":
         return None
     # Pass the stored definition through WITHOUT coercing to dict: deactivation must
-    # always succeed even for a malformed row (Codex ph2 incr3 finding 2), so a
+    # always succeed even for a malformed row, so a
     # now-invalid playbook can still be turned OFF. Activation revalidates fail-closed
     # (validate_authored raises on a non-mapping), so garbage can never be activated.
     definition = latest["definition"]
@@ -240,7 +240,7 @@ async def load_dispatchable(
     for r in rows:
         if r["status"] != status:
             continue
-        # Fully fail-closed per row (Codex ph2 incr3 finding 2): a malformed JSONB
+        # Fully fail-closed per row: a malformed JSONB
         # scalar/array must skip, never raise, or one bad row aborts the whole
         # completion's response dispatch. Also reassert the tenant pin — a
         # tampered/imported row whose definition tenant != this tenant is skipped.

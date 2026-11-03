@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	// :8443 deliberately. Codex v2: do not fight Traefik for :443.
+	// :8443 deliberately. Do not fight Traefik for :443.
 	addr               = flag.String("addr", ":8443", "listen address")
 	wizardSentinelPath = flag.String("wizard-sentinel", "/var/lib/soctalk-wizard.done", "sentinel the wizard writes after collecting config (installer waits for either this OR cloud-init's values.yaml)")
 	installSentinel    = flag.String("install-sentinel", "/var/lib/soctalk-firstboot.done", "sentinel written by the installer (not the wizard) when helm install completes")
@@ -132,7 +132,7 @@ func writeToken(token string) error {
 	}
 	// Print to stdout. systemd unit's StandardOutput=journal+console
 	// puts this on /dev/console too (cloud serial console + tty1).
-	// Token is NOT put in /etc/issue (codex: leak via screen captures,
+	// Token is NOT put in /etc/issue (leak via screen captures,
 	// motd, and conflicts with ProtectSystem=full).
 	fmt.Printf("\n=====================================================================\n")
 	fmt.Printf("  SocTalk first-boot setup wizard\n")

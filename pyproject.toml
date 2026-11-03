@@ -29,7 +29,7 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "sse-starlette>=2.1.0",
     "psycopg2-binary>=2.9.0",
-    # V1 additions (codex P1-7):
+    # V1 additions:
     "prometheus-client>=0.20.0",
     "kubernetes>=29.0.0",
     # Async client for cross-namespace Secret reads from the chat agent

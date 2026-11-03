@@ -11,7 +11,7 @@ This copy is a PREREQUISITE for inverting the worker's env-vs-claim precedence.
 Flipping first would silently RAISE any tenant holding a low env value, because
 the run row still carries the 5.0 column default: an install capping a tenant at
 $0.50 through env would jump to $5.00 the moment the claim payload started
-winning (Codex review, finding 1).
+winning.
 
 Forward-only: the source column is left intact, so downgrade loses no data.
 ``ON CONFLICT DO NOTHING`` never clobbers an override already set through the
@@ -41,7 +41,7 @@ def upgrade() -> None:
     # 0.2.0-era database rather than reasoning about it.
     #
     # Two things it must NOT clobber, mirroring the ON CONFLICT DO NOTHING
-    # above (Codex review round 2, finding 3):
+    # above:
     #   * a tenant_policies override, which is the newer and more authoritative
     #     source and may already differ from the legacy column;
     #   * a run whose dollars_budget was adjusted by hand, which is exactly the
@@ -82,8 +82,7 @@ def upgrade() -> None:
     # exists carries the 5.0 column default, because nothing stamped
     # dollars_budget before this release. The moment the worker starts
     # preferring the claim, those rows would raise a tenant that was capped
-    # lower -- exactly the silent-raise this migration exists to prevent
-    # (Codex review, finding 1).
+    # lower -- exactly the silent-raise this migration exists to prevent.
     #
     # Only runs that can still spend are touched. A completed or failed run's
     # budget is history and rewriting it would falsify what it actually ran

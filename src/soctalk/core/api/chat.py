@@ -564,7 +564,7 @@ async def post_message(
         ).mappings().first()
         if conv is None:
             raise HTTPException(404, "conversation not found")
-        # Ownership gate for MSSP callers (Codex): the BYPASSRLS session sees
+        # Ownership gate for MSSP callers: the BYPASSRLS session sees
         # every conversation, and list_conversations already scopes MSSP users to
         # their own creations — post_message must mirror that, else an MSSP user
         # with another conversation's UUID could drive a turn on it and spend
@@ -641,8 +641,7 @@ async def post_message(
 
         # Resolved INSIDE the session block: for an MSSP tenant-scoped chat the
         # prelude session is committed and closing by the time control leaves,
-        # so reading policy afterwards silently fell back to "on" (Codex round
-        # 7, P2).
+        # so reading policy afterwards silently fell back to "on".
         #
         # A tenant conversation honours its tenant's switch. A fleet
         # conversation spans tenants and has no single policy to read, so it

@@ -168,7 +168,7 @@ def write_manifest(plan: list[dict], path: Path) -> int:
         if ev.script:
             manifest[ev.script["key"]] = {k: v for k, v in ev.script.items() if k != "key"}
     # Atomic publish: the provider hot-reloads by mtime and cannot read a
-    # half-written file (Codex P1). Write to a temp sibling + os.replace.
+    # half-written file. Write to a temp sibling + os.replace.
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(manifest, indent=1))
     os.replace(tmp, path)

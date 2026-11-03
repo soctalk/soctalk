@@ -1798,8 +1798,8 @@ def test_chart_without_triage_policies_renders_nothing_new(monkeypatch):
     assert "SOCTALK_TRIAGE_POLICY_DIR" not in env_names
 
 
-def test_render_triage_policy_values_codex_fixes(tmp_path, monkeypatch):
-    """Codex provisioning-review fixes: UUID tenant scoping works; a filename
+def test_render_triage_policy_values_review_fixes(tmp_path, monkeypatch):
+    """Provisioning-review fixes: UUID tenant scoping works; a filename
     the chart schema would reject is skipped (not shipped to fail helm); the
     per-tenant total budget drops overflow files; content is validated from the
     same read that ships."""
@@ -1937,7 +1937,7 @@ def test_runs_worker_wazuh_disabled_when_provided_urls_missing():
     assert w["indexerHost"] == ""
 
 
-def test_chart_fqdn_egress_covers_worker_and_adapter():  # codex P1 on #109
+def test_chart_fqdn_egress_covers_worker_and_adapter():  # P1 on #109
     """The CiliumNetworkPolicy must select BOTH the adapter and the
     runs-worker: with an FQDN external SIEM, the worker's MCP enrichment
     egress is only expressible via toFQDNs, so an adapter-only selector

@@ -72,7 +72,7 @@ def test_classify_maps_serverless_unavailable():
         (Exception("some genuinely bad request about a field"), False),
         (SchemaValidationError("schema broke"), False),
         # A bare 404/429 with NO cold-start marker is a permanent/rate error,
-        # NOT a warming endpoint — must not be masked as transient (Codex #77).
+        # NOT a warming endpoint — must not be masked as transient.
         (_Err404("model 'nope' does not exist"), False),
         (_Err429("rate limit exceeded"), False),
     ],
