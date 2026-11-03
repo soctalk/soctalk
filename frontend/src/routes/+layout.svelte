@@ -31,6 +31,7 @@
 		localizedGoto,
 		stripLocale
 	} from '$lib/i18n';
+	import { currentNextPath, loginPath } from '$lib/auth/session-expiry';
 
 	// Navigation items. `label` holds the message FUNCTION (called at render
 	// time) — never evaluate messages at module scope (#52: the locale is set
@@ -98,8 +99,10 @@
 			const session = await api.auth.session();
 			authSession.set(session);
 
+			// Signed out on a deep link: sign in, then come back here. No
+			// expired=1 — there was no session to expire.
 			if (session.enabled && !session.user && currentPath !== '/login') {
-				await localizedGoto('/login');
+				await localizedGoto(loginPath({ next: currentNextPath() }));
 			}
 		} catch (e) {
 			// Session check failed (API unreachable, auth misconfigured, or an
@@ -108,7 +111,7 @@
 			// visible and diagnosable instead of silent.
 			console.error('[Auth] session check failed:', e);
 			if (currentPath !== '/login') {
-				await localizedGoto('/login');
+				await localizedGoto(loginPath({ next: currentNextPath() }));
 			}
 		} finally {
 			authReady = true;
@@ -120,14 +123,17 @@
 	});
 
 	async function logout() {
+		// Drop the identity before the request: calls still in flight answer
+		// 401 once the server ends the session, and those must not be taken
+		// for an expiry (which would replace the sign-out notice).
+		authSession.update((s) => ({ ...s, user: null }));
+		closeSSE();
+		sseStarted = false;
 		try {
 			await api.auth.logout();
 		} finally {
-			authSession.update((s) => ({ ...s, user: null }));
-			closeSSE();
-			sseStarted = false;
 			if ($authSession.enabled) {
-				await localizedGoto('/login');
+				await localizedGoto(loginPath({ signedOut: true }));
 			}
 		}
 	}

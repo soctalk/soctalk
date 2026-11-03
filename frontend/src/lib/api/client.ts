@@ -2,6 +2,8 @@
  * API client for SocTalk backend.
  */
 
+import { handleUnauthorized, pendingForever } from '$lib/auth/session-expiry';
+
 const API_BASE = '/api';
 
 export class ApiError extends Error {
@@ -145,7 +147,10 @@ export interface RunUnlockResult {
 
 async function request<T>(
 	endpoint: string,
-	options: RequestInit = {}
+	options: RequestInit = {},
+	// The auth endpoints answer 401 as a normal result (signed out, wrong
+	// password, already signed out); only there is it not a lost session.
+	{ allow401 = false }: { allow401?: boolean } = {}
 ): Promise<T> {
 	const url = `${API_BASE}${endpoint}`;
 	const response = await fetch(url, {
@@ -181,6 +186,11 @@ async function request<T>(
 			!window.location.pathname.startsWith('/account/password')
 		) {
 			window.location.assign('/account/password?must_change=1');
+		}
+		// Session gone (idle/absolute expiry, revoked): go to sign-in and come
+		// back here afterwards (internal-auth §8.6).
+		if (response.status === 401 && !allow401 && handleUnauthorized()) {
+			return pendingForever<T>();
 		}
 		throw new ApiError(
 			response.status,
@@ -589,7 +599,7 @@ export const api = {
 		// 401 → ``user: null``.
 		session: async (): Promise<AuthSession> => {
 			try {
-				const user = await request<AuthUser>('/auth/me');
+				const user = await request<AuthUser>('/auth/me', {}, { allow401: true });
 				return { enabled: true, mode: 'internal', user };
 			} catch (err) {
 				if (err instanceof ApiError && err.status === 401) {
@@ -600,15 +610,17 @@ export const api = {
 		},
 
 		login: (payload: LoginRequest) =>
-			request<LoginResponse>('/auth/login', {
-				method: 'POST',
-				body: JSON.stringify(payload)
-			}),
+			request<LoginResponse>(
+				'/auth/login',
+				{
+					method: 'POST',
+					body: JSON.stringify(payload)
+				},
+				{ allow401: true }
+			),
 
 		logout: () =>
-			request<{ success: boolean }>('/auth/logout', {
-				method: 'POST'
-			}),
+			request<{ success: boolean }>('/auth/logout', { method: 'POST' }, { allow401: true }),
 
 		assumeTenant: (slug: string | null) =>
 			request<AuthUser>('/auth/assume-tenant', {

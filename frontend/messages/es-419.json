@@ -613,6 +613,8 @@
 	"login_proxy_hint": "Esta implementación usa autenticación upstream. Inicia sesión con tu proveedor de SSO y actualiza.",
 	"login_refresh": "Actualizar sesión",
 	"login_session_check_failed": "No se pudo verificar la sesión.",
+	"login_session_expired": "Tu sesión expiró. Vuelve a iniciar sesión.",
+	"login_signed_out": "Cerraste sesión.",
 	"login_submit": "Iniciar sesión",
 	"login_title": "Iniciar sesión",
 	"login_too_many_attempts": "Demasiados intentos de inicio de sesión. Espera unos minutos y vuelve a intentarlo.",

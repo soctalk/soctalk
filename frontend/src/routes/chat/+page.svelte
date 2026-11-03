@@ -12,6 +12,7 @@
 	import ChatPanel from '$lib/components/chat/ChatPanel.svelte';
 	import { m } from '$lib/paraglide/messages';
 	import { currentLocale } from '$lib/i18n';
+	import { handleUnauthorized } from '$lib/auth/session-expiry';
 
 	interface ConversationRow {
 		id: string;
@@ -40,6 +41,8 @@
 			const res = await fetch('/api/chat/conversations?limit=50', {
 				credentials: 'same-origin'
 			});
+			// Expired session: the browser is on its way to sign-in.
+			if (res.status === 401 && handleUnauthorized()) return;
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 			const data = await res.json();
 			conversations = data.items;
@@ -60,6 +63,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({})
 			});
+			if (res.status === 401 && handleUnauthorized()) return;
 			if (!res.ok) {
 				const body = await res.text().catch(() => '');
 				throw new Error(body || `HTTP ${res.status}`);

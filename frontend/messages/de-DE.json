@@ -613,6 +613,8 @@
 	"login_proxy_hint": "Diese Bereitstellung nutzt vorgelagerte Authentifizierung. Melden Sie sich über Ihren SSO-Anbieter an und aktualisieren Sie.",
 	"login_refresh": "Sitzung aktualisieren",
 	"login_session_check_failed": "Sitzung konnte nicht geprüft werden.",
+	"login_session_expired": "Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.",
+	"login_signed_out": "Sie wurden abgemeldet.",
 	"login_submit": "Anmelden",
 	"login_title": "Anmelden",
 	"login_too_many_attempts": "Zu viele Anmeldeversuche. Warten Sie einige Minuten und versuchen Sie es erneut.",

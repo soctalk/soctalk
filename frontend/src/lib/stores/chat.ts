@@ -14,6 +14,7 @@
  */
 
 import { get, writable, type Writable } from 'svelte/store';
+import { handleUnauthorized, pendingForever } from '$lib/auth/session-expiry';
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -272,6 +273,8 @@ export function createChatStore(): {
 				body: JSON.stringify({ text }),
 				signal: abortCtrl.signal
 			});
+			// Expired session: the browser is on its way to sign-in.
+			if (res.status === 401 && handleUnauthorized()) return;
 			if (!res.ok || !res.body) {
 				const errText = await res.text().catch(() => '');
 				throw new Error(`chat send failed (${res.status}): ${errText.slice(0, 200)}`);
@@ -475,6 +478,7 @@ async function _fetchJson<T>(url: string, init: RequestInit): Promise<T> {
 		}
 	});
 	if (!res.ok) {
+		if (res.status === 401 && handleUnauthorized()) return pendingForever<T>();
 		const body = await res.text().catch(() => '');
 		throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
 	}

@@ -5,6 +5,8 @@
  * must check role first.
  */
 
+import { handleUnauthorized, pendingForever } from '$lib/auth/session-expiry';
+
 const API_BASE = '/api';
 
 class TenantApiError extends Error {
@@ -23,6 +25,8 @@ async function _request<T>(endpoint: string, init: RequestInit = {}): Promise<T>
 		}
 	});
 	if (!r.ok) {
+		// Expired session: sign in again and come back (internal-auth §8.6).
+		if (r.status === 401 && handleUnauthorized()) return pendingForever<T>();
 		const body = await r.text();
 		throw new TenantApiError(r.status, body || r.statusText);
 	}

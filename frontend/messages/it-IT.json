@@ -613,6 +613,8 @@
 	"login_proxy_hint": "Questa installazione usa l'autenticazione a monte. Accedi tramite il tuo provider SSO e aggiorna.",
 	"login_refresh": "Aggiorna sessione",
 	"login_session_check_failed": "Impossibile verificare la sessione.",
+	"login_session_expired": "La sessione è scaduta. Accedi di nuovo.",
+	"login_signed_out": "Disconnessione effettuata.",
 	"login_submit": "Accedi",
 	"login_title": "Accedi",
 	"login_too_many_attempts": "Troppi tentativi di accesso. Attendi qualche minuto e riprova.",

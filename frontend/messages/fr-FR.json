@@ -613,6 +613,8 @@
 	"login_proxy_hint": "Ce déploiement utilise une authentification en amont. Connectez-vous via votre fournisseur SSO puis actualisez.",
 	"login_refresh": "Actualiser la session",
 	"login_session_check_failed": "Impossible de vérifier la session.",
+	"login_session_expired": "Votre session a expiré. Veuillez vous reconnecter.",
+	"login_signed_out": "Vous avez été déconnecté.",
 	"login_submit": "Se connecter",
 	"login_title": "Connexion",
 	"login_too_many_attempts": "Trop de tentatives de connexion. Patientez quelques minutes et réessayez.",
