@@ -453,7 +453,7 @@ def test_render_emits_global_sampling():
 
 def test_render_secret_checksum_rolls_on_key_change():
     # A key-only tier rotation must change the rollout checksum so helm upgrade
-    # rolls the worker (env-from-secret doesn't hot-reload) — Codex review #2.
+    # rolls the worker (env-from-secret doesn't hot-reload) — review #2.
     tid = uuid4()
     a = _render(_integration(tid, llm_tiers=validate_llm_tiers({"fast": _FAST})))
     rotated = {**_FAST, "api_key_plain": "sk-rotated"}

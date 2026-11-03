@@ -54,7 +54,7 @@ def sign_webhook_body(secret: str, body: bytes) -> str:
 
 
 def assert_webhook_url_allowed(url: str) -> None:
-    """SSRF floor on the connector target (Codex #49 High-3).
+    """SSRF floor on the connector target.
 
     The URL comes from tenant policy, not the playbook — but an AUTONOMOUS
     ``write_external`` capability POSTing from L1 must still refuse to reach

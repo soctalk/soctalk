@@ -53,7 +53,7 @@ class LLMConfig(BaseModel):
     openai_organization: Optional[str] = None
     # Router/supervisor tier sampling. Bounds mirror the API + chart schema so a
     # provisioning bypass or a hand-set env var can't boot the worker with a
-    # negative temperature or an absurd token cap (Codex #3) — an out-of-range
+    # negative temperature or an absurd token cap — an out-of-range
     # value fails load_config() loudly at startup.
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, ge=1, le=8192)

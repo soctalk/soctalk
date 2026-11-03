@@ -1,6 +1,6 @@
 # Compliance evidence direction: brainstorm record
 
-Session date: 2026-07-23. Status: brainstorm, no build commitment. Two Codex
+Session date: 2026-07-23. Status: brainstorm, no build commitment. Two
 adversarial reviews shaped the conclusions. The pre-code gate is the QSA
 falsification test described at the end.
 
@@ -24,7 +24,7 @@ tiers. Everything above rests on one enabling capability: an AI-assisted
 mapping factory that turns a regulation into a validated framework pack in
 days, with measured accuracy.
 
-## Adversarial review outcomes (Codex, 2 runs)
+## Adversarial review outcomes
 
 **Run 1 (compliance pivot): pursue modified.**
 
@@ -78,7 +78,7 @@ days, with measured accuracy.
 3. **Language discipline.** "Technical control evidence and deviation
    assessment", never "compliance copilot". LLM role stated as assembler over
    hash-manifested source evidence.
-4. **Converged build order** (both Codex runs agree):
+4. **Converged build order** (both review runs agree):
    1. Deviation/exception register (reuses authorization/expectedness
       verdicts and Engagements, closest to shipped product)
    2. PCI technical evidence pack (log review, FIM, SCA)
@@ -301,6 +301,6 @@ prerequisite verified by SCA.
    effort? resell it? at what fixed price? No pull afterward: park the
    evidence tier.
 2. **Pack demand test.** Canonical mapping schema + first-cut NIS2 Art. 21.2
-   mapping for one or two measures, Codex-reviewed, published free. Measure
+   mapping for one or two measures, independently reviewed, published free. Measure
    downloads and inbound. Packs failing while QSAs accept (or vice versa)
    redirects rather than kills the direction.

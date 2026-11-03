@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Vendor a deterministic, license-clean snapshot of soctalk-goldens cases
-into this repo (issue #72 demo seeding; Codex C5: never depend on a
+into this repo (issue #72 demo seeding; never depend on a
 developer's gitignored data_* dirs).
 
 Reads the sibling checkout's data_m0/ (cases + gold + orgstate), selects a
@@ -28,7 +28,7 @@ OUT = Path(__file__).parent / "corpus" / "goldens"
 
 # Per-family group quotas: balanced across rules and, within traps, split
 # between paperwork contradictions (guard-veto family) and
-# actor-genuine-false (scripted-escalation family) per Codex C3.
+# actor-genuine-false (scripted-escalation family) per review item C3.
 GROUPS_PER_RULE = 6
 
 

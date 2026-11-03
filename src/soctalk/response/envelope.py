@@ -36,8 +36,7 @@ async def build_envelope(
     alert's source events, and a later empty v1 event must not hide them)."""
 
     # Join EVERY source event (not one representative): the envelope UNIONs MITRE,
-    # rule groups, and entities across all of an alert's events (Codex ph2 MITRE
-    # finding 2). Picking one event could let a later entity-only event hide an
+    # rule groups, and entities across all of an alert's events. Picking one event could let a later entity-only event hide an
     # earlier MITRE-bearing one, and a MITRE-only response playbook would then
     # never fire. Per-facet dedup happens in the aggregation loop below.
     rows = (
@@ -81,7 +80,7 @@ async def build_envelope(
                 rule_groups.append(g)
         # Stored evidence is WireMitre: {ids=Txxxx, tactics, techniques=names}.
         # Read the plural keys AND the legacy singular ones (id/tactic/technique)
-        # some sources still emit (Codex ph2 MITRE finding 3), and tolerate scalar
+        # some sources still emit, and tolerate scalar
         # (non-list) values without crashing. Tactics are matched as the source
         # provides them — Wazuh emits tactic NAMES (e.g. "Lateral Movement"), not
         # TA refs — so envelope.mitre.tactics carries those strings verbatim.

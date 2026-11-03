@@ -79,7 +79,7 @@ async def main() -> int:
     print(f"  PASS: warm InferenceResult in {time.time()-t0:.1f}s, content={str(txt)[:60]!r}\n")
 
     # --- scale to zero, then COLD call (property 3) ---
-    # Two review findings live in this block (Codex, #77). The wait loop used
+    # Two review findings live in this block. The wait loop used
     # to print "endpoint at zero" whether it broke on zero or merely expired,
     # and a call that SUCCEEDED fell through both except arms straight to
     # "ALL ASSERTIONS PASSED" — a warm endpoint produced a green run of a

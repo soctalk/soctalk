@@ -1,4 +1,4 @@
-"""execute_proposal drain guards (#49 phase 2, Codex review) — DB-backed.
+"""execute_proposal drain guards (#49 phase 2) — DB-backed.
 
 The atomic approved-claim is the single point that authorizes an approved-proposal
 execution. These tests pin its guards: a non-approved proposal never executes, a

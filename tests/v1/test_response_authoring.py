@@ -160,7 +160,7 @@ async def test_active_authored_dispatches_shadow_does_not(
 async def test_stored_definition_is_shadow_for_export(
     mssp_session: AsyncSession, seed_two_tenants
 ):
-    """The stored definition is always status:shadow (Codex ph2 incr3 finding 3),
+    """The stored definition is always status:shadow,
     so an export of a shadow row can't carry status:active and self-activate on a
     file rollout — even after the row is ACTIVATED (row status != definition
     status)."""
@@ -184,7 +184,7 @@ async def test_stored_definition_is_shadow_for_export(
 async def test_db_shadow_suppresses_file_active_same_id(
     mssp_session: AsyncSession, seed_two_tenants, tmp_path, monkeypatch
 ):
-    """DB is the override layer (Codex ph2 incr3 finding 1): a file-active playbook
+    """DB is the override layer: a file-active playbook
     and a DB row of the SAME id must be governed only by the DB row's status. A DB
     SHADOW row turns the file-active one OFF."""
     from soctalk.response.dispatch import _matched

@@ -88,5 +88,5 @@ result-*
 charts/soctalk-tenant/Chart.lock
 charts/soctalk-tenant/charts/*.tgz
 
-# Local Claude Code worktrees / scratch
+# Local worktrees / scratch
 .claude/worktrees/

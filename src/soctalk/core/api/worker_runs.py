@@ -215,7 +215,7 @@ class ClaimedRun(BaseModel):
     # state: a run released after a transient provider error and re-claimed
     # would otherwise restart with this at zero, and the spend it had exempted
     # would suddenly become enforceable — halting a run on exactly the invented
-    # dollars this exists to disregard (Codex review, phases 1-2).
+    # dollars this exists to disregard.
     dollars_unpriced: float = 0.0
     dollars_budget: float = 0.0
     lease_id: UUID
@@ -362,8 +362,7 @@ async def claim_run(request: Request) -> ClaimedRun | ClaimDenied | None:
         # landed yet, but not the one where two workers read headroom
         # simultaneously and then leased DIFFERENT rows via SKIP LOCKED — each
         # sees the other's reservation only after it exists. The lock makes
-        # "decide, then take" atomic per tenant (Codex review of phases 4-5,
-        # round 2).
+        # "decide, then take" atomic per tenant.
         #
         # Transaction-scoped, so it releases on commit or rollback with no
         # unlock path to leak. Keyed on the tenant, so tenants never queue
@@ -605,8 +604,8 @@ async def _record_spend_delta(
             return
 
         # Split the window by what was priced and what was not, rather than
-        # labelling the whole delta with whatever the LAST call happened to use
-        # (Codex review, phases 1-2). That mattered: one label decides whether
+        # labelling the whole delta with whatever the LAST call happened to use.
+        # That mattered: one label decides whether
         # the entire delta is exempt from the daily ceiling, so a window mixing
         # one catalog call with one unpriced call would exempt both or neither.
         #
@@ -647,7 +646,7 @@ async def _record_spend_delta(
                     "r": str(run_id),
                     "dd": d_unpriced,
                     # A fallback figure is never provider-reported, whatever the
-                    # last call in the window was (Codex round 2, P2).
+                    # last call in the window was.
                     "cb": "estimated",
                 },
             )
@@ -673,7 +672,7 @@ async def _record_spend_delta(
                 # This row is what is LEFT after the unpriced portion was split
                 # out, so it is priced by construction. Inheriting 'unknown'
                 # from whichever call happened to be last would have exempted
-                # genuinely priced dollars from the ceiling (Codex round 2, P0).
+                # genuinely priced dollars from the ceiling.
                 "ps": ("mixed" if price_source == "unknown" and d_unpriced > 0.0
                        else price_source),
             },
@@ -1167,7 +1166,7 @@ async def complete_run(
         # poison the completion (an aborted subtransaction would otherwise fail
         # every later statement and roll back the close itself).
         # ``case_changed`` gates dispatch on the disposition having actually
-        # taken effect (Codex #49 High-1): an analyst who closed/merged the
+        # taken effect: an analyst who closed/merged the
         # investigation mid-run makes the close update a no-op, and a response
         # action must not fire on a state transition that never happened.
         if (

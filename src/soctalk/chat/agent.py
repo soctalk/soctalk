@@ -226,7 +226,7 @@ class TurnContext:
     total_dollars_unpriced: float = 0.0
     # False when the tenant has dollar accounting off. Both conversation
     # budget gates are skipped then, matching the per-run and daily behaviour
-    # and the panel's promise (Codex round 6).
+    # and the panel's promise.
     cost_tracking: bool = True
 
 
@@ -636,7 +636,7 @@ async def _tenant_chat_llm_config(
     (``chat_temperature`` / ``chat_max_tokens``) stays global — no per-tenant
     column for it (a possible follow-up).
 
-    Guards (Codex review):
+    Guards:
     * No ``IntegrationConfig`` row → ``(base, requested_model)`` (global).
     * A tenant WITHOUT its own key relies on the shared install credential, which
       only authenticates against the install's provider. If the tenant's provider
@@ -719,7 +719,7 @@ async def run_turn(
     #    short-circuit before any LLM cost.
     # Enforceable, not raw: an unpriced turn recorded real dollars, and gating
     # the NEXT turn on them would block a conversation over money the same
-    # module refuses to enforce mid-turn (Codex round 3, P1).
+    # module refuses to enforce mid-turn.
     if ctx.cost_tracking and (
         ctx.total_dollars - ctx.total_dollars_unpriced >= ctx.budget_dollars
     ):
@@ -854,7 +854,7 @@ async def run_turn(
             # An official-OpenAI install sets no base URL — the SDK defaults to
             # api.openai.com — but provider_kind_for reads the HOST, so a bare
             # None classified as openai_compatible and missed every seeded
-            # `openai` row (Codex review of #142). Name the host the call
+            # `openai` row. Name the host the call
             # actually reaches.
             if not _base and _provider in ("openai", "openai-compatible"):
                 _base = "https://api.openai.com/v1"
@@ -880,12 +880,12 @@ async def run_turn(
             # A conversation can be created with an explicit model and keeps it
             # as a tier override, so pricing the default stamped a model the
             # turn never calls — and the turn's spend then fell through to the
-            # built-in table or to `unknown` (Codex, round 4).
+            # built-in table or to `unknown`.
             # `resolved.model`, not ctx.model_name. resolve_tier applies the
             # tenant overlay and can swap the effective model for a
             # cross-provider tenant, so ctx.model_name is what was REQUESTED
-            # and resolved.model is what create_chat_model was actually handed
-            # (Codex, round 5). Pricing the requested one would stamp a model
+            # and resolved.model is what create_chat_model was actually handed.
+            # Pricing the requested one would stamp a model
             # the turn never calls, which is the bug this parameter exists to
             # fix.
             chat_prices = await resolve_run_prices(
@@ -919,14 +919,14 @@ async def run_turn(
             # the same fallback: a chat turn on an unpriced model billed at
             # $15/$75 and that invented figure fed the tenant's daily ceiling,
             # which gates the worker's claim loop too — so an unpriced chat
-            # session could stop triage (Codex review, phases 1-2, P1).
+            # session could stop triage.
             #
             # Two accumulators, because they answer different questions. The
             # message row and the conversation total must show what was ACTUALLY
             # spent — an operator reading a bill wants the money, not the
             # enforceable subset — while the budget check may only act on spend
             # it can attribute. Collapsing them into one figure understated the
-            # recorded cost, which my first attempt did (Codex round 2, P1).
+            # recorded cost, which my first attempt did.
             total_turn_dollars += float(state["dollars_used"])
             total_turn_enforceable += token_budget.enforceable_dollars(state)
             turn_dollars_this_call = float(state["dollars_used"])
@@ -1030,8 +1030,7 @@ async def run_turn(
             # Subtract the conversation's prior unpriced spend here too. The
             # PRE-turn gate already did, but this between-iteration check did
             # not, so a conversation that had recorded unpriced dollars passed
-            # the door and was then stopped by the first tool-call iteration
-            # (Codex round 4, P1).
+            # the door and was then stopped by the first tool-call iteration.
             prior_enforceable = ctx.total_dollars - ctx.total_dollars_unpriced
             if ctx.cost_tracking and (
                 prior_enforceable + total_turn_enforceable >= ctx.budget_dollars

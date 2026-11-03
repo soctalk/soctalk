@@ -49,7 +49,7 @@ async def unpriced_config(
     uses. The previous signature took one provider/base_url for every model, so
     a per-tier backend was priced against the primary config: a tier could pass
     the gate on the primary's catalog row and then run ``unknown`` on its own
-    gateway, or be refused although it was priced (Codex review of phase 3).
+    gateway, or be refused although it was priced.
 
     A tenant price override counts as priced, in any of its three key shapes.
 

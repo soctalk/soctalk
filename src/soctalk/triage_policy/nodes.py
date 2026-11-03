@@ -314,7 +314,7 @@ async def verdict_guard_node(state: dict[str, Any]) -> dict[str, Any]:
         state["verdict_overridden_by_guard"] = True
         if result.final_decision == "needs_more_info":
             # A guard-manufactured needs_more_info must count as a retry, same
-            # contract as the verdict node's own NMI (Codex #44 High): the LLM
+            # contract as the verdict node's own NMI: the LLM
             # never incremented the counter for its close draft, and without
             # this the supervisor→verdict→override loop repeats to the
             # recursion limit instead of forcing human review on the retry.

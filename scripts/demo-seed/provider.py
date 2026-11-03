@@ -25,7 +25,7 @@ in-cluster worker is scaled to zero and every reasoning call is either
 ours or a reopened benign item. IMPORTANT: this worker is tenant-bound,
 not seed-bound — before starting it against a live tenant, ensure there
 are no pre-existing/organic claimable runs, or it will close them with
-this generic rationale (Codex P1). The bootstrap runbook enforces this.
+this generic rationale. The bootstrap runbook enforces this.
 
 Run: uvicorn provider:app --port 8091   (manifest path via SEED_MANIFEST)
 """

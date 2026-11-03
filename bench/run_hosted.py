@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENDPOINTS: list[dict] = [
     {
         # DeepSeek's non-thinking "flash" model — the successor to the
-        # deepseek-chat alias (Codex flagged the alias as deprecating ~2026-07-24).
+        # deepseek-chat alias.
         # NOTE: verify the exact id against GET /models with your key — vendor
         # naming shifts; run_hosted logs the model it used.
         "label": "deepseek-flash",

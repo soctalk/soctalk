@@ -1,7 +1,7 @@
 /**
  * demo.soctalk.ai UI/frontend correctness suite (issue #72).
  *
- * Implements the 20-item Codex test plan against the LIVE demo box:
+ * Implements the 20-item test plan against the LIVE demo box:
  * every numeric expectation is derived at runtime from the same APIs the
  * UI consumes (the day rolls at midnight and organic Wazuh data flows
  * in), and the whole suite is STRICTLY read-only — a global tripwire

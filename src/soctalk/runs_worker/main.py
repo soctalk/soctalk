@@ -1070,7 +1070,7 @@ async def main() -> int:
     # LLM perpetually returns ``needs_more_info``. Bind is graceful —
     # if individual MCP server connections fail (chart components not
     # enabled), the worker logs and the graph node gets None and
-    # skips. See codex round-1 finding: "runs_worker does not bind MCP
+    # skips. See the round-1 review finding: "runs_worker does not bind MCP
     # clients before graph execution".
     mcp_bound = False
     try:

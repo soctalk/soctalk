@@ -265,7 +265,7 @@ def test_snapshot_may_carry_explicit_cache_rates():
     assert explicit == pytest.approx(0.0015)
 
 
-# -------------------------------------------------- Codex review regressions
+# -------------------------------------------------------- Review regressions
 
 
 def test_versioned_response_ids_still_hit_the_snapshot():
@@ -516,7 +516,7 @@ def test_reasoning_is_billed_as_output_unless_a_rate_says_otherwise():
 
 
 def test_an_unknown_stamp_is_not_rescued_by_the_shipped_defaults():
-    """A run must be billed by the story it recorded (Codex).
+    """A run must be billed by the story it recorded.
 
     ``gpt-4o`` is in the shipped defaults, so before this the run would record
     "unknown" and quietly be priced at the default anyway — one story on the
@@ -532,7 +532,7 @@ def test_an_unknown_stamp_is_not_rescued_by_the_shipped_defaults():
 
 
 def test_seed_carries_every_model_the_builtin_table_priced():
-    """Retiring the table cannot lose a price (Codex ordering: seed, then cut).
+    """Retiring the table cannot lose a price (seed, then cut).
 
     Making unknown authoritative before the catalog knew these models would
     have sent every frontier model to the fail-expensive fallback.
@@ -739,7 +739,7 @@ def test_namespaced_models_are_matched_regardless_of_provider_id():
     while provider_id_for() returns "openrouter" from the host — so neither the
     exact nor the NULL lookup could reach them. A namespaced model id carries
     the vendor itself, which makes ignoring provider_id safe for that shape
-    only (Codex phase-3 round 2).
+    only.
     """
     import json
     import pathlib
@@ -763,7 +763,7 @@ def test_form_kind_mapping_matches_the_backend():
     The form writes `<kind>:*:<model>` overrides, and the gate looks them up
     under the kind IT derives — which reads the host, not just the provider
     string. Mapping every non-Anthropic provider to openai_compatible wrote
-    overrides that could never be found (Codex review of phases 4-5, round 2).
+    overrides that could never be found.
     """
     from soctalk.core.pricing.resolve import provider_kind_for
 
@@ -905,7 +905,7 @@ def test_hybrid_roles_keep_both_backends_for_one_model_string():
     prices. Stamping both is what makes _snapshot_rates report the ambiguity
     instead of silently picking one. My first dedupe applied to every role and
     collapsed reasoning onto fast's backend — a worse bug than the one it was
-    fixing (Codex, round 2 of the chat-role change).
+    fixing.
     """
     from types import SimpleNamespace
 
@@ -993,8 +993,7 @@ def test_chat_dedupe_uses_the_same_normalisation_as_snapshot_matching():
 
     _snapshot_rates matches version-stripped model IDs, so fast=gpt-4o and
     chat=gpt-4o-2024-08-06 were stamped as two entries that then both matched
-    the same lookup — reintroducing the ambiguity the skip exists to prevent
-    (Codex, round 3 of the chat-role change).
+    the same lookup — reintroducing the ambiguity the skip exists to prevent.
     """
     from types import SimpleNamespace
 
@@ -1020,8 +1019,7 @@ def test_chat_prices_the_conversation_model_not_the_tenant_default():
 
     chat.py accepts body.model and the agent keeps it as a tier override, so
     pricing the tenant default stamped a model the turn never calls — and the
-    turn's spend fell through to the built-in table or to `unknown` (Codex,
-    round 4 of the chat-role change).
+    turn's spend fell through to the built-in table or to `unknown`.
     """
     from types import SimpleNamespace
 
@@ -1109,8 +1107,7 @@ def test_official_openai_with_no_base_url_is_classified_as_openai():
 
     provider_kind_for reads the HOST, so a bare None classified as
     openai_compatible and missed every seeded `openai` row, leaving fleet chat
-    unpriced on the most ordinary configuration there is (Codex review of
-    #142). The caller must name the host the call actually reaches.
+    unpriced on the most ordinary configuration there is. The caller must name the host the call actually reaches.
     """
     from soctalk.core.pricing.resolve import provider_kind_for
 
@@ -1124,7 +1121,7 @@ def test_a_served_engine_prices_as_self_hosted():
     """vLLM and SGLang speak the OpenAI protocol on an arbitrary host.
 
     Without the engine, fleet chat on a served endpoint priced as a gateway and
-    could never match the catalog's self_hosted rows (Codex review of #142).
+    could never match the catalog's self_hosted rows.
     """
     from soctalk.core.pricing.resolve import provider_kind_for
 

@@ -2,7 +2,7 @@
 // stills of the fleet live head and a per-alert replay. Not part of the suite.
 import { test, expect, type Page } from '@playwright/test';
 
-const OUT = '/private/tmp/claude-501/-Users-gianlucabrigandi-Development-wa-soctalk/7eb22b50-efe4-48bf-a303-f7b23693ed69/scratchpad/demo';
+const OUT = process.env.OUT ?? 'test-results/demo';
 const ORIGIN = 'http://localhost:5173';
 
 test.use({ viewport: { width: 1440, height: 960 } });

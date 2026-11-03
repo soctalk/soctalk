@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// installWorker consumes installRequest from state.installCh. v3 design
-// (codex feedback): the wizard does NOT run helm. It writes config
+// installWorker consumes installRequest from state.installCh. v3 design:
+// the wizard does NOT run helm. It writes config
 // files + a sentinel, then exits. soctalk-firstboot.service (the
 // existing installer) then runs the helm install with the supplied
 // values. This keeps the wizard a thin "values/secret generator" and

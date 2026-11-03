@@ -148,7 +148,7 @@ async def test_propose_action_tool_call_surfaces_and_persists(wired):
 async def test_action_persisted_even_on_budget_exhausted(wired):
     # The confirm button is streamed the moment propose_action is called; a
     # budget-exhausted stop right after must NOT drop the stored row, or the
-    # button would be unclickable (Codex #10 review).
+    # button would be unclickable.
     review_id = str(uuid4())
     fake = _FakeLLM([
         _ai("Recommending approval.", tool_calls=[{

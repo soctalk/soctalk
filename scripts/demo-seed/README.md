@@ -5,8 +5,8 @@ ZERO runtime LLM inference: every event enters via the real adapter API
 with real occurrence timestamps, authorization facts via the real facts
 API, and the reasoning tail is triaged by a real runs-worker whose only
 reachable "model" is `provider.py` — a deterministic OpenAI-compatible
-playback server serving prose authored offline (Claude/Codex
-subscription work, never API tokens). All replay beats, guard rulings,
+playback server serving prose written offline (no API tokens are spent
+at runtime). All replay beats, guard rulings,
 terminal closes, and fleet counters are genuinely emitted by the
 pipeline; the only substitution is where the model text comes from.
 
@@ -59,7 +59,7 @@ claiming pre-existing organic runs).
    **Rollback**: `gunzip -c <backup>.sql.gz | ssh root@demo.soctalk.ai "kubectl exec -i -n soctalk-system soctalk-system-postgres-0 -- psql -U soctalk_admin -d soctalk"`.
 1. Scale the in-cluster worker down (its env points at real LLMs):
    `kubectl scale deploy/soctalk-runs-worker -n tenant-demo --replicas=0`.
-2. **No-organic-runs gate** (Codex P1): our worker would close any
+2. **No-organic-runs gate**: our worker would close any
    pre-existing claimable run with a generic benign rationale. Confirm
    none exist for the demo tenant BEFORE starting it:
    `kubectl exec -n soctalk-system soctalk-system-postgres-0 -- psql -U soctalk_admin -d soctalk -c "SELECT count(*) FROM investigation_runs WHERE status='active';"`
@@ -88,7 +88,7 @@ claiming pre-existing organic runs).
 8. Stop the local worker + provider; scale the in-cluster worker back:
    `kubectl scale deploy/soctalk-runs-worker -n tenant-demo --replicas=1`.
 
-Cost guarantee (Codex-hardened): `run_worker.sh` starts the worker under
+Cost guarantee: `run_worker.sh` starts the worker under
 `env -i` with ONLY the stub vars, sets `ANTHROPIC_API_KEY=` empty, and runs
 `preflight.py` which resolves every tier through the product's own config
 loader and refuses to launch unless each one's base URL is the stub — so a

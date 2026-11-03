@@ -5,7 +5,7 @@ Runs the golden triage eval across locales (en/es/pt/zh — see
 evals/golden_i18n.py) for a given model config, and prints a locale x metric
 table. Same model, same expected decisions, only the alert PROSE changes, so a
 per-locale accuracy or confidence drop measures the model's multilingual triage
-ability — the language axis of the Chinese/open-model program (Codex idea #16).
+ability — the language axis of the Chinese/open-model program.
 
 Reuses the model lineup + env wiring from run_hosted.py (frontier / DeepSeek /
 Qwen). Frontier needs only ANTHROPIC_API_KEY (no GPU):

@@ -153,7 +153,7 @@
 		// Send ONLY the fields the operator actually changed. Sending both every
 		// time defeats the API's tri-state contract: a blank token box that was
 		// simply never touched would arrive as an explicit null and clear an
-		// override another admin had just set (Codex review, finding 4).
+		// override another admin had just set.
 		const was = pristine(budget);
 		const patch: {
 			token_override?: number | null;

@@ -11,7 +11,7 @@ set ``defaults.llm.engine``, so the API pod priced fleet chat as
 provider/base_url/model with no engine, so its own price gate classified the
 same backend as ``openai_compatible`` and missed the ``self_hosted`` catalog
 entry. The model was called and never priced, which is the failure #142 exists
-to close (Codex review of #142, round 13).
+to close.
 
 NULL means "a hosted vendor or a generic gateway", which is what every
 existing row is, so this is additive and needs no backfill.

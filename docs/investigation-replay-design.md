@@ -1,8 +1,8 @@
 # Investigation Replay: a cinematic view of the triage pipeline
 
-Status: design brainstorm, 2026-07-24. Nothing built. Pending Codex adversarial
-review. An interactive concept mock exists (Claude artifact, session
-scratchpad `replay-mockup.html`) covering both altitudes described here.
+Status: design brainstorm, 2026-07-24. Nothing built. Pending adversarial
+review. An interactive concept mock (`replay-mockup.html`, kept outside the
+repo) covers both altitudes described here.
 
 ## Purpose
 
@@ -76,7 +76,7 @@ architecture, and it needs no extra data to land.
 
 ## Data substrate
 
-**Corrected after Codex adversarial review + verification (2026-07-24).**
+**Corrected after adversarial review + verification (2026-07-24).**
 The first draft of this section claimed the replay could run on a "graph
 plane" of dotted `EventType` events (`supervisor.decision`,
 `verdict.rendered`, …) already served to the frontend. That premise is
@@ -314,7 +314,7 @@ to be answered cheaply, before any animation work depends on them.
 - Sampling threshold: at what alerts/day does 1-in-N dot sampling kick in,
   and how is N chosen and displayed?
 
-## Codex adversarial review — round 1 verdicts (2026-07-24)
+## Adversarial review — round 1 verdicts (2026-07-24)
 
 Full transcript in session scratchpad. Headline: **keep the core idea, kill
 the v1 spec as originally written** — the substrate claims were false (now
@@ -351,7 +351,7 @@ Still open from the review: sampled dots must each carry a real alert id
 clicked dot's own investigation, never a representative one — both are
 requirements on the real implementation that the mock cannot satisfy.
 
-## Codex review — round 3, live-by-default adjudication (2026-07-24)
+## Review — round 3, live-by-default adjudication (2026-07-24)
 
 Question: should the fleet hero default to live instead of the 24h→60s
 time-lapse? Verdict adopted and implemented:
@@ -380,9 +380,9 @@ time-lapse? Verdict adopted and implemented:
   only a rate multiplier for the catch-up intro.
 - Deferred: DVR scrub on the fleet, MSSP rollup hero, wall mode.
 
-## Codex review — round 2, implementation (2026-07-24)
+## Review — round 2, implementation (2026-07-24)
 
-Full transcript in session scratchpad (`codex-impl-review.txt`). Verdict:
+Verdict:
 direction viable, plan not implementation-ready. Adopted findings:
 
 **Phase 0 is a backend/API project, not an adapter task:**

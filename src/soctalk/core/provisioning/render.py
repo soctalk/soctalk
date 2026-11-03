@@ -837,7 +837,7 @@ def render_tenant_values(
         if extra_llm_ports:
             values["networkPolicies"]["extraLlmEgressPorts"] = extra_llm_ports
 
-    # Rollout hash for the runs-worker (issue #12 Codex review). LLM key material
+    # Rollout hash for the runs-worker (issue #12). LLM key material
     # (primary + per-tier own keys) lands in ``tenant-llm-key`` as env-from-secret
     # — which does NOT hot-reload in a running pod. A key-only rotation produces
     # byte-identical chart values (the plaintext never rides values on the L1

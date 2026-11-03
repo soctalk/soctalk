@@ -79,8 +79,7 @@ async def _run(apply: bool) -> int:
             #
             # An explicit ON is NOT an opt-out. Skipping every existing row
             # treated "accounting is on" as "leave them unpriced and live",
-            # which is the opposite of what it says (Codex review of phases
-            # 4-5). Those tenants fall through and are handled like any other.
+            # which is the opposite of what it says. Those tenants fall through and are handled like any other.
             existing = (
                 await s.execute(
                     text(
@@ -109,14 +108,13 @@ async def _run(apply: bool) -> int:
             if apply:
                 # A durable record of WHY, and of which models. The policy row
                 # only says "off"; without this the reason lives in one
-                # command's stdout and is gone (Codex review of phases 4-5).
+                # command's stdout and is gone.
                 await s.execute(
                     text(
                         # id and actor_id are NOT NULL with no default, so
                         # omitting them made --apply fail before the policy row
                         # was ever written. My testing only ever ran the dry
-                        # run, which never reaches this statement (Codex review
-                        # of phases 4-5, round 2).
+                        # run, which never reaches this statement.
                         "INSERT INTO audit_log (id, tenant_id, actor_principal, "
                         "  actor_id, action, resource_type, resource_id, after, notes) "
                         "VALUES (gen_random_uuid(), :t, 'system', "

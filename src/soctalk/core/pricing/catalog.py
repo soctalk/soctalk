@@ -193,7 +193,7 @@ async def lookup(
         # the uniqueness check meant a catalog holding BOTH a NULL row and an
         # upstream row returned the NULL one silently, with no ambiguity
         # warning — the schema permits that pair because the NULL and non-NULL
-        # unique indexes are separate (Codex phase-3 round 4).
+        # unique indexes are separate.
         #
         # Deciding uniqueness up front removes the preemption: one row is
         # returned, two or more are refused loudly rather than resolved
@@ -226,7 +226,7 @@ async def lookup(
                 # version-stripped family next, so an ambiguous exact SKU
                 # could still resolve to a priced family row — the same
                 # preemption the reordering above removed, arriving by the
-                # family fallback instead (Codex phase-3 round 5).
+                # family fallback instead.
                 return None
             continue
         if provider_id:

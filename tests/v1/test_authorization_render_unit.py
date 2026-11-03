@@ -134,7 +134,7 @@ def test_fact_cap_and_overflow_line():
 
 
 def test_validity_bounds_render_in_full():
-    """A future-effective ticket must be visibly not-yet-effective (Codex #4): both ISO
+    """A future-effective ticket must be visibly not-yet-effective: both ISO
     bounds appear, not just an expiry date."""
     facts = [{
         "id": "CHG-9", "kind": "grant", "track": "account", "grant_class": "change_ticket",

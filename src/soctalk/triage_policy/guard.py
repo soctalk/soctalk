@@ -284,7 +284,7 @@ def shadow_guardrail_audits(
     contract context the active guard used (#44). Pure; never mutates anything —
     the caller appends these to the audit trail only.
 
-    Mirrors ACTIVE semantics exactly (Codex #44 finding: divergent shadow data
+    Mirrors ACTIVE semantics exactly (divergent shadow data
     corrupts the activation evidence): first matching rule per triage policy wins, and
     a non-raising override is skipped just as the live guard would skip it — a
     rule that would be ignored when active must not be logged as would-fire.

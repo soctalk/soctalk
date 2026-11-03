@@ -3,7 +3,7 @@
 The worker was strictly serial: one process held one in-flight inference at a
 time, so a shared vLLM/SGLang backend's continuous batch could never fill from a
 single worker. ``WORKER_RUN_CONCURRENCY`` now runs N ``_worker_loop`` copies
-concurrently. These tests pin the invariants the Codex adversarial review called
+concurrently. These tests pin the invariants the adversarial review called
 out: no double-processing, a single run's failure never breaks its loop, the
 completion POST tolerates lost responses / reclaim (409) without crashing, and
 the per-client MCP lock serializes concurrent tool callers.
@@ -185,7 +185,7 @@ async def test_post_complete_gives_up_quietly_after_retries(monkeypatch):
 @pytest.mark.asyncio
 async def test_mcp_client_serializes_concurrent_tool_calls(monkeypatch):
     # The per-client asyncio.Lock must prevent two coroutines from interleaving
-    # on the single stdio session — the concurrency hazard Codex confirmed.
+    # on the single stdio session — the confirmed concurrency hazard.
     from soctalk.config import MCPServerConfig
     from soctalk.mcp.client import MCPClient
 

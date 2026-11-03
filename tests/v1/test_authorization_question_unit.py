@@ -1,6 +1,6 @@
 """M3 ASK_AUTHORIZATION: detection + answer-adapter unit tests (no DB).
 
-The load-bearing property (Codex pre-implementation review): the detector must ask ONLY when
+The load-bearing property: the detector must ask ONLY when
 authorization is truly ``absent``, never when it is ``contradicted`` (a stale/expired/wrong-scope
 grant on file). Asking there and saving a fact would paper over the contradiction the floor vetoes.
 """

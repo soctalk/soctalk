@@ -207,7 +207,7 @@ def test_unknown_required_step_is_skipped_not_deadlocked():
 
 
 def test_gate_reroutes_supervisor_close_too():
-    """Codex round-1 blocker + #45: the supervisor's auto-FP CLOSE maps to
+    """#45: the supervisor's auto-FP CLOSE maps to
     close_fp downstream, so it must not skip the required evidence step — and
     for the dual-use triage policy CLOSE is not even a legal action: it remaps to
     VERDICT, so the reasoning tier makes the call after the evidence step."""
@@ -268,7 +268,7 @@ def test_authz_class_contradicted_by_prohibition():
 
 
 def test_authz_class_ignores_facts_the_engine_would_not_select():
-    """Codex round-1 minor: "records present" must be judged over engine-selected
+    """"Records present" must be judged over engine-selected
     facts — a superseded or foreign-tenant grant is not a record on file and must
     not manufacture a contradiction (false guard escalation)."""
     superseded = _ticket(superseded_by="CHG-992")
@@ -437,7 +437,7 @@ def test_floor_passes_clean_close_and_other_dispositions():
 
 
 def test_floor_vetoes_router_only_close_over_unenriched_iocs():
-    """Codex round-2: the router-tier CLOSE short-circuit (no verdict) must not
+    """The router-tier CLOSE short-circuit (no verdict) must not
     commit a close while IOC observables were never enriched — nothing ever looked
     at them. A verdict-tier close over the same state commits: the reasoning model
     saw the un-enriched indicators in its prompt and judged them."""
@@ -460,7 +460,7 @@ def test_floor_vetoes_router_only_close_over_unenriched_iocs():
 
 
 def test_floor_vetoes_close_on_contradicted_authorization():
-    """Codex round-1 blocker: a supervisor CLOSE short-circuit never passes the
+    """A supervisor CLOSE short-circuit never passes the
     verdict guard, so the terminal floor must hold the contradicted edge too."""
     expired = _ticket(valid_until=datetime(2026, 7, 13, tzinfo=UTC))
     final = {"investigation": _sudo_investigation(_context([expired]))}
@@ -526,7 +526,7 @@ async def test_graph_reroutes_gather_then_guard_overrides_close(monkeypatch):
 
 
 async def test_graph_supervisor_close_floor_backstop_without_playbook(monkeypatch):
-    """Codex round-1 blocker, end-to-end: the supervisor short-circuits with CLOSE
+    """The supervisor short-circuits with CLOSE
     on a NON-triage policy run carrying a contradicted FIM-track authorization context
     (a triage policy-governed run can no longer CLOSE at all — #45 legal_actions). No
     verdict guard runs (no verdict), so the worker floor is the last line: it
@@ -670,7 +670,7 @@ def test_operational_vetoes_mirror_security_indicators():
 
 
 def test_operational_close_requires_every_alert_to_attest_the_class():
-    """Codex full-module blocker: a correlated investigation with one agent-health
+    """A correlated investigation with one agent-health
     alert plus ANY other alert must never be closed as operational — every member
     must carry a class group. Rule-id-only identity (groups drifted) fails the
     attestation too, and so does an investigation with no alerts at all."""
@@ -811,7 +811,7 @@ def test_auto_close_killed_env_and_policy(monkeypatch):
 
 
 def test_volume_cap_policy_parse_rejects_booleans_and_garbage():
-    """Codex #46 finding: tenant policies are unvalidated JSONB — a stray JSON
+    """#46: tenant policies are unvalidated JSONB — a stray JSON
     ``true`` must fall back to the install default, not become cap=1 (which
     would shut off auto-close after a single close)."""
     from soctalk.core.ir.triage import _int_policy
@@ -859,7 +859,7 @@ def test_legal_actions_unknown_names_drop_and_void():
 def test_route_remaps_illegal_action_with_exemptions():
     """Post-call defense in depth: an illegal action is remapped to a legal one;
     the budget short-circuit and the max-iterations forced VERDICT (and only
-    VERDICT — Codex #45 finding: a stray CLOSE at max iterations must still be
+    VERDICT — #45 finding: a stray CLOSE at max iterations must still be
     remapped, or it bypasses the verdict/sign-off path) are exempt."""
     state = _gate_state(steps_run=[GATHER_AUTHORIZATION_CONTEXT])
     state["supervisor_decision"] = {"next_action": "CLOSE"}
@@ -1337,7 +1337,7 @@ applies_to:
 
 
 def test_file_playbook_cannot_mint_deterministic_disposition(tmp_path, monkeypatch):
-    """Codex #44 High: an authored file naming its own rule_groups could attest
+    """#44: an authored file naming its own rule_groups could attest
     any class — so deterministic dispositions are a built-in-only capability and
     a file carrying one is rejected whole."""
     from soctalk.triage_policy.registry import match_triage_policy, reset_registry_cache
@@ -1361,7 +1361,7 @@ deterministic_disposition: close_operational
 
 
 async def test_guard_manufactured_nmi_counts_as_retry():
-    """Codex #44 High: an override to needs_more_info increments the verdict
+    """#44: an override to needs_more_info increments the verdict
     retry counter, so a repeat pass forces human review instead of looping the
     supervisor→verdict cycle to the recursion limit."""
     from soctalk.graph.builder import route_from_verdict
@@ -1394,7 +1394,7 @@ def test_condition_list_literal_cap():
 
 
 def test_shadow_audit_mirrors_active_semantics():
-    """Codex #44 finding: shadow evidence must match what the rule would do when
+    """#44: shadow evidence must match what the rule would do when
     active — non-raising overrides are skipped, first match wins per triage policy."""
     from soctalk.triage_policy.guard import shadow_guardrail_audits
 

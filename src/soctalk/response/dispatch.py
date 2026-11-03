@@ -50,8 +50,7 @@ async def _matched(
     response dispatch live, since the dispatcher runs on L1 with DB access.
 
     DB is the tenant OVERRIDE layer: an authored id in ANY governing status
-    suppresses the file playbook of the same id entirely (Codex ph2 incr3
-    finding 1). Otherwise a DB shadow row could not turn OFF a file-active row of
+    suppresses the file playbook of the same id entirely. Otherwise a DB shadow row could not turn OFF a file-active row of
     the same id — the active pass would still see the file row. So a tenant that
     authors `foo` owns `foo` completely: only its DB row governs, at the status
     it chose."""

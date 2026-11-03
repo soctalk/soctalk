@@ -78,7 +78,7 @@ async def start_run(
     # to the legacy path; a catalog problem, a half-migrated database mid
     # rollout, or one malformed operator-entered row must not stop a run from
     # being created, because that would stop triage — the exact failure the
-    # feature exists to prevent (Codex review, finding 1).
+    # feature exists to prevent.
     try:
         price_snapshot = await resolve_run_prices(db, tenant_id)
     except Exception as exc:  # noqa: BLE001
@@ -87,7 +87,7 @@ async def start_run(
         # path either way, but the worker reads cost_tracking off the snapshot,
         # so a NULL one silently re-enabled dollar ceilings for a tenant that
         # had switched them off — a resolver blip changing enforcement is
-        # exactly the surprise this feature exists to remove (Codex round 9).
+        # exactly the surprise this feature exists to remove.
         #
         # Best effort, defaulting to ON: if the policy read fails too, keeping
         # ceilings enforced is the safe side.
