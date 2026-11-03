@@ -45,6 +45,17 @@ class RateLimiter:
     def reset(self, key: str) -> None:
         self._buckets.pop(key, None)
 
+    def forget_email(self, email: str) -> None:
+        """Drop every bucket for ``email`` (keys are ``<ip>:<email>``).
+
+        Called when an administrator resets the account: the reset clears the
+        DB lockout, and the user must be able to sign in with the new password
+        right away instead of getting 429 until the window expires.
+        """
+        suffix = ":" + email.strip().lower()
+        for key in [k for k in self._buckets if k.endswith(suffix)]:
+            del self._buckets[key]
+
 
 _DEFAULT: RateLimiter | None = None
 

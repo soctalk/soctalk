@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, computed_field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from soctalk.core.api.user_admin import assert_target_not_protected
+from soctalk.core.auth.passwords import normalize_email
 from soctalk.core.auth.rate_limit import default_limiter
 from soctalk.core.auth.service import (
     AccountLocked,
@@ -110,8 +111,9 @@ def _db(request: Request) -> AsyncSession:
     return session
 
 
-async def _persist_login_failure(db: AsyncSession) -> None:
-    """Commit what ``authenticate()`` recorded for a failed sign-in.
+async def _persist_auth_failure(db: AsyncSession) -> None:
+    """Commit what ``authenticate()`` / ``change_password()`` recorded for a
+    failed sign-in or a wrong current password.
 
     ``DBSessionMiddleware`` rolls the request session back on every non-2xx/3xx
     response. Without this commit the 401/423 would discard the
@@ -196,7 +198,7 @@ async def login(
     ip = _client_ip(request)
     # Rate-limit by IP + email.
     limiter = default_limiter()
-    rl_key = f"{ip or 'unknown'}:{payload.email.lower()}"
+    rl_key = f"{ip or 'unknown'}:{normalize_email(payload.email)}"
     if not limiter.hit(rl_key):
         raise HTTPException(
             status_code=429, detail="Too many attempts. Try again later."
@@ -212,7 +214,7 @@ async def login(
             user_agent=_user_agent(request),
         )
     except AccountLocked as exc:
-        await _persist_login_failure(db)
+        await _persist_auth_failure(db)
         # Reveal the lockout time so the UI can render a helpful message.
         raise HTTPException(
             status_code=423,
@@ -222,7 +224,7 @@ async def login(
             },
         )
     except InvalidCredentials:
-        await _persist_login_failure(db)
+        await _persist_auth_failure(db)
         # Generic error — never reveal which side was wrong.
         raise HTTPException(status_code=401, detail="Invalid credentials.")
 
@@ -465,7 +467,16 @@ async def password_change(
             old_password=payload.old_password,
             new_password=payload.new_password,
         )
+    except AccountLocked as exc:
+        await _persist_auth_failure(db)
+        raise HTTPException(
+            status_code=423,
+            detail={"reason": "locked", "locked_until": exc.locked_until.isoformat()},
+        )
     except InvalidCredentials:
+        # The failure counter, a possible lockout and the audit row must
+        # survive the 400 (the request session rolls back on 4xx).
+        await _persist_auth_failure(db)
         raise HTTPException(
             status_code=400, detail="Current password is incorrect."
         )
