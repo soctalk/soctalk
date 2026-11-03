@@ -110,6 +110,26 @@ def _db(request: Request) -> AsyncSession:
     return session
 
 
+async def _persist_login_failure(db: AsyncSession) -> None:
+    """Commit what ``authenticate()`` recorded for a failed sign-in.
+
+    ``DBSessionMiddleware`` rolls the request session back on every non-2xx/3xx
+    response. Without this commit the 401/423 would discard the
+    ``consecutive_failures`` bump (so the lockout never triggers), the
+    ``locked_until`` it sets, and the ``auth.login.failure`` /
+    ``auth.lockout.triggered`` audit rows. The session holds nothing else at
+    this point: the handler raises right after.
+
+    A failed commit must not turn a rejected sign-in into a 500, so it is
+    logged loudly and the caller still answers 401/423.
+    """
+    try:
+        await db.commit()
+    except Exception:
+        logger.exception("login_failure_not_persisted")
+        await db.rollback()
+
+
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
@@ -192,6 +212,7 @@ async def login(
             user_agent=_user_agent(request),
         )
     except AccountLocked as exc:
+        await _persist_login_failure(db)
         # Reveal the lockout time so the UI can render a helpful message.
         raise HTTPException(
             status_code=423,
@@ -201,6 +222,7 @@ async def login(
             },
         )
     except InvalidCredentials:
+        await _persist_login_failure(db)
         # Generic error — never reveal which side was wrong.
         raise HTTPException(status_code=401, detail="Invalid credentials.")
 
