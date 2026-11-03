@@ -333,7 +333,9 @@
 		<slot />
 	</div>
 </AppShell>
-
-<!-- Toast Notifications -->
-<Toast />
 {/if}
+
+<!-- Toast notifications: mounted on every route, including /login, which
+     renders outside the app shell. Inside the shell branch, toasts raised by
+     the sign-in screen (session check failures) were never shown. -->
+<Toast />
